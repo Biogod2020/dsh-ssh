@@ -55,3 +55,11 @@
 ### Automatic publisher bootstrap
 
 GitHub Actions preflight run `38876888021` passed all 61 suites / 582 tests, artifact checks and both DSH runtime acceptances on Ubuntu. The package owner completed the one-time GitHub trusted publisher binding for `Biogod2020/dsh-ssh`, `publish.yml`, with direct publish permission. Tagged run `38877111308` authenticated and signed npm provenance, then npm rejected .27 with E409 because a previously staged version reserves that version number. That pending stage is left unchanged. The same SSH behavior is released as .28 to validate direct OIDC publication without another maintainer approval.
+
+
+### jay.28 automatic release verified
+
+- Tagged workflow [38877659704](https://github.com/Biogod2020/dsh-ssh/actions/runs/38877659704) completed successfully: full verification, direct OIDC npm publication, and registry/mirror installation acceptance. No per-release maintainer approval was used. npm provenance is present.
+- Published archive: 1,119,367 bytes; SHA-256 `be6b267eaf3d41aba7d71282c78b8ae12ac2a2d4d1dabb16605fab7ed8bad0ca`. npm and the actual `cdn.npmmirror.com` archive both matched the tested archive's SHA-512.
+- macOS independently installed `@biogod/dsh-ssh@0.3.24-jay.28` by package name from npm into DSH 0.2.1-alpha.4, and from the mainland mirror into DSH 0.2.0-rc.2; authenticated runtime and native settings/enable checks passed.
+- Daily Desktop already runs the .27 acceptance package with the same SSH implementation. It was not replaced again after the machine locked; .28 is the formal npm release. Existing host configuration remains byte-identical to the pre-update backup.

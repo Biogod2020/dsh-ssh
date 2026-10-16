@@ -29,3 +29,12 @@ npm exec --yes --package=npm@11.15.0 -- npm trust github @biogod/dsh-ssh --repo=
 工作流文件准备好不代表 npm 的信任关系已经启用。完成 npm 配置后，应在两天内用一个尚未发布的版本验证首次 OIDC 发布；发布成功才算完成配置。
 
 官方说明：[Trusted publishing](https://docs.npmjs.com/trusted-publishers/)、[Staged publishing](https://docs.npmjs.com/staged-publishing/)。
+
+
+## 当前启用状态（2026-10-16）
+
+已完成账号首次绑定，并由版本标签 `v0.3.24-jay.28` 验证自动发布成功：[完整流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/38877659704)。三个任务 `verify`、`publish`、`verify-installation` 全部成功；npm 与国内镜像 CDN 的 SHA-512 一致，两个 DSH 版本按包名安装验收通过。macOS 上也从官方源及镜像完成了隔离安装。
+
+正常发版直接使用上述工作流，不再执行 `npm trust`、`npm stage publish` 或 `npm stage approve`，也不再要求维护者逐版完成 2FA。增改账号或信任关系仍遵循 npm 本身的身份验证要求。发布前更新 `package.json` 与 README 中的版本，提交后推送对应 `v<version>` 标签，并核对三个任务的最终结果；手动运行 main 分支只做验收。
+
+旧的 .27 暂存版本保留，不再复用这个版本号。正式发行是 .28，SSH 实现与本机已验收的 .27 相同；本机 Desktop 的 .27 验收包并不表示已安装 .28。
