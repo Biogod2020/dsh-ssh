@@ -726,6 +726,11 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
   font-weight: 700;
 }
 
+.importCandidates { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; min-height: 0; flex-shrink: 0; }
+.importCandidate { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; cursor: pointer; }
+.importCandidate:focus-within { border-color: var(--dsw-alias-state-business-primary); }
+.importIdentity { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+
 .modalDescription {
   margin: 0;
   font-size: 13px;

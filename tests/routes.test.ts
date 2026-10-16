@@ -107,7 +107,7 @@ function get(path: string, headers: Record<string, string> = {}): Promise<{ stat
 }
 
 beforeAll(async () => {
-  store = new HostStore(join(dir, 'hosts.json'))
+  store = new HostStore(join(dir, 'hosts.json'), join(dir, 'ssh-config'))
   stub = new StubEngine()
   const { routes, upgrade } = makeRoutes({ store, engine: engine(stub), requestRejection: () => undefined, stagingDir: join(dir, 'staging'), maxUploadBytes: 64 })
   server = createServer((req, res) => {
@@ -162,6 +162,26 @@ describe('loopback fence', () => {
 })
 
 describe('hosts CRUD (one handler per path)', () => {
+  it('previews local config and refuses implicit bulk import over HTTP', async () => {
+    writeFileSync(join(dir, 'ssh-config'), 'Host selected-http\n User tester\n IdentityFile /fixture/key\nHost unselected-http\n User tester\n')
+    const url = 'http://127.0.0.1:' + port + SSH_API.importSshConfig
+    const before = store.list().length
+    const preview = await fetch(url)
+    expect(preview.status).toBe(200)
+    expect((await preview.json()).preview.candidates.map((host: { alias: string }) => host.alias)).toEqual(['selected-http', 'unselected-http'])
+    expect(store.list()).toHaveLength(before)
+    const missing = await fetch(url, { method: 'POST' })
+    expect(missing.status).toBe(400)
+    expect(store.list()).toHaveLength(before)
+    const forbidden = await get(SSH_API.importSshConfig, { 'sec-fetch-site': 'cross-site' })
+    expect(forbidden.status).toBe(403)
+    const imported = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aliases: ['selected-http'] }) })
+    expect(imported.status).toBe(200)
+    expect((await imported.json()).result.added).toBe(1)
+    expect(store.find('unselected-http')).toBeUndefined()
+    store.delete('selected-http')
+  })
+
   it('saves a remembered fallback through HTTP without resending an existing private key path', async () => {
     store.create({ alias: 'fallback-http', host: 'fixture.test', user: 'tester', auth: { kind: 'key', keyPath: '/fixture/private-key' } })
     try {

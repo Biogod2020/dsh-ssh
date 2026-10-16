@@ -4,6 +4,7 @@ import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspa
 import type { SshApi } from './api.ts'
 import type { RemoteDirectoryListing, SshHostSummary } from '../protocol.ts'
 import { HostFormDialog } from './panel/HostFormDialog.tsx'
+import { ImportHostsDialog } from './panel/ImportHostsDialog.tsx'
 import { errorMessage, tt } from './panel/helpers.ts'
 import css from './panel/panel.module.css'
 import { connectRemoteWorkspace, openRemoteWorkspace } from './remote-workspaces.ts'
@@ -37,6 +38,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
   const [connecting, setConnecting] = useState(false)
   const [addingHost, setAddingHost] = useState(false)
   const [editingHost, setEditingHost] = useState<SshHostSummary | null>(null)
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState<unknown>(null)
   const [progress, setProgress] = useState('')
   const dialog = useRef<HTMLDivElement>(null)
@@ -48,10 +50,10 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
     const request = ++generation.current
     if (!open) return
     const controller = new AbortController(); lifetime.current = controller
-    setMode('choose'); setError(null); setPending(false); setConnecting(false); setAddingHost(false); setEditingHost(null); setProgress(''); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false)
+    setMode('choose'); setAlias(''); setHosts([]); setImporting(false); setError(null); setBrowseError(null); setPending(false); setConnecting(false); setAddingHost(false); setEditingHost(null); setProgress(''); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false)
     void api.listHosts().then(value => {
       if (request !== generation.current) return
-      setHosts(value); setAlias(value[0]?.alias ?? '')
+      setHosts(value)
     }).catch(cause => { if (request === generation.current) setError(cause) })
     const previous = document.activeElement as HTMLElement | null
     dialog.current?.querySelector<HTMLElement>('button')?.focus()
@@ -94,11 +96,11 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
   // Native sidebars change stacking/containment when collapsed at narrow widths.
   // Keep the dialog above the whole application, including nested host forms.
   return createPortal(<>
-    <div className={css.modalBackdrop} onClick={() => { if (!locked && !addingHost && !editingHost) onCancel() }}>
+    <div className={css.modalBackdrop} onClick={() => { if (!locked && !addingHost && !editingHost && !importing) onCancel() }}>
       <div ref={dialog} className={css.modal} role="dialog" aria-modal="true" aria-label={tt('workspace.add')}
-        aria-hidden={addingHost || editingHost ? true : undefined}
+        aria-hidden={addingHost || editingHost || importing ? true : undefined}
         onClick={event => event.stopPropagation()} onKeyDown={event => {
-          if (event.key === 'Escape' && !locked && !addingHost && !editingHost) { event.stopPropagation(); onCancel() }
+          if (event.key === 'Escape' && !locked && !addingHost && !editingHost && !importing) { event.stopPropagation(); onCancel() }
           if (event.key === 'Tab') {
             const items = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary') ?? [])
             const first = items[0], last = items.at(-1)
@@ -112,30 +114,26 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
             const path = await pickLocal()
             if (path !== null && active()) onPicked(path)
           }) }}>{tt('workspace.local')}</button>
-          <button type="button" className={css.primaryButton} disabled={locked} onClick={() => { setMode('ssh'); setBrowseOpen(true) }}>{tt('workspace.ssh')}</button>
+          <button type="button" className={css.primaryButton} disabled={locked} onClick={() => { setMode('ssh') }}>{tt('workspace.ssh')}</button>
         </div>
         {mode === 'ssh' && <>
           <p className={css.hint}>{tt('workspace.help')}</p>
           <label className={css.field}>
             <span className={css.fieldLabel}>{tt('workspace.host')}</span>
-            <select className={css.input} value={alias} disabled={locked} onChange={event => { setAlias(event.target.value); setRemotePath('~'); setSelectedPath(null) }}>
+            <select className={css.input} value={alias} disabled={locked} onChange={event => { setAlias(event.target.value); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false); setBrowseError(null); setError(null) }}>
               <option value="">{tt('workspace.chooseHost')}</option>
             {hosts.map(host => <option key={host.alias} value={host.alias}>{host.alias} — {host.user}@{host.host}:{host.port ?? 22}</option>)}
             </select>
           </label>
           <div className={css.formRow}>
-            <button type="button" className={css.linkButton} disabled={locked} onClick={() => setAddingHost(true)}>{tt('hosts.add')}</button>
-            <button type="button" className={css.linkButton} disabled={locked || !alias} onClick={() => setEditingHost(hosts.find(host => host.alias === alias) ?? null)}>{tt('workspace.editAuthentication')}</button>
-            <button type="button" className={css.linkButton} disabled={locked} onClick={() => { void action(async active => {
-              await api.importSshConfig()
-              const value = await api.listHosts()
-              if (active()) { setHosts(value); setAlias(value[0]?.alias ?? ''); setRemotePath('~'); setSelectedPath(null) }
-            }) }}>{tt('hosts.import')}</button>
+            <button type="button" className={css.linkButton} disabled={locked} onClick={() => { setBrowseOpen(false); setAddingHost(true) }}>{tt('hosts.add')}</button>
+            <button type="button" className={css.linkButton} disabled={locked || !alias} onClick={() => { setBrowseOpen(false); setEditingHost(hosts.find(host => host.alias === alias) ?? null) }}>{tt('workspace.editAuthentication')}</button>
+            <button type="button" className={css.linkButton} disabled={locked} onClick={() => { setBrowseOpen(false); setImporting(true) }}>{tt('hosts.import')}</button>
           </div>
           <label className={css.field}>
             <span className={css.fieldLabel}>{tt('workspace.path')}</span>
             <input className={css.input} value={remotePath} disabled={locked} placeholder="~/projects/my-project" autoComplete="off" spellCheck={false}
-              onChange={event => { setRemotePath(event.target.value); setSelectedPath(null); setBrowseOpen(true) }}
+              onChange={event => { setRemotePath(event.target.value); setSelectedPath(null); setBrowseOpen(false); setBrowseError(null) }}
               onKeyDown={event => {
                 if (event.key === 'ArrowDown') {
                   const first = dialog.current?.querySelector<HTMLElement>('[data-directory-choice]')
@@ -191,7 +189,14 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
       setHosts(previous => [...previous.filter(item => item.alias !== host.alias), host]); setAlias(host.alias); setRemotePath('~'); setSelectedPath(null); setAddingHost(false)
     }} />}
     {editingHost && <HostFormDialog api={api} editing={editingHost} onClose={() => setEditingHost(null)} onSaved={host => {
-      setHosts(previous => previous.map(item => item.alias === host.alias ? host : item)); setEditingHost(null); setBrowseError(null); setError(null); setBrowseOpen(true)
+      setHosts(previous => previous.map(item => item.alias === host.alias ? host : item)); setEditingHost(null); setBrowseError(null); setError(null); setBrowseOpen(false)
+    }} />}
+    {importing && <ImportHostsDialog api={api} onClose={() => setImporting(false)} onImported={() => {
+      setImporting(false)
+      void action(async active => {
+        const value = await api.listHosts()
+        if (active()) { setHosts(value); setAlias(previous => value.some(host => host.alias === previous) ? previous : '') }
+      })
     }} />}
   </>, document.body)
 }

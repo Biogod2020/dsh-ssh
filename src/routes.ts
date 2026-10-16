@@ -231,11 +231,22 @@ const maxUploadBytes = deps.maxUploadBytes ?? MAX_UPLOAD_BYTES
       kind: 'exact',
       path: SSH_API.importSshConfig,
       handler: async (req, res) => {
-        if (!guard(req, res, 'POST')) return
+        if (!guard(req, res, req.method === 'GET' ? 'GET' : 'POST')) return
+        if (req.method === 'GET') {
+          try { writeJson(res, 200, { preview: store.previewSshConfig() }) }
+          catch (error) { writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) }) }
+          return
+        }
+        if (req.method !== 'POST') { writeJson(res, 405, { error: 'method not allowed' }); return }
+        const body = (await readJsonBody(req)) as Record<string, unknown> | null
+        if (!Array.isArray(body?.aliases) || body.aliases.some(alias => typeof alias !== 'string' || !alias)) {
+          writeJson(res, 400, { error: 'aliases must be an array of selected host aliases' })
+          return
+        }
         try {
-          writeJson(res, 200, { result: store.importFromSshConfig() })
+          writeJson(res, 200, { result: store.importFromSshConfig(body.aliases as string[]) })
         } catch (error) {
-          writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+          writeJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
       },
     },

@@ -234,6 +234,23 @@ export interface ImportSkipBlock {
   reason: ImportSkipReason
 }
 
+/** Local config candidates; excludes credentials and executable proxy text. */
+export interface SshConfigCandidate {
+  alias: string
+  host: string
+  port: number
+  user: string
+  auth: SshAuthKind
+  proxyJump: string[]
+  hasProxyCommand: boolean
+}
+
+export interface ImportPreview {
+  parsed: number
+  candidates: SshConfigCandidate[]
+  skippedBlocks: ImportSkipBlock[]
+}
+
 /** Import outcome from ~/.ssh/config. */
 export interface ImportResult {
   parsed: number

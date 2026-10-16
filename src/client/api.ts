@@ -12,6 +12,7 @@ import {
   type ExecResult,
   type HostPayload,
   type ImportResult,
+  type ImportPreview,
   type RemoteDirEntry,
   type RemoteDirectoryListing,
   type SshHostSummary,
@@ -209,8 +210,15 @@ export class SshApi {
     await readJson<{ ok: boolean }>(response)
   }
 
-  async importSshConfig(): Promise<ImportResult> {
-    const response = await fetch(SSH_API.importSshConfig, { method: 'POST' })
+  async previewSshConfig(): Promise<ImportPreview> {
+    const response = await fetch(SSH_API.importSshConfig)
+    return (await readJson<{ preview: ImportPreview }>(response)).preview
+  }
+
+  async importSshConfig(aliases: string[]): Promise<ImportResult> {
+    const response = await fetch(SSH_API.importSshConfig, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ aliases }),
+    })
     const body = await readJson<{ result: ImportResult }>(response)
     return body.result
   }

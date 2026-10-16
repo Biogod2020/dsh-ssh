@@ -4,11 +4,13 @@
  * that hands the alias to the terminal tab via onConnect.
  */
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import type { SshApi } from '../api.ts'
 import type { ImportSkipBlock, ImportSkipReason, SshHostSummary, TestResult } from '../../protocol.ts'
 import type { SshKey } from '../locales.ts'
 import { errorMessage, tt } from './helpers.ts'
 import { HostFormDialog } from './HostFormDialog.tsx'
+import { ImportHostsDialog } from './ImportHostsDialog.tsx'
 import css from './panel.module.css'
 
 /** Hosts tab props. */
@@ -162,23 +164,6 @@ export function HostsTab({ api, onConnect, active = true }: HostsTabProps) {
     }
   }
 
-  const importConfig = async (): Promise<void> => {
-    if (!mountedRef.current) return
-    setImporting(true)
-    try {
-      const result = await api.importSshConfig()
-      if (!mountedRef.current) return
-      setNotice(tt('hosts.imported', { parsed: result.parsed, added: result.added, skipped: result.skipped }))
-      setImportSkips(result.skippedBlocks)
-      void load()
-    } catch (cause) {
-      if (!mountedRef.current) return
-      setError(errorMessage(cause))
-    } finally {
-      if (mountedRef.current) setImporting(false)
-    }
-  }
-
   const renderHostRow = (host: SshHostSummary): ReactNode => {
     const test = testResults[host.alias]
     return (
@@ -223,7 +208,7 @@ export function HostsTab({ api, onConnect, active = true }: HostsTabProps) {
   const groups = hosts === null ? [] : groupHosts(hosts, groupBy)
 
   return (
-    <div className={css.fillBody}>
+    <div className={css.fillBody} aria-hidden={importing ? true : undefined}>
       <div className={css.toolbar}>
         <input className={css.search} type="search" aria-label={tt('hosts.search')} placeholder={tt('hosts.search')} value={search} onChange={event => { setSearch(event.target.value) }} />
         <select
@@ -238,7 +223,7 @@ export function HostsTab({ api, onConnect, active = true }: HostsTabProps) {
         </select>
         <div className={css.toolbarSpacer} />
         <button type="button" className={css.primaryButton} onClick={() => { setDialog({ mode: 'create' }) }}>{tt('hosts.add')}</button>
-        <button type="button" className={css.ghostButton} disabled={importing} onClick={() => { void importConfig() }}>{importing ? tt('common.loading') : tt('hosts.import')}</button>
+        <button type="button" className={css.ghostButton} onClick={() => setImporting(true)}>{tt('hosts.import')}</button>
       </div>
       {notice !== null && <div className={css.banner} data-kind="ok">{notice}</div>}
       {notice !== null && importSkips.length > 0 && (
@@ -309,6 +294,12 @@ export function HostsTab({ api, onConnect, active = true }: HostsTabProps) {
           onSaved={() => { setDialog(null); void load() }}
         />
       )}
+      {importing && createPortal(<ImportHostsDialog api={api} onClose={() => setImporting(false)} onImported={result => {
+        setImporting(false)
+        setNotice(tt('hosts.imported', { parsed: result.parsed, added: result.added, skipped: result.skipped }))
+        setImportSkips(result.skippedBlocks)
+        void load(search.trim() || undefined)
+      }} />, document.body)}
     </div>
   )
 }

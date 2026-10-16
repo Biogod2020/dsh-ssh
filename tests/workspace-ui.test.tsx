@@ -32,7 +32,11 @@ const makeApi = () => ({
   listWorkspaces: vi.fn(async () => [binding]),
   connectionStatus: vi.fn(async () => [{ alias: 'fixture', state: 'connected' }]),
   createWorkspace: vi.fn(async () => binding),
-  importSshConfig: vi.fn(async () => ({ added: 1 })),
+  previewSshConfig: vi.fn(async () => ({ parsed: 2, candidates: [
+    { alias: 'one', host: 'one.test', port: 22, user: 'me', auth: 'key' as const, proxyJump: [], hasProxyCommand: false },
+    { alias: 'two', host: 'two.test', port: 22, user: 'me', auth: 'key' as const, proxyJump: [], hasProxyCommand: false },
+  ], skippedBlocks: [] })),
+  importSshConfig: vi.fn(async (_aliases: string[]) => ({ parsed: 2, added: 1, skipped: 0, skippedBlocks: [] })),
   browseDirectories: vi.fn(async (_alias: string, path: string, prefix = '') => ({
     path: path === '~' ? '/remote/home' : path.replace(/\/$/, ''),
     directories: (path === '~' ? ['alpha', 'beta'] : path.replace(/\/$/, '') === '/remote/home/alpha' ? ['nested'] : [])
@@ -49,6 +53,61 @@ describe('Add workspace', () => {
     await act(async () => root.render(<WorkspaceFlow open busy={false} api={api as unknown as SshApi} pickLocal={pickLocal} onPicked={onPicked} onCancel={onCancel} onError={vi.fn()} />))
     return { onPicked, onCancel, pickLocal }
   }
+  async function chooseHost(alias = 'fixture') {
+    await act(async () => {
+      const select = document.querySelector('select')!
+      select.value = alias; select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+  it('opens with no selected host and never probes on selection, typing or host switching', async () => {
+    vi.useFakeTimers()
+    const api = makeApi()
+    api.listHosts.mockResolvedValue([fixtureHost, { ...fixtureHost, alias: 'other' }])
+    await mount(api)
+    expect(api.previewSshConfig).not.toHaveBeenCalled()
+    await act(async () => button('SSH 远程工作区').click())
+    expect(document.querySelector('select')!.value).toBe('')
+    expect(button('连接并添加').disabled).toBe(true)
+    await chooseHost()
+    const input = document.querySelector<HTMLInputElement>('input[placeholder="~/projects/my-project"]')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '/work/')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(api.browseDirectories).not.toHaveBeenCalled()
+    await act(async () => button('浏览远端目录').click())
+    // Switching before the debounce must not probe either the old or new host.
+    await chooseHost('other')
+    await act(async () => vi.advanceTimersByTimeAsync(500))
+    expect(api.browseDirectories).not.toHaveBeenCalled()
+    expect(connectRemoteWorkspace).not.toHaveBeenCalled()
+    expect(api.importSshConfig).not.toHaveBeenCalled()
+    await act(async () => button('浏览远端目录').click())
+    await act(async () => vi.advanceTimersByTimeAsync(260))
+    expect(api.browseDirectories).toHaveBeenCalledExactlyOnceWith('other', '~', '')
+  })
+  it('previews config on request, cancels without saving, and adds only checked hosts without probing', async () => {
+    const api = makeApi(), view = await mount(api)
+    await act(async () => button('SSH 远程工作区').click())
+    const openPicker = async () => { await act(async () => button('导入 ~/.ssh/config').click()) }
+    await openPicker()
+    expect(document.querySelector('[aria-label="添加工作区"]')?.getAttribute('aria-hidden')).toBe('true')
+    expect(api.previewSshConfig).toHaveBeenCalledOnce()
+    expect([...document.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].every(input => !input.checked)).toBe(true)
+    expect(button('加入所选主机').disabled).toBe(true)
+    const picker = document.querySelector('[role=dialog][aria-label="从 SSH 配置选择主机"]')!
+    await act(async () => picker.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(view.onCancel).not.toHaveBeenCalled()
+    expect(api.importSshConfig).not.toHaveBeenCalled()
+    await openPicker()
+    await act(async () => document.querySelector<HTMLInputElement>('input[type=checkbox][aria-label=two]')!.click())
+    await act(async () => button('加入所选主机').click())
+    expect(api.importSshConfig).toHaveBeenCalledExactlyOnceWith(['two'])
+    expect(document.querySelector('select')!.value).toBe('')
+    expect(api.browseDirectories).not.toHaveBeenCalled()
+    expect(connectRemoteWorkspace).not.toHaveBeenCalled()
+  })
   it('preserves the local picker and opens the remote runtime without creating a local session', async () => {
     vi.mocked(connectRemoteWorkspace).mockResolvedValue({ id: 'remote', hostId: 'host', alias: 'fixture', title: 'remote', remotePath: '/remote/project', workspaceId: 'remote-workspace' })
     const api = makeApi(), view = await mount(api)
@@ -56,6 +115,7 @@ describe('Add workspace', () => {
     expect(view.onPicked).toHaveBeenCalledWith('/local/project')
     expect(api.createWorkspace).not.toHaveBeenCalled()
     await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
     expect(document.querySelector('select')?.value).toBe('fixture')
     expect(document.querySelector('[role="dialog"]')?.parentElement?.parentElement).toBe(document.body)
     await act(async () => button('连接并添加').click())
@@ -68,6 +128,7 @@ describe('Add workspace', () => {
     const api = makeApi(); vi.mocked(connectRemoteWorkspace).mockRejectedValue(new Error('Host key not trusted'))
     const view = await mount(api)
     await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
     await act(async () => button('连接并添加').click())
     expect(document.querySelector('[role="alert"]')?.textContent).toBe('Host key not trusted')
     expect(view.onPicked).not.toHaveBeenCalled()
@@ -79,6 +140,7 @@ describe('Add workspace', () => {
     vi.useFakeTimers()
     const api = makeApi(), view = await mount(api)
     await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
     await act(async () => button('认证 / 回退密码').click())
     expect(document.querySelector('[role="dialog"][aria-label="添加工作区"]')?.getAttribute('aria-hidden')).toBe('true')
     const password = [...document.querySelectorAll('input')].find(input => input.type === 'password' && input.autocomplete === 'off')!
@@ -89,7 +151,7 @@ describe('Add workspace', () => {
     await act(async () => button('保存').click())
     expect(api.updateHost).toHaveBeenCalledWith('fixture', expect.objectContaining({ auth: expect.objectContaining({ kind: 'key', password: 'fixture-password', rememberPassword: false }) }))
     await act(async () => vi.advanceTimersByTimeAsync(260))
-    expect(api.browseDirectories).toHaveBeenCalledWith('fixture', '~', '')
+    expect(api.browseDirectories).not.toHaveBeenCalled()
     expect(connectRemoteWorkspace).not.toHaveBeenCalled()
     expect(api.createWorkspace).not.toHaveBeenCalled()
     expect(view.onCancel).not.toHaveBeenCalled()
@@ -98,6 +160,7 @@ describe('Add workspace', () => {
   it('can create a host directly inside the Add workspace flow', async () => {
     await mount(makeApi())
     await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
     await act(async () => button('新增主机').click())
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(2)
     expect([...document.querySelectorAll('h3')].map(item => item.textContent)).toContain('新增主机')
@@ -111,6 +174,7 @@ describe('Add workspace', () => {
     })
     const view = await mount(makeApi())
     await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
     await act(async () => button('连接并添加').click())
     expect(button('留在后台准备').disabled).toBe(false)
     await act(async () => button('留在后台准备').click())
@@ -122,16 +186,19 @@ describe('Add workspace', () => {
     const original = 'cannot create a Workspace: EACCES /remote/restricted/folder'
     vi.mocked(connectRemoteWorkspace).mockRejectedValue(new RemoteRequestError(original, 'workspace/invalid-path'))
     await mount(makeApi()); await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
     await act(async () => button('连接并添加').click())
     expect(document.querySelector('[role="alert"]')?.textContent).toBe('无法打开此远端目录。')
     expect(document.querySelector('details')?.open).toBe(false)
     expect(document.querySelector('details pre')?.textContent).toBe(original)
     expect(openRemoteWorkspace).not.toHaveBeenCalled()
   })
-  it('lists remote folders as a path is typed, enters a child and selects its canonical path', async () => {
+  it('browses only on an explicit request, enters a child and selects its canonical path', async () => {
     vi.useFakeTimers()
     const api = makeApi(); await mount(api)
     await act(async () => button('SSH 远程工作区').click())
+    await chooseHost()
+    await act(async () => button('浏览远端目录').click())
     await act(async () => vi.advanceTimersByTimeAsync(260))
     expect(api.browseDirectories).toHaveBeenCalledWith('fixture', '~', '')
     const directory = (name: string) => [...document.querySelectorAll<HTMLButtonElement>('[data-directory-choice]')]
@@ -142,6 +209,9 @@ describe('Add workspace', () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '~/al')
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
+    await act(async () => vi.advanceTimersByTimeAsync(260))
+    expect(api.browseDirectories).toHaveBeenCalledTimes(1)
+    await act(async () => button('浏览远端目录').click())
     await act(async () => vi.advanceTimersByTimeAsync(260))
     expect(api.browseDirectories).toHaveBeenCalledWith('fixture', '~', 'al')
     expect(directory('beta')).toBeUndefined()

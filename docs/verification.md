@@ -41,3 +41,12 @@
 本轮没有重新全面验收生产 PAM / OTP、多 GiB 压力、所有终端协议、Windows 或 Linux 冷安装，也没有调用模型 API。历史支持不等于本轮在所有平台重跑。真实用户配置与日常进程不用于测试。
 
 复验方式见 README 和 `scripts/compatibility-smoke.mjs`、`scripts/remote-browser-smoke.ts`。服务日志可能含临时认证信息，不应上传或分享。
+
+
+## 2026-10-16 — jay.27: explicit SSH host selection
+
+- Import now previews local `~/.ssh/config` candidates with every checkbox initially empty. Only selected aliases are saved; existing hosts are preserved. GET preview is read-only and excludes credentials, key paths and ProxyCommand text; POST rejects a missing selection. No key checks, proxy commands or SSH connections run during preview.
+- Add workspace starts with an empty host choice. Selecting a host, editing the path, saving authentication and importing hosts do not browse or connect. The Browse button explicitly requests remote directories; changing host/path closes browsing and discards stale results. Connect and add remains an explicit action.
+- Release snapshot passed typecheck, all 61 suites / 582 tests, build and artifact checks. Verified prebuilt archive SHA-256: `b975f1201963d80e02e3b18881fbc05c9483ddf5fbb695ef202b59ebfe497664`. Isolated runtimes passed on DSH 0.2.0-rc.2 and 0.2.1-alpha.4.
+- Isolated browser acceptance used generated loopback SSH identities. Importing only `dev-two` saved only that candidate; opening, importing and choosing it produced zero SSH connections and zero commands. Explicit Browse produced exactly one connection and zero commands. UI screenshot and private evidence: `/Users/jay/scratch/dsh-ssh-selection-release-20261016/`.
+- Desktop rc.2 installed the verified .27 tarball through the plugin GUI and was fully quit/reopened. Other plugin dependencies and the private host store were preserved. npm .27 is staged pending the account holder's publication authentication; registry/mirror acceptance will be recorded after approval.

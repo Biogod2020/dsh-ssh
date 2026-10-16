@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { dshHome } from './dsh-home.ts'
-import type { HostPayload, ImportResult, ImportSkipBlock, ImportSkipReason, SshHostEntry, SshHostSummary } from './protocol.ts'
+import type { HostPayload, ImportPreview, ImportResult, ImportSkipBlock, ImportSkipReason, SshHostEntry, SshHostSummary } from './protocol.ts'
 import { readSshConfigBlocks } from './ssh-config.ts'
 
 /** File format version. */
@@ -316,26 +316,25 @@ export class HostStore {
    * reason instead of silently disappearing.
    * @returns import statistics.
    */
-  importFromSshConfig(): ImportResult {
-    // Per-run statistics: a later import must not report earlier runs' skips.
-    this.skippedBlocks = []
+  private readImportCandidates(): { parsed: number; payloads: HostPayload[]; skippedBlocks: ImportSkipBlock[] } {
     const configPath = this.sshConfigOverride ?? sshConfigPath()
-    if (!existsSync(configPath)) return { parsed: 0, added: 0, skipped: 0, skippedBlocks: [] }
+    if (!existsSync(configPath)) return { parsed: 0, payloads: [], skippedBlocks: [] }
     const { blocks, skipped } = readSshConfigBlocks(configPath)
-    this.skippedBlocks = [...skipped]
+    const skippedBlocks = [...skipped]
     const skip = (name: string, reason: ImportSkipReason): void => {
       if (name === '') return
-      if (this.skippedBlocks.some(block => block.name === name)) return
-      this.skippedBlocks.push({ name, reason })
+      if (skippedBlocks.some(block => block.name === name)) return
+      skippedBlocks.push({ name, reason })
     }
-    let added = 0
+    const existing = new Set(this.list().map(entry => entry.alias))
+    const payloads: HostPayload[] = []
     for (const block of blocks) {
       const pattern = block.pattern.split(/\s+/)[0]
       if (pattern.includes('*') || pattern.includes('?')) {
         skip(pattern, 'wildcard')
         continue
       }
-      if (this.list().some(entry => entry.alias === pattern)) {
+      if (existing.has(pattern) || payloads.some(entry => entry.alias === pattern)) {
         skip(pattern, 'existing')
         continue
       }
@@ -370,18 +369,48 @@ export class HostStore {
         tags: (block.props.tags ?? '').split(',').map(tag => tag.trim()).filter(tag => tag !== ''),
         location: block.props.location,
       }
-      try {
-        this.create(payload)
-        added += 1
-      } catch {
-        // Unusable entry (bad alias grammar, conflicting transports, ...).
+      if (validateAlias(pattern) !== undefined || validateHostPayload(payload) !== undefined) {
         skip(pattern, 'invalid')
+      } else {
+        payloads.push(payload)
       }
     }
-    return { parsed: blocks.length, added, skipped: this.skippedBlocks.length, skippedBlocks: [...this.skippedBlocks] }
+    return { parsed: blocks.length, payloads, skippedBlocks }
   }
 
-  private skippedBlocks: ImportSkipBlock[] = []
+  /** Read local configuration only: never saves hosts, reads keys or connects. */
+  previewSshConfig(): ImportPreview {
+    const { parsed, payloads, skippedBlocks } = this.readImportCandidates()
+    return {
+      parsed, skippedBlocks,
+      candidates: payloads.map(payload => ({
+        alias: payload.alias!, host: payload.host, port: payload.port ?? 22, user: payload.user,
+        auth: payload.auth!.kind, proxyJump: payload.proxyJump ?? [],
+        hasProxyCommand: normalizeProxyCommand(payload.proxyCommand ?? '') !== undefined,
+      })),
+    }
+  }
+
+  /** Persist only aliases explicitly chosen by the user; re-read secrets locally. */
+  importFromSshConfig(aliases: string[]): ImportResult {
+    if (!Array.isArray(aliases) || aliases.some(alias => typeof alias !== 'string' || !alias)) {
+      throw new Error('aliases must be an array of selected host aliases')
+    }
+    const { parsed, payloads, skippedBlocks } = this.readImportCandidates()
+    const selected = new Set(aliases)
+    for (const alias of selected) {
+      if (!payloads.some(payload => payload.alias === alias) && !skippedBlocks.some(block => block.name === alias && block.reason === 'existing')) {
+        throw new Error('Selected SSH configuration changed or is unavailable; reopen the host picker')
+      }
+    }
+    let added = 0
+    for (const payload of payloads) {
+      if (!selected.has(payload.alias!)) continue
+      this.create(payload)
+      added++
+    }
+    return { parsed, added, skipped: skippedBlocks.length, skippedBlocks }
+  }
 
   /**
    * Last parsed store keyed by file identity. list/find ride every acquire

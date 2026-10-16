@@ -164,7 +164,40 @@ describe('CRUD', () => {
   })
 })
 
+// Tests that exercise parser compatibility explicitly choose every candidate.
+function importAll(store: HostStore) {
+  return store.importFromSshConfig(store.previewSshConfig().candidates.map(host => host.alias))
+}
+
 describe('import from ssh config', () => {
+  it('previews without creating a store or exposing secrets, then imports only the selection', () => {
+    const { store, dir } = makeStoreIn([
+      'Host chosen', ' HostName chosen.test', ' User tester', ' IdentityFile /fixture/private-key',
+      ' ProxyCommand /fixture/proxy --token fixture-secret %h %p',
+      'Host untouched', ' HostName untouched.test', ' User tester',
+    ].join('\n'))
+    const before = readdirSync(dir)
+    const preview = store.previewSshConfig()
+    expect(preview.candidates.map(host => host.alias)).toEqual(['chosen', 'untouched'])
+    expect(preview.candidates[0]).toMatchObject({ hasProxyCommand: true, auth: 'key' })
+    expect(JSON.stringify(preview)).not.toMatch(/fixture-secret|private-key|\/fixture\/proxy/)
+    expect(readdirSync(dir)).toEqual(before)
+    expect(store.list()).toEqual([])
+    expect(store.importFromSshConfig([]).added).toBe(0)
+    expect(readdirSync(dir)).toEqual(before)
+    expect(store.importFromSshConfig(['chosen']).added).toBe(1)
+    expect(store.list().map(host => host.alias)).toEqual(['chosen'])
+    expect(store.find('chosen')?.proxyCommand).toContain('fixture-secret')
+    expect(store.previewSshConfig().candidates.map(host => host.alias)).toEqual(['untouched'])
+  })
+
+  it('requires explicit aliases and rejects an unavailable selection before saving any host', () => {
+    const store = makeStore('Host available\n User tester\n')
+    expect(() => store.importFromSshConfig(undefined as unknown as string[])).toThrow('aliases')
+    expect(() => store.importFromSshConfig(['available', 'missing'])).toThrow('unavailable')
+    expect(store.list()).toEqual([])
+  })
+
   const config = [
     '# comments are ignored',
     '',
@@ -193,7 +226,7 @@ describe('import from ssh config', () => {
 
   it('imports usable blocks, falls back to the pattern as host, and skips wildcards with a reason', () => {
     const store = makeStore(config)
-    const result = store.importFromSshConfig()
+    const result = importAll(store)
     expect(result.parsed).toBe(4)
     expect(result.added).toBe(3)
     expect(result.skipped).toBe(1)
@@ -211,8 +244,8 @@ describe('import from ssh config', () => {
 
   it('skips existing aliases on re-import and reports why', () => {
     const store = makeStore(config)
-    store.importFromSshConfig()
-    const again = store.importFromSshConfig()
+    importAll(store)
+    const again = importAll(store)
     expect(again.added).toBe(0)
     // 1 wildcard block + 3 aliases that already exist.
     expect(again.skipped).toBe(4)
@@ -222,7 +255,7 @@ describe('import from ssh config', () => {
 
   it('handles a missing config file', () => {
     const store = makeStore()
-    expect(store.importFromSshConfig()).toEqual({ parsed: 0, added: 0, skipped: 0, skippedBlocks: [] })
+    expect(importAll(store)).toEqual({ parsed: 0, added: 0, skipped: 0, skippedBlocks: [] })
   })
 
   it('keeps ProxyCommand verbatim and drops the OpenSSH none keyword', () => {
@@ -237,7 +270,7 @@ describe('import from ssh config', () => {
       '    User root',
       '    ProxyCommand none',
     ].join('\n'))
-    const result = store.importFromSshConfig()
+    const result = importAll(store)
     expect(result.added).toBe(2)
     expect(store.find('bastion-host')?.proxyCommand).toBe('corp-vpn proxy %h %p %r')
     expect(store.find('direct-host')?.proxyCommand).toBeUndefined()
@@ -250,7 +283,7 @@ describe('import from ssh config', () => {
       '    User root',
       '    ProxyJump ops@bastion.example.com:2222',
     ].join('\n'))
-    expect(store.importFromSshConfig().added).toBe(1)
+    expect(importAll(store).added).toBe(1)
     expect(store.find('through-address')?.proxyJump).toEqual(['ops@bastion.example.com:2222'])
   })
 
@@ -279,7 +312,7 @@ describe('import from ssh config', () => {
       '    User nested',
       'Include config',
     ].join('\n'), 'utf8')
-    const result = store.importFromSshConfig()
+    const result = importAll(store)
     expect(result.added).toBe(3)
     expect(store.find('from-include')?.host).toBe('10.4.4.4')
     expect(store.find('from-include')?.user).toBe('deploy')
@@ -300,7 +333,7 @@ describe('import from ssh config', () => {
       '    HostName 10.6.6.7',
       '    User root',
     ].join('\n'))
-    const result = store.importFromSshConfig()
+    const result = importAll(store)
     expect(result.added).toBe(2)
     expect(store.find('conditional')?.user).toBe('root')
     expect(store.find('conditional')?.proxyCommand).toBeUndefined()
@@ -314,7 +347,7 @@ describe('import from ssh config', () => {
       '    User root',
       '    IdentityFile ~/.ssh/id_ed25519',
     ].join('\n'))
-    const result = store.importFromSshConfig()
+    const result = importAll(store)
     expect(result.added).toBe(1)
     expect(store.find('lower-host')?.host).toBe('10.9.9.9')
   })
@@ -331,7 +364,7 @@ describe('import from ssh config', () => {
       '    User root',
       '    IdentityAgent none',
     ].join('\n'))
-    const result = store.importFromSshConfig()
+    const result = importAll(store)
     expect(result.added).toBe(2)
     expect(store.find('agent-host')?.auth.kind).toBe('agent')
     expect(store.find('agent-host')?.auth.agentPath).toBe(join(homedir(), '.ssh', 'agent.sock'))

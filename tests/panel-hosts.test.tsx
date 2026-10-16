@@ -177,6 +177,9 @@ describe('HostsTab proxy transport surfaces', () => {
         makeHost('direct'),
       ]),
       testHost: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
+      previewSshConfig: vi.fn(async () => ({ parsed: 3, candidates: [
+        { alias: 'new-host', host: 'new.test', user: 'tester', port: 22, auth: 'key', proxyJump: [], hasProxyCommand: false },
+      ], skippedBlocks: [] })),
       importSshConfig: vi.fn(async () => ({
         parsed: 3,
         added: 1,
@@ -212,6 +215,12 @@ describe('HostsTab proxy transport surfaces', () => {
     const importButton = [...container.querySelectorAll('button')].find(button => button.textContent === '导入 ~/.ssh/config')!
     await act(async () => { importButton.click() })
     await act(async () => { await Promise.resolve() })
+    expect(api.importSshConfig).not.toHaveBeenCalled()
+    const checkbox = document.querySelector<HTMLInputElement>('input[type=checkbox]')!
+    expect(checkbox.checked).toBe(false)
+    await act(async () => checkbox.click())
+    await act(async () => [...document.querySelectorAll('button')].find(button => button.textContent === '加入所选主机')!.click())
+    expect(api.importSshConfig).toHaveBeenCalledWith(['new-host'])
     expect(container.textContent).toContain('解析 3 个配置块')
     expect(container.textContent).toContain('*.cluster')
     expect(container.textContent).toContain('通配符 pattern，需手动配置')
