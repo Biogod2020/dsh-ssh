@@ -1,0 +1,9 @@
+DSH SSH Ops is a standalone fork derived from the SSH module in
+zhu1090093659/dsh-web v0.3.24 (commit 221d0a7a8c12d8124db9c214ec1b1bb8ad4fa5e4),
+originally distributed as @linxin666/dsh-ssh under the Apache License 2.0.
+
+Upstream: https://github.com/zhu1090093659/dsh-web
+This fork: https://github.com/Biogod2020/dsh-ssh
+
+See LICENSE for the Apache License 2.0. Bundled third-party SSH dependencies
+retain their own license files and notices inside the release archive.
