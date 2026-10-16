@@ -12,9 +12,12 @@ const expected = 'sha512-' + createHash('sha512').update(bytes).digest('base64')
 const official = 'https://registry.npmjs.org', mirror = 'https://registry.npmmirror.com'
 const request = (url, options = {}) => fetch(url, { ...options, signal: AbortSignal.timeout(30000) })
 async function verify(registry) {
-  const metadata = await request(`${registry}/${pkg.name}/${pkg.version}?verify=${Date.now()}`)
+  // Read the canonical package document, as npm clients do. A version URL
+  // requested before publication can retain a negative CDN cache entry.
+  const metadata = await request(`${registry}/${pkg.name}?verify=${Date.now()}`, { headers: { 'Cache-Control': 'no-cache' } })
   if (!metadata.ok) return false
-  const published = await metadata.json()
+  const published = (await metadata.json()).versions?.[pkg.version]
+  if (!published) return false
   assert.equal(published.name, pkg.name)
   assert.equal(published.version, pkg.version)
   // Version metadata may still reference npmjs: fetch the same path through
