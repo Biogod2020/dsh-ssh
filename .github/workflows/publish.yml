@@ -1,0 +1,136 @@
+name: Verify and publish npm package
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.16.0'
+          package-manager-cache: false
+      - name: Check package identity and release tag
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFileSync } from 'node:fs'
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
+          assert.equal(pkg.name, '@biogod/dsh-ssh')
+          assert.equal(process.env.GITHUB_REPOSITORY, 'Biogod2020/dsh-ssh')
+          if (process.env.GITHUB_REF_TYPE === 'tag') assert.equal(process.env.GITHUB_REF_NAME, `v${pkg.version}`)
+          NODE
+      - name: Install pinned build tools and isolated SSH test support
+        run: |
+          npm install --global npm@11.15.0 pnpm@11.20.0 --ignore-scripts
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends openssh-server
+          sudo mkdir -p /run/sshd
+      - name: Install locked dependencies and supported DSH runtimes
+        run: |
+          pnpm install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/dsh-alpha" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.4
+          npm install --prefix "$RUNNER_TEMP/dsh-rc" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+      - name: Test, typecheck, build and pack the verified archive
+        run: pnpm release:local "$RUNNER_TEMP/release"
+      - name: Accept the exact archive in both supported DSH runtimes
+        run: |
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          test "${#archives[@]}" -eq 1
+          node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-alpha/node_modules/.bin/dsh" "${archives[0]}"
+          node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc/node_modules/.bin/dsh" "${archives[0]}"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: verified-npm-package
+          path: |
+            ${{ runner.temp }}/release/*.tgz
+            ${{ runner.temp }}/release/*.tgz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: verify
+    if: github.repository == 'Biogod2020/dsh-ssh' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.16.0'
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.15.0 --ignore-scripts
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verified-npm-package
+          path: release
+      - name: Publish the tested archive with npm OIDC
+        working-directory: release
+        run: |
+          shopt -s nullglob
+          archives=(*.tgz)
+          checksums=(*.tgz.sha256)
+          test "${#archives[@]}" -eq 1
+          test "${#checksums[@]}" -eq 1
+          sha256sum --check "${checksums[0]}"
+          npm publish "${archives[0]}" --access public --tag latest --ignore-scripts
+
+  verify-installation:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.16.0'
+          package-manager-cache: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: verified-npm-package
+          path: release
+      - name: Verify npm and mirror serve the exact tested archive
+        run: |
+          shopt -s nullglob
+          archives=(release/*.tgz)
+          test "${#archives[@]}" -eq 1
+          node scripts/verify-published.mjs "${archives[0]}"
+      - name: Install DSH runtimes for installation acceptance
+        run: |
+          npm install --global pnpm@11.20.0 --ignore-scripts
+          pnpm install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/dsh-alpha" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.4
+          npm install --prefix "$RUNNER_TEMP/dsh-rc" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+      - name: Accept installation by package name from npm and mainland mirror
+        run: |
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json","utf8")).version')
+          DSH_SMOKE_REGISTRY=https://registry.npmjs.org node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-alpha/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
+          DSH_SMOKE_REGISTRY=https://registry.npmmirror.com node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: npm-registry-verification
+          path: release/*.registries.json
+          if-no-files-found: ignore
