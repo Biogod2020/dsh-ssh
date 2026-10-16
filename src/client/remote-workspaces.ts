@@ -4,6 +4,7 @@ import { tt } from './panel/helpers.ts'
 import { RemoteRequestError, remoteErrorView } from './remote-errors.ts'
 import type { LocaleRefreshSource } from './sidebar-entry.ts'
 import css from './panel/panel.module.css'
+import { gatewayUrl, remotePresentation } from './remote-presentation.ts'
 
 const base = '/api/dsh-ssh/remote/'
 interface RequestOptions { signal?: AbortSignal; expectedHostId?: string }
@@ -62,11 +63,15 @@ export async function observeRemoteOperation(id: string, progress: Progress, opt
   return waitForOperation(operation, progress, options)
 }
 export async function openRemoteWorkspace(workspace: RemoteWorkspace, sessionId?: string, options: RequestOptions = {}): Promise<void> {
-  const { url } = await json<{ url: string }>('open', { id: workspace.id, ...(sessionId ? { sessionId } : {}) }, options)
-  const target = new URL(url)
-  if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1') throw new Error('Invalid remote workspace gateway')
   options.signal?.throwIfAborted()
-  window.location.assign(url)
+  const presentation = remotePresentation()
+  if (presentation?.resume(workspace, sessionId)) return
+  if (window.location.protocol === 'dsh-app:' && !presentation) throw new Error(tt('remote.desktopUnavailable'))
+  const { url } = await json<{ url: string }>('open', { id: workspace.id, ...(sessionId ? { sessionId } : {}) }, options)
+  gatewayUrl(url)
+  options.signal?.throwIfAborted()
+  if (presentation) await presentation.open(workspace, url, options.signal, sessionId)
+  else window.location.assign(url)
 }
 interface RecoveryLink { hostId: string; proof: string; sessionId?: string }
 function recoveryFromHash(): RecoveryLink | undefined {

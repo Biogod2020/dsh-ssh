@@ -66,3 +66,12 @@ node --experimental-transform-types scripts/agent-tools-smoke.ts /printed/dsh-re
 ```
 
 The runtime test uses the supplied CLI instead of downloading a release during every test run. Installer unit tests retain version/integrity rejection coverage; cold installation is separately exercised by the browser fixture. Tool smoke runs the six actual tool implementations through a real SSH engine without calling a model. It validates the fixture root/HOME boundary before writing, and keeps logs/results private. See [verification.md](verification.md) for observed results and incomplete browser-save coverage.
+
+
+## Desktop presentation (jay.29)
+
+Desktop launches use the shipped `dshDesktop.browser` guest interface. A workspace-scoped lease and isolated storage partition are acquired before attaching a `webview` at `about:blank#<lease>`. Only after the Desktop shell authenticates that guest does the plugin load the loopback gateway's single-use ticket. The gateway, HttpOnly/SameSite cookie and every SSH host-key check are unchanged; the guest has no Node, preload or local Host bridge. The main window stays on `dsh-app://app/` and does not navigate out to the system browser.
+
+A parent toolbar returns to local UI without detaching the remote client. Reopening the same Host/workspace keeps that client and its unsent draft instead of reloading it. Up to eight views are retained. Explicitly closing a view confirms draft loss, releases only its guest lease, and leaves the remote service running. Host or explicitly selected-session changes cannot silently retarget an already-open view. Aborting a pending view releases its lease; cancelling the completed workspace observer does not close an opened view. Failed loads never print ticket-bearing URLs or retry submitted remote work.
+
+The desktop's standard guest policy blocks page downloads and native privileges. Local SSH transfer tools remain available after returning to local. This presentation does not merge local model settings or local/remote session archives. Browser deployments retain top-level in-tab navigation; a Desktop shell without the guest API reports an update requirement instead of automatically opening a browser.

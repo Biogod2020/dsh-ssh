@@ -32,6 +32,7 @@ import { guardWorkspaceSurfaces } from './workspace-surfaces.tsx'
 import { mountRemoteWorkspaces } from './remote-workspaces.ts'
 import { terminalSettings } from './terminal-settings.ts'
 import { mountNativeSshPanel } from './native-panel.tsx'
+import { mountDesktopWorkspaces } from './desktop-workspace.ts'
 
 /** Locale namespace this plugin owns. */
 const NS = 'dsh-ssh'
@@ -91,6 +92,8 @@ export function apply(ctx: ClientContext): void {
   guardWorkspaceSurfaces(ctx, () => controller.open(), api, terminalFont)
   const disposers: Array<() => void> = []
   try {
+    const desktop = mountDesktopWorkspaces(ctx.locale)
+    if (desktop) disposers.push(desktop)
     const native = mountNativeSshPanel(ctx, controller, api, terminalFont, ctx.locale)
     if (native) disposers.push(native)
     else {

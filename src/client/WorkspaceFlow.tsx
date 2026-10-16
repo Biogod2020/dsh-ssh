@@ -180,7 +180,10 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
               const workspace = await connectRemoteWorkspace(alias, remotePath.trim(), (message, operation) => {
                 if (active()) { setProgress(message); setConnecting(!['ready', 'failed'].includes(operation.phase)) }
               }, options)
-              if (active()) await openRemoteWorkspace(workspace, undefined, options)
+              if (active()) {
+                await openRemoteWorkspace(workspace, undefined, options)
+                if (active()) onCancel()
+              }
             }) }}>{locked ? tt('workspace.connecting') : tt('workspace.connectAdd')}</button>}
         </div>
       </div>

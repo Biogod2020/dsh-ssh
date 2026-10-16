@@ -63,3 +63,11 @@ GitHub Actions preflight run `38876888021` passed all 61 suites / 582 tests, art
 - Published archive: 1,119,367 bytes; SHA-256 `be6b267eaf3d41aba7d71282c78b8ae12ac2a2d4d1dabb16605fab7ed8bad0ca`. npm and the actual `cdn.npmmirror.com` archive both matched the tested archive's SHA-512.
 - macOS independently installed `@biogod/dsh-ssh@0.3.24-jay.28` by package name from npm into DSH 0.2.1-alpha.4, and from the mainland mirror into DSH 0.2.0-rc.2; authenticated runtime and native settings/enable checks passed.
 - Daily Desktop already runs the .27 acceptance package with the same SSH implementation. It was not replaced again after the machine locked; .28 is the formal npm release. Existing host configuration remains byte-identical to the pre-update backup.
+
+
+## 2026-10-16 — jay.29: remote workspaces inside Desktop
+
+- Replaced Desktop top-level loopback navigation with the shipped `dshDesktop.browser` guest lease interface. The parent stays on `dsh-app://app/`; Return to local retains the owned guest and its draft, and reopening reuses that guest. Closing a view confirms draft loss and leaves remote services running. No automatic external-browser fallback is used. Browser deployments retain in-tab navigation.
+- Gateway tickets, Strict/HttpOnly cookies, SSH host-key verification and no-replay rules remain in force. The embedded view mode only hides duplicate local/recovery links; it does not grant authentication. Desktop guests have no local Node/preload/Host privileges, and native page downloads follow the Desktop browser restriction. Local SSH transfer tools remain available.
+- Typecheck, all 62 suites / 588 tests, build and artifact checks passed. Real-SSH tests verified the embedded ticket still requires authentication and retains Strict cookies.
+- Actual Desktop rc.2 acceptance used a separate HOME/DSH_HOME, a private port and a generated loopback SSH identity; no user SSH host or model credential was used. The remote DSH rendered in the same application window. Returning to local and reopening preserved the exact unsent fixture draft and gateway origin. Evidence: `/Users/jay/scratch/dsh-ssh-desktop-release-20261016/native-verification.json` and `in-app-workspace.png`.

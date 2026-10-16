@@ -95,9 +95,9 @@ function connectionLamp(recovery: { returnUrl: string; hostId: string; proof: st
 }
 
 /** Host identity stays visible while the remote service owns native workspace/session navigation. */
-export function remotePage(html: string, options: { alias: string; returnUrl: string; hostId: string; recoveryProof: string; sessionId?: string }): string {
+export function remotePage(html: string, options: { alias: string; returnUrl: string; hostId: string; recoveryProof: string; sessionId?: string; embedded?: boolean }): string {
   const init = options.sessionId ? `<script>localStorage.setItem('dsh.sessions.current',${jsonScript(JSON.stringify({ sessionId: options.sessionId }))});</script>` : ''
-  const bar = `<div id="dsh-remote-host" data-state="checking" data-recovery="false" aria-label="SSH">
+  const bar = `<div id="dsh-remote-host" data-state="checking" data-recovery="false"${options.embedded ? ' data-desktop="true"' : ''} aria-label="SSH">
     <div class="dsh-remote-identity"><span class="dsh-remote-tag">SSH</span><strong title="${escapeHtml(options.alias)}">${escapeHtml(options.alias)}</strong></div>
     <div class="dsh-remote-connection"><span id="dsh-remote-lamp" role="img" aria-label="SSH checking"></span><span id="dsh-remote-status" role="status" aria-live="polite"></span></div>
     <a id="dsh-remote-back" href="${escapeHtml(options.returnUrl)}"><span id="dsh-remote-back-full"></span><span id="dsh-remote-back-compact"></span></a>
@@ -109,6 +109,7 @@ export function remotePage(html: string, options: { alias: string; returnUrl: st
     #root{height:calc(100dvh - var(--dsh-remote-bar-height,48px))!important}
     #dsh-remote-host{box-sizing:border-box;display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:0 16px;padding:0 16px;min-height:48px;background:var(--dsw-alias-bg-layer-1,#f6f7f9);color:var(--dsw-alias-label-primary,#242831);border-bottom:1px solid var(--dsw-alias-border-l1,#dfe2e7);font:12px/1.5 system-ui;position:fixed;inset:0 0 auto;z-index:2147483647}
     #dsh-remote-host [hidden]{display:none}
+    #dsh-remote-host[data-desktop] #dsh-remote-back,#dsh-remote-host[data-desktop] #dsh-remote-recover{display:none!important}
     .dsh-remote-identity{display:flex;align-items:center;gap:8px;min-width:0;height:47px}
     .dsh-remote-identity strong{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .dsh-remote-tag{font-size:10px;font-weight:650;letter-spacing:.06em;padding:2px 5px;border-radius:4px;border:1px solid var(--dsw-alias-border-l2,#d5d9e0);color:var(--dsw-alias-label-secondary,#636b77);flex-shrink:0}

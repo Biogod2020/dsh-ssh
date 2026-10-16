@@ -731,6 +731,15 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 .importCandidate:focus-within { border-color: var(--dsw-alias-state-business-primary); }
 .importIdentity { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
 
+.desktopWorkspace { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
+.desktopWorkspace[hidden] { display: none; }
+.desktopWorkspaceToolbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; min-height: 48px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); -webkit-app-region: drag; }
+:global(html[data-platform="darwin"]) .desktopWorkspaceToolbar { padding-left: 96px; }
+.desktopWorkspaceToolbar button { -webkit-app-region: no-drag; }
+.desktopWorkspaceTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.desktopWorkspaceBody { flex: 1; min-height: 0; display: flex; }
+.desktopWorkspaceGuest { width: 100%; height: 100%; flex: 1; min-width: 0; border: 0; }
+
 .modalDescription {
   margin: 0;
   font-size: 13px;

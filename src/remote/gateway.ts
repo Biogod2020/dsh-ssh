@@ -11,7 +11,7 @@ export class RemoteGateway {
   private server: Server
   private sockets = new Set<Socket>()
   private tickets = new Map<string, { expires: number; sessionId?: string }>()
-  private sessions = new Map<string, { expires: number; sessionId?: string }>()
+  private sessions = new Map<string, { expires: number; sessionId?: string; embedded?: boolean }>()
   private upstreamCookie = ''
   origin = ''
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
@@ -55,7 +55,7 @@ export class RemoteGateway {
     for (const map of [this.tickets, this.sessions]) for (const [key, item] of map) if (item.expires < Date.now()) map.delete(key)
   }
   private cookieName(): string { return `dsh-remote-${new URL(this.origin).port}` }
-  private authenticated(req: IncomingMessage): { sessionId?: string } | undefined {
+  private authenticated(req: IncomingMessage): { sessionId?: string; embedded?: boolean } | undefined {
     if (req.headers.host !== new URL(this.origin).host || (req.headers.origin && req.headers.origin !== this.origin)
       || req.headers['sec-fetch-site'] === 'cross-site') return undefined
     const value = req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith(this.cookieName() + '='))?.split('=')[1]
@@ -95,7 +95,7 @@ export class RemoteGateway {
       const entry = this.tickets.get(ticket); this.tickets.delete(ticket)
       if (!entry) { res.writeHead(401); res.end('Remote launch link expired. Reopen the workspace.'); return }
       const key = randomBytes(32).toString('base64url')
-      this.sessions.set(key, { expires: Date.now() + 86400000, sessionId: entry.sessionId })
+      this.sessions.set(key, { expires: Date.now() + 86400000, sessionId: entry.sessionId, embedded: url.searchParams.get('dsh-remote-view') === 'desktop' })
       res.writeHead(303, { Location: '/', 'Set-Cookie': `${this.cookieName()}=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`, 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' }); res.end(); return
     }
     const session = this.authenticated(req)
@@ -119,7 +119,7 @@ export class RemoteGateway {
           // Consume navigation once; later reloads preserve the remote client's current session.
           const selected = session.sessionId; delete session.sessionId
           const body = remotePage(Buffer.concat(chunks).toString('utf8'), {
-            alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected,
+            alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded,
           })
           res.writeHead(incoming.statusCode ?? 200, headers); res.end(body); resolve()
         })
