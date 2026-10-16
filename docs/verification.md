@@ -71,3 +71,10 @@ GitHub Actions preflight run `38876888021` passed all 61 suites / 582 tests, art
 - Gateway tickets, Strict/HttpOnly cookies, SSH host-key verification and no-replay rules remain in force. The embedded view mode only hides duplicate local/recovery links; it does not grant authentication. Desktop guests have no local Node/preload/Host privileges, and native page downloads follow the Desktop browser restriction. Local SSH transfer tools remain available.
 - Typecheck, all 62 suites / 588 tests, build and artifact checks passed. Real-SSH tests verified the embedded ticket still requires authentication and retains Strict cookies.
 - Actual Desktop rc.2 acceptance used a separate HOME/DSH_HOME, a private port and a generated loopback SSH identity; no user SSH host or model credential was used. The remote DSH rendered in the same application window. Returning to local and reopening preserved the exact unsent fixture draft and gateway origin. Evidence: `/Users/jay/scratch/dsh-ssh-desktop-release-20261016/native-verification.json` and `in-app-workspace.png`.
+
+
+### jay.29 deployment and publication
+
+Daily Desktop rc.2 installed the verified .29 local archive through its plugin GUI, enabled it and was fully quit/reopened. Both installed client/backend files matched the verified archive; the SSH host store remained byte-identical and 0600, and other plugin dependencies were preserved. User workspaces and model configuration were retained; no real SSH target was used for acceptance.
+
+The OIDC [release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/38886410320) completed all three jobs successfully. The published CI archive (1,131,337 bytes) and its actual mainland mirror CDN download matched the tested SHA-512. Official/mirror package-name installation passed in isolated DSH alpha.4/rc.2 runtimes. The registry check now reads the canonical package document to avoid stale negative caches on newly published version URLs.
