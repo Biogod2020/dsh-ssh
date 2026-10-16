@@ -7,6 +7,7 @@
 - npm 已发布，`latest` 指向该版本；官方源和国内镜像的归档 SHA-256 均为 `8238e7731350f469171424c5e684eca2323a62f627006c009a367e84ba386f56`。
 - 按 npm 包名从官方源安装到 DSH alpha.4、从国内镜像安装到 DSH rc.2，均通过隔离运行验收。
 - 2026-10-16 实际 macOS 桌面版 rc.2 通过插件页从国内镜像安装并启用 `.26`，组件状态为 Running；原主机配置字节未变，其他插件依赖保持不变。
+- 补充升级检查：rc.2 在同一进程中 remove/install/enable 均报告 applied，但仍运行 .25 的后端，PATCH 回退密码时报 `auth.keyPath is required for key auth`。隔离环境完全重启后，新能力字段出现，同一 PATCH 返回 200 并保留私钥路径。安装版本和组件 Running 状态不能单独证明后端已换新；.25 → .26 的桌面迁移需要完全重启。
 - 61 个测试文件 / 576 项测试、typecheck、build、产物检查通过。
 - 生成的 loopback SSH 身份验证覆盖密钥优先、拒绝或无法读取密钥后的密码回退、不可用 Agent 回退、未知主机密钥拒绝、单次派发后连接断开不重放。
 - 键盘交互覆盖空 PAM 提示、账号密码和一次性密码分离。不会把保存的账号密码填入标识为 OTP / verification / one-time password 的提示。

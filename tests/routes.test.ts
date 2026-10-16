@@ -162,6 +162,21 @@ describe('loopback fence', () => {
 })
 
 describe('hosts CRUD (one handler per path)', () => {
+  it('saves a remembered fallback through HTTP without resending an existing private key path', async () => {
+    store.create({ alias: 'fallback-http', host: 'fixture.test', user: 'tester', auth: { kind: 'key', keyPath: '/fixture/private-key' } })
+    try {
+      const response = await fetch('http://127.0.0.1:' + port + SSH_API.hosts + '?alias=fallback-http', {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ host: 'fixture.test', user: 'tester', auth: { kind: 'key', password: 'fixture-fallback', rememberPassword: true } }),
+      })
+      expect(response.status).toBe(200)
+      const result = await response.json() as { host: SshHostSummary }
+      expect(result.host).toMatchObject({ auth: 'key', passwordAvailable: true, passwordRemembered: true })
+      expect(JSON.stringify(result)).not.toContain('fixture-fallback')
+      expect(new HostStore(store.path).find('fallback-http')?.auth).toMatchObject({ kind: 'key', keyPath: '/fixture/private-key', password: 'fixture-fallback' })
+    } finally { store.delete('fallback-http'); stub.dropAliasCalls.length = 0 }
+  })
+
   it('creates, lists, patches, and deletes through the shared route', async () => {
     const create = await fetch('http://127.0.0.1:' + port + SSH_API.hosts, {
       method: 'POST',
