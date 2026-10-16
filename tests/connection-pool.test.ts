@@ -29,7 +29,8 @@ const sshMock = vi.hoisted(() => {
   return { instances, behaviors, nextStreamSet: (s: unknown) => { nextStream = s }, nextStream }
 })
 
-vi.mock('ssh2', () => {
+vi.mock('ssh2', async importOriginal => {
+  const actual = await importOriginal<typeof import('ssh2')>()
   class MockClient {
     connectConfig: Record<string, unknown> | undefined
     destroyCalls = 0
@@ -86,7 +87,7 @@ vi.mock('ssh2', () => {
       cb(undefined, sshMock.nextStream)
     }
   }
-  return { Client: MockClient }
+  return { ...actual, default: { ...actual, Client: MockClient }, Client: MockClient }
 })
 
 /** A minimal pool engine whose store lookups are controlled per test. */

@@ -407,7 +407,7 @@ describe('partial updates', () => {
     // credential, not a validation error (kept in sync with validateHostPayload).
     const updated = store.update('web-01', { auth: { kind: 'password', password: '' } })
     expect(updated.auth.kind).toBe('password')
-    expect(updated.auth.password).toBe('')
+    expect(updated.auth.password).toBeUndefined()
     expect(() => store.update('web-01', { auth: { kind: 'password', password: 123 as unknown as string } }))
       .toThrow(/password/)
   })

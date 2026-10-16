@@ -208,6 +208,7 @@ export class SshEngine {
   /** Close every pooled connection and tunnel. */
   dispose(): void {
     this.disposed = true
+    this.store.clearSessionPasswords()
     if (this.sweepTimer !== undefined) clearInterval(this.sweepTimer)
     for (const alias of [...this.acquireQueue.keys()]) cancelAcquire(this, alias, new Error('SSH engine closed while connecting; no operation was dispatched'))
     for (const id of [...this.tunnels.keys()]) stopTunnel(this, id, true)

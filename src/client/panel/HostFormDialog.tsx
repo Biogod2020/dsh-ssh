@@ -4,7 +4,7 @@
  * passphrase, password) are never pre-filled when editing (the API only
  * exposes the secret-free summary).
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { SshApi } from '../api.ts'
 import type { HostPayload, SshAuthKind, SshHostSummary } from '../../protocol.ts'
 import { errorMessage, tt } from './helpers.ts'
@@ -29,6 +29,8 @@ interface FormState {
   keyPath: string
   passphrase: string
   password: string
+  rememberPassword: boolean
+  clearPassword: boolean
   agentPath: string
   proxyJump: string
   proxyCommand: string
@@ -54,6 +56,8 @@ function blankOf(editing: SshHostSummary | null | undefined): FormState {
     keyPath: '',
     passphrase: '',
     password: '',
+    rememberPassword: editing?.passwordRemembered ?? (editing?.auth === 'password'),
+    clearPassword: false,
     agentPath: '',
     proxyJump: (editing?.proxyJump ?? []).join(', '),
     proxyCommand: editing?.proxyCommand ?? '',
@@ -69,6 +73,13 @@ export function HostFormDialog({ api, editing, onClose, onSaved }: HostFormDialo
   const [form, setForm] = useState<FormState>(() => blankOf(editing))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const dialog = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    dialog.current?.querySelector<HTMLElement>('input:not(:disabled)')?.focus()
+    return () => { if (previous?.isConnected) previous.focus() }
+  }, [])
 
   // Escape closes the dialog.
   useEffect(() => {
@@ -98,25 +109,22 @@ export function HostFormDialog({ api, editing, onClose, onSaved }: HostFormDialo
     }
     // A password-auth host needs a password on create; when editing, a blank
     // secret field preserves the stored credential instead.
-    if (editing == null && form.authKind === 'password' && form.password === '') {
+    if (form.authKind === 'password' && form.password === '' && !form.clearPassword && !(editing?.auth === 'password' && editing.passwordAvailable !== false)) {
       setError(tt('form.passwordRequired'))
       return
     }
     // Secrets are never echoed back by the API: when editing and the secret
     // fields are left empty, the auth block is omitted so the stored
     // authentication is preserved.
-    const secretEmpty = form.authKind === 'password'
-      ? form.password === ''
-      : form.authKind === 'key'
-        ? form.keyPath.trim() === ''
-        : form.agentPath.trim() === ''
-    const auth: HostPayload['auth'] = editing != null && secretEmpty
+    const secretEmpty = form.password === '' && form.keyPath.trim() === '' && form.passphrase === '' && form.agentPath.trim() === ''
+    const rememberUnchanged = form.rememberPassword === (editing?.passwordRemembered ?? (editing?.auth === 'password'))
+    const auth: HostPayload['auth'] = editing != null && form.authKind === editing.auth && secretEmpty && rememberUnchanged && !form.clearPassword
       ? undefined
-      : form.authKind === 'password'
-        ? { kind: 'password', password: form.password }
-        : form.authKind === 'key'
-          ? { kind: 'key', keyPath: form.keyPath.trim(), passphrase: form.passphrase === '' ? undefined : form.passphrase }
-          : { kind: 'agent', agentPath: form.agentPath.trim() === '' ? undefined : form.agentPath.trim() }
+      : { kind: form.authKind,
+          ...(form.authKind === 'key' ? { keyPath: form.keyPath.trim() || undefined, passphrase: form.passphrase || undefined } : {}),
+          ...(form.authKind === 'agent' ? { agentPath: form.agentPath.trim() || undefined } : {}),
+          password: form.clearPassword && form.password === '' ? '' : form.password || undefined,
+          rememberPassword: form.rememberPassword }
     const payload: HostPayload = {
       host,
       port,
@@ -146,7 +154,15 @@ export function HostFormDialog({ api, editing, onClose, onSaved }: HostFormDialo
 
   return (
     <div className={css.modalBackdrop} onClick={onClose}>
-      <div className={css.modal} role="dialog" aria-modal="true" onClick={event => { event.stopPropagation() }}>
+      <div ref={dialog} className={css.modal} role="dialog" aria-modal="true"
+        aria-label={editing != null ? tt('form.title.edit', { alias: editing.alias }) : tt('form.title.create')}
+        onClick={event => { event.stopPropagation() }} onKeyDown={event => {
+          if (event.key !== 'Tab') return
+          const items = Array.from(dialog.current?.querySelectorAll<HTMLElement>('input:not(:disabled), button:not(:disabled)') ?? [])
+          const first = items[0], last = items.at(-1)
+          if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
+          if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
+        }}>
         <h3 className={css.modalTitle}>{editing != null ? tt('form.title.edit', { alias: editing.alias }) : tt('form.title.create')}</h3>
         <div className={css.formRow}>
           <label className={css.field}>
@@ -205,13 +221,23 @@ export function HostFormDialog({ api, editing, onClose, onSaved }: HostFormDialo
             <input className={css.input} value={form.agentPath} onChange={event => { set('agentPath', event.target.value) }} />
             <span className={css.hint}>{tt('form.agentPathHint')}</span>
           </label>
-        ) : (
-          <label className={css.field}>
-            <span className={css.fieldLabel}>{tt('form.password')}</span>
-            <input className={css.input} type="password" value={form.password} onChange={event => { set('password', event.target.value) }} />
-            <span className={css.hint}>{tt('form.passwordHint')}</span>
-          </label>
-        )}
+        ) : null}
+        <label className={css.field}>
+          <span className={css.fieldLabel}>{tt(form.authKind === 'password' ? 'form.password' : 'form.fallbackPassword')}</span>
+          <input className={css.input} type="password" autoComplete="off" value={form.password}
+            placeholder={editing?.passwordAvailable && !form.clearPassword ? tt('form.passwordKeep') : undefined}
+            onChange={event => { set('password', event.target.value) }} />
+          <span className={css.hint}>{tt(form.authKind === 'password' ? 'form.passwordUsage' : 'form.fallbackPasswordHint')}</span>
+        </label>
+        <label className={css.radioLabel}>
+          <input type="checkbox" checked={form.rememberPassword} onChange={event => { set('rememberPassword', event.target.checked) }} />
+          {tt('form.rememberPassword')}
+        </label>
+        <p className={css.hint}>{tt(form.rememberPassword ? 'form.rememberPasswordHint' : 'form.sessionPasswordHint')}</p>
+        {editing?.passwordAvailable && <div className={css.formRow}>
+          <span className={css.hint}>{tt(form.clearPassword ? 'form.passwordWillClear' : editing.passwordRemembered ? 'form.passwordSaved' : 'form.passwordSession')}</span>
+          {!form.clearPassword && <button type="button" className={css.linkButton} onClick={() => { set('clearPassword', true); set('password', '') }}>{tt('form.clearPassword')}</button>}
+        </div>}
         <label className={css.field}>
           <span className={css.fieldLabel}>{tt('form.proxyJump')}</span>
           <input className={css.input} value={form.proxyJump} onChange={event => { set('proxyJump', event.target.value) }} />

@@ -45,9 +45,10 @@ export function validateHostPayload(payload: unknown): string | undefined {
     if (auth.kind === 'key' && (typeof auth.keyPath !== 'string' || auth.keyPath.trim() === '')) {
       return 'auth.keyPath is required for key auth'
     }
-    if (auth.kind === 'password' && auth.password !== undefined && typeof auth.password !== 'string') {
+    if (auth.password !== undefined && typeof auth.password !== 'string') {
       return 'auth.password must be a string when provided'
     }
+    if (auth.rememberPassword !== undefined && typeof auth.rememberPassword !== 'boolean') return 'auth.rememberPassword must be a boolean'
     if (auth.kind === 'agent' && auth.agentPath !== undefined && typeof auth.agentPath !== 'string') {
       return 'auth.agentPath must be a string when provided'
     }
@@ -88,6 +89,29 @@ export function validateAlias(alias: string): string | undefined {
  * The host store. Pure file I/O — no cordis dependency, unit-testable.
  */
 export class HostStore {
+  private readonly sessionPasswords = new Map<string, { updatedAt: number; host: string; port: number; user: string; password: string }>()
+
+  /** Session credentials never enter the parsed file cache or its serialized copy. */
+  private withSessionPassword(entry: SshHostEntry): SshHostEntry {
+    const saved = this.sessionPasswords.get(entry.alias)
+    if (saved === undefined) return entry
+    if (saved.updatedAt !== entry.updatedAt || saved.host !== entry.host || saved.port !== entry.port || saved.user !== entry.user) {
+      this.sessionPasswords.delete(entry.alias)
+      return entry
+    }
+    return { ...entry, auth: { ...entry.auth, password: saved.password, rememberPassword: false } }
+  }
+
+  private keepSessionPassword(entry: SshHostEntry, password: string | undefined, remember: boolean): void {
+    this.sessionPasswords.delete(entry.alias)
+    if (password !== undefined && password !== '' && !remember) {
+      this.sessionPasswords.set(entry.alias, { updatedAt: entry.updatedAt, host: entry.host, port: entry.port, user: entry.user, password })
+    }
+  }
+
+  /** Plugin shutdown discards credentials that were not explicitly remembered. */
+  clearSessionPasswords(): void { this.sessionPasswords.clear() }
+
   /** The JSON file path. */
   readonly path: string
   /** Optional override of the ~/.ssh/config path (tests). */
@@ -105,7 +129,7 @@ export class HostStore {
   /** Load all entries (empty store when the file is absent). */
   list(): SshHostEntry[] {
     const file = this.load()
-    return file.hosts
+    return this.sessionPasswords.size ? file.hosts.map(entry => this.withSessionPassword(entry)) : file.hosts
   }
 
   /** Find one entry by alias. */
@@ -115,6 +139,7 @@ export class HostStore {
 
   /** Secret-free projection for the browser and agent surfaces. */
   summarize(entry: SshHostEntry): SshHostSummary {
+    entry = this.withSessionPassword(entry)
     let keyReady = true
     if (entry.auth.kind === 'key' && entry.auth.keyPath) {
       keyReady = existsSync(expandHome(entry.auth.keyPath))
@@ -127,6 +152,8 @@ export class HostStore {
       port: entry.port,
       user: entry.user,
       auth: entry.auth.kind,
+      passwordAvailable: Boolean(entry.auth.password),
+      passwordRemembered: Boolean(entry.auth.password) && entry.auth.rememberPassword !== false,
       keyReady,
       proxyJump: [...entry.proxyJump],
       ...(entry.proxyCommand !== undefined ? { proxyCommand: entry.proxyCommand } : {}),
@@ -162,7 +189,7 @@ export class HostStore {
         kind: payload.auth.kind,
         keyPath: payload.auth.kind === 'key' ? expandHome(payload.auth.keyPath?.trim() ?? '') : undefined,
         passphrase: payload.auth.kind === 'key' ? payload.auth.passphrase ?? undefined : undefined,
-        password: payload.auth.kind === 'password' ? payload.auth.password : undefined,
+        password: payload.auth.rememberPassword === false ? undefined : payload.auth.password || undefined,
         agentPath: payload.auth.kind === 'agent' ? normalizeAgentPath(payload.auth.agentPath) : undefined,
       },
       proxyJump: [...(payload.proxyJump ?? [])],
@@ -176,14 +203,25 @@ export class HostStore {
     }
     file.hosts.push(entry)
     this.save(file)
-    return entry
+    this.keepSessionPassword(entry, payload.auth.password, payload.auth.rememberPassword !== false)
+    return this.withSessionPassword(entry)
   }
 
   /** Update the fields present in `patch`; unknown aliases throw. */
   update(alias: string, patch: Partial<HostPayload>): SshHostEntry {
     const file = this.load()
-    const entry = file.hosts.find(candidate => candidate.alias === alias)
-    if (entry === undefined) throw new Error(`alias '${alias}' not found`)
+    const index = file.hosts.findIndex(candidate => candidate.alias === alias)
+    const stored = file.hosts[index]
+    if (stored === undefined) throw new Error(`alias '${alias}' not found`)
+    // Validate and assemble a copy: a rejected edit must not change the cache.
+    const entry = { ...stored, auth: { ...stored.auth } }
+    const currentAuth = this.withSessionPassword(entry).auth
+    const identityChanged = (typeof patch.host === 'string' && patch.host.trim() !== entry.host)
+      || (typeof patch.user === 'string' && patch.user.trim() !== entry.user)
+      || (patch.port !== undefined && patch.port !== entry.port)
+    const password = patch.auth?.password !== undefined ? patch.auth.password || undefined
+      : identityChanged && currentAuth.rememberPassword === false ? undefined : currentAuth.password
+    const rememberPassword = patch.auth?.rememberPassword ?? (currentAuth.rememberPassword !== false)
     // Partial-patch validation: only the present fields are checked (a
     // caller may update just tags without resending host/user).
     if (patch.host !== undefined && (typeof patch.host !== 'string' || patch.host.trim() === '')) {
@@ -218,12 +256,14 @@ export class HostStore {
     if (patch.auth !== undefined) {
       const auth = patch.auth
       if (auth.kind !== 'key' && auth.kind !== 'password' && auth.kind !== 'agent') throw new Error('auth.kind must be key, password or agent')
-      if (auth.kind === 'key' && (typeof auth.keyPath !== 'string' || auth.keyPath.trim() === '')) {
+      if (auth.kind === 'key' && ((auth.keyPath !== undefined && (typeof auth.keyPath !== 'string' || auth.keyPath.trim() === ''))
+        || (auth.keyPath === undefined && (entry.auth.kind !== 'key' || !entry.auth.keyPath)))) {
         throw new Error('auth.keyPath is required for key auth')
       }
-      if (auth.kind === 'password' && auth.password !== undefined && typeof auth.password !== 'string') {
+      if (auth.password !== undefined && typeof auth.password !== 'string') {
         throw new Error('auth.password must be a string when provided')
       }
+      if (auth.rememberPassword !== undefined && typeof auth.rememberPassword !== 'boolean') throw new Error('auth.rememberPassword must be a boolean')
       if (auth.kind === 'agent' && auth.agentPath !== undefined && typeof auth.agentPath !== 'string') {
         throw new Error('auth.agentPath must be a string when provided')
       }
@@ -234,11 +274,11 @@ export class HostStore {
         && expandHome(auth.keyPath.trim()) !== entry.auth.keyPath
       entry.auth = {
         kind: auth.kind,
-        keyPath: auth.kind === 'key' ? expandHome(auth.keyPath?.trim() ?? '') : undefined,
+        keyPath: auth.kind === 'key' ? (auth.keyPath === undefined ? entry.auth.keyPath : expandHome(auth.keyPath.trim())) : undefined,
         passphrase: auth.kind === 'key'
           ? (auth.passphrase !== undefined ? auth.passphrase : (keyChanged ? undefined : entry.auth.passphrase))
           : undefined,
-        password: auth.kind === 'password' ? auth.password : undefined,
+        password: rememberPassword ? password : undefined,
         agentPath: auth.kind === 'agent'
           ? (auth.agentPath !== undefined ? normalizeAgentPath(auth.agentPath) : entry.auth.agentPath)
           : undefined,
@@ -251,8 +291,10 @@ export class HostStore {
     if (patch.tags !== undefined) entry.tags = [...patch.tags].map(tag => tag.trim()).filter(tag => tag !== '')
     if (patch.location !== undefined) entry.location = patch.location.trim() || undefined
     entry.updatedAt = Math.max(Date.now(), entry.updatedAt + 1)
+    file.hosts[index] = entry
     this.save(file)
-    return entry
+    this.keepSessionPassword(entry, password, rememberPassword)
+    return this.withSessionPassword(entry)
   }
 
   /** Remove one entry. */
@@ -262,6 +304,7 @@ export class HostStore {
     if (index < 0) throw new Error(`alias '${alias}' not found`)
     file.hosts.splice(index, 1)
     this.save(file)
+    this.sessionPasswords.delete(alias)
   }
 
   /**

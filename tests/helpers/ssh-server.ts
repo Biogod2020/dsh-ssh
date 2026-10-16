@@ -62,6 +62,8 @@ export class TestSshServer {
   /** Successful connections seen. */
   connectCount = 0
   commandCount = 0
+  /** Method names only; credential contents are never recorded. */
+  readonly authMethods: string[] = []
   hostPublicKey = ''
   /** Client keypair for key-auth tests. */
   readonly keyPair: KeyPairPaths
@@ -111,10 +113,12 @@ export class TestSshServer {
     const clients: ServerConnection[] = []
     let connectCount = 0
     let commandCount = 0
+    const authMethods: string[] = []
     const server = new Server({ hostKeys: [readFileSync(hostKey)] }, (client) => {
       clients.push(client)
       client.on('error', () => {}) // Expected for rejected test host keys.
       client.on('authentication', (ctx) => {
+        authMethods.push(ctx.method)
         if (ctx.method === 'password' && ctx.username === TEST_USER && ctx.password === TEST_PASSWORD) {
           ctx.accept()
           return
@@ -184,6 +188,7 @@ export class TestSshServer {
     harness.hostPublicKey = readFileSync(hostKey + '.pub', 'utf8').trim().split(/\s+/).slice(0, 2).join(' ')
     appendFileSync(DEFAULT_KNOWN_HOSTS[0], `[127.0.0.1]:${port} ${harness.hostPublicKey}\n`, { mode: 0o600 })
     Object.defineProperty(harness, 'commandCount', { get: () => commandCount })
+    Object.defineProperty(harness, 'authMethods', { get: () => authMethods })
     harness.connectCount = connectCount
     // The static this-binding above is awkward; keep the counter fresh via getter.
     server.on('connection', () => { harness.connectCount += 1 })

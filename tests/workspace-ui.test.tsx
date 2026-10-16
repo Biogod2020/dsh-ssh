@@ -9,6 +9,7 @@ import type { SshApi } from '../src/client/api.ts'
 import type { SshWorkspace } from '../src/workspaces.ts'
 import { connectRemoteWorkspace, openRemoteWorkspace } from '../src/client/remote-workspaces.ts'
 import { RemoteRequestError } from '../src/client/remote-errors.ts'
+import type { HostPayload, SshHostSummary } from '../src/protocol.ts'
 vi.mock('../src/client/remote-workspaces.ts', () => ({ connectRemoteWorkspace: vi.fn(), openRemoteWorkspace: vi.fn() }));
 vi.mock('../src/client/panel/TerminalTab.tsx', () => ({
   TerminalTab: ({ lockedAlias, remoteCwd, autoConnect }: { lockedAlias: string; remoteCwd: string; autoConnect: boolean }) =>
@@ -23,8 +24,11 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 const binding: SshWorkspace = { title: 'project [SSH:fixture]', alias: 'fixture', remotePath: '/remote/project', localPath: '/identities/project' }
+const fixtureHost: SshHostSummary = { alias: 'fixture', host: 'example.test', port: 22, user: 'me', auth: 'key', keyReady: true,
+  proxyJump: [], tags: [], passwordAvailable: false, passwordRemembered: false, createdAt: 1, updatedAt: 1 }
 const makeApi = () => ({
-  listHosts: vi.fn(async () => [{ alias: 'fixture', host: 'example.test', user: 'me' }]),
+  listHosts: vi.fn(async () => [fixtureHost]),
+  updateHost: vi.fn(async (_alias: string, _patch: Partial<HostPayload>) => ({ ...fixtureHost, updatedAt: 2 })),
   listWorkspaces: vi.fn(async () => [binding]),
   connectionStatus: vi.fn(async () => [{ alias: 'fixture', state: 'connected' }]),
   createWorkspace: vi.fn(async () => binding),
@@ -70,6 +74,26 @@ describe('Add workspace', () => {
     expect(connectRemoteWorkspace).toHaveBeenCalledTimes(1)
     expect(openRemoteWorkspace).not.toHaveBeenCalled()
     expect(view.pickLocal).not.toHaveBeenCalled()
+  })
+  it('edits a fallback inside the workspace flow without repeating workspace creation or closing the parent', async () => {
+    vi.useFakeTimers()
+    const api = makeApi(), view = await mount(api)
+    await act(async () => button('SSH 远程工作区').click())
+    await act(async () => button('认证 / 回退密码').click())
+    expect(document.querySelector('[role="dialog"][aria-label="添加工作区"]')?.getAttribute('aria-hidden')).toBe('true')
+    const password = [...document.querySelectorAll('input')].find(input => input.type === 'password' && input.autocomplete === 'off')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(password, 'fixture-password')
+      password.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => button('保存').click())
+    expect(api.updateHost).toHaveBeenCalledWith('fixture', expect.objectContaining({ auth: expect.objectContaining({ kind: 'key', password: 'fixture-password', rememberPassword: false }) }))
+    await act(async () => vi.advanceTimersByTimeAsync(260))
+    expect(api.browseDirectories).toHaveBeenCalledWith('fixture', '~', '')
+    expect(connectRemoteWorkspace).not.toHaveBeenCalled()
+    expect(api.createWorkspace).not.toHaveBeenCalled()
+    expect(view.onCancel).not.toHaveBeenCalled()
+    expect(button('连接并添加')).toBeTruthy()
   })
   it('can create a host directly inside the Add workspace flow', async () => {
     await mount(makeApi())

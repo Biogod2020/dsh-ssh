@@ -187,6 +187,7 @@ export function HostsTab({ api, onConnect, active = true }: HostsTabProps) {
           <div className={css.hostHeading}>
             <strong className={css.hostAlias}>{host.alias}</strong>
             <span className={css.badge} data-kind={host.auth}>{host.auth === 'key' ? tt('form.auth.key') : host.auth === 'password' ? tt('form.auth.password') : tt('form.auth.agent')}</span>
+            {host.passwordAvailable && <span className={css.badge}>{tt(host.passwordRemembered ? 'form.passwordSaved' : 'form.passwordSession')}</span>}
             {host.environment && <span className={css.badge}>{host.environment}</span>}
           </div>
           <span className={css.hostAddress}>{host.user}@{host.host}:{host.port}</span>
@@ -200,6 +201,7 @@ export function HostsTab({ api, onConnect, active = true }: HostsTabProps) {
           {test !== undefined && <span className={css.inlineTest} role="status" data-status={test.ok ? 'ok' : 'fail'}>
             {test.ok ? tt('hosts.testOk', { latency: test.latencyMs ?? 0 }) : tt('hosts.testFail', { error: test.error ?? '' })}
           </span>}
+          {test && !test.ok && /authenticat|password|ssh-agent|private key/i.test(test.error ?? '') && <span className={css.hint}>{tt('form.authenticationFailureHint')}</span>}
         </div>
           <div className={css.hostActions}>
             <button type="button" className={css.linkButton} disabled={testingAlias === host.alias} onClick={() => { void runTest(host.alias) }}>

@@ -36,6 +36,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
   const [pending, setPending] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [addingHost, setAddingHost] = useState(false)
+  const [editingHost, setEditingHost] = useState<SshHostSummary | null>(null)
   const [error, setError] = useState<unknown>(null)
   const [progress, setProgress] = useState('')
   const dialog = useRef<HTMLDivElement>(null)
@@ -47,7 +48,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
     const request = ++generation.current
     if (!open) return
     const controller = new AbortController(); lifetime.current = controller
-    setMode('choose'); setError(null); setPending(false); setConnecting(false); setAddingHost(false); setProgress(''); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false)
+    setMode('choose'); setError(null); setPending(false); setConnecting(false); setAddingHost(false); setEditingHost(null); setProgress(''); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false)
     void api.listHosts().then(value => {
       if (request !== generation.current) return
       setHosts(value); setAlias(value[0]?.alias ?? '')
@@ -57,6 +58,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
     return () => { generation.current++; controller.abort(); previous?.focus() }
   }, [api, open])
 
+  const selectedHostVersion = hosts.find(host => host.alias === alias)?.updatedAt
   useEffect(() => {
     if (open && error && !pending && document.activeElement === document.body) connectButton.current?.focus()
   }, [open, error, pending])
@@ -74,7 +76,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
       }).finally(() => { if (active) setBrowseBusy(false) })
     }, 250)
     return () => { active = false; clearTimeout(timer) }
-  }, [api, open, mode, browseOpen, alias, remotePath, selectedPath])
+  }, [api, open, mode, browseOpen, alias, remotePath, selectedPath, selectedHostVersion])
 
   if (!open) return null
 
@@ -92,10 +94,11 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
   // Native sidebars change stacking/containment when collapsed at narrow widths.
   // Keep the dialog above the whole application, including nested host forms.
   return createPortal(<>
-    <div className={css.modalBackdrop} onClick={() => { if (!locked && !addingHost) onCancel() }}>
+    <div className={css.modalBackdrop} onClick={() => { if (!locked && !addingHost && !editingHost) onCancel() }}>
       <div ref={dialog} className={css.modal} role="dialog" aria-modal="true" aria-label={tt('workspace.add')}
+        aria-hidden={addingHost || editingHost ? true : undefined}
         onClick={event => event.stopPropagation()} onKeyDown={event => {
-          if (event.key === 'Escape' && !locked && !addingHost) { event.stopPropagation(); onCancel() }
+          if (event.key === 'Escape' && !locked && !addingHost && !editingHost) { event.stopPropagation(); onCancel() }
           if (event.key === 'Tab') {
             const items = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), summary') ?? [])
             const first = items[0], last = items.at(-1)
@@ -122,6 +125,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
           </label>
           <div className={css.formRow}>
             <button type="button" className={css.linkButton} disabled={locked} onClick={() => setAddingHost(true)}>{tt('hosts.add')}</button>
+            <button type="button" className={css.linkButton} disabled={locked || !alias} onClick={() => setEditingHost(hosts.find(host => host.alias === alias) ?? null)}>{tt('workspace.editAuthentication')}</button>
             <button type="button" className={css.linkButton} disabled={locked} onClick={() => { void action(async active => {
               await api.importSshConfig()
               const value = await api.listHosts()
@@ -153,7 +157,9 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
                 onClick={() => { setSelectedPath(listing.path); setRemotePath(listing.path); setBrowseOpen(false) }}>{tt('workspace.useDirectory')}</button>}
             </div>}
             {browseBusy && <p className={css.pickerMessage} role="status">{tt('workspace.loadingDirectories')}</p>}
-            {browseError && <p className={css.formError} role="alert">{browseError}</p>}
+            {browseError && <div role="alert"><p className={css.formError}>{browseError}</p>
+              {/authenticat|password|ssh-agent|private key/i.test(browseError) && <p className={css.hint}>{tt('form.authenticationFailureHint')}</p>}
+            </div>}
             {listing && !browseBusy && <div className={css.browseList} role="group" aria-label={tt('workspace.directories')}>
               {listing.directories.map(name => <button key={name} type="button" data-directory-choice=""
                 className={css.pickerRow} disabled={locked} onClick={() => { setSelectedPath(null); setRemotePath(childPath(listing.path, name) + '/') }}>▸ &nbsp;{name}</button>)}
@@ -183,6 +189,9 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
     </div>
     {addingHost && <HostFormDialog api={api} onClose={() => setAddingHost(false)} onSaved={host => {
       setHosts(previous => [...previous.filter(item => item.alias !== host.alias), host]); setAlias(host.alias); setRemotePath('~'); setSelectedPath(null); setAddingHost(false)
+    }} />}
+    {editingHost && <HostFormDialog api={api} editing={editingHost} onClose={() => setEditingHost(null)} onSaved={host => {
+      setHosts(previous => previous.map(item => item.alias === host.alias ? host : item)); setEditingHost(null); setBrowseError(null); setError(null); setBrowseOpen(true)
     }} />}
   </>, document.body)
 }

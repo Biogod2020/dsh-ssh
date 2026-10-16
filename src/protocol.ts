@@ -24,8 +24,10 @@ export interface SshHostEntry {
     keyPath?: string
     /** Passphrase for an encrypted key. */
     passphrase?: string
-    /** Password for 'password' auth. */
+    /** Primary password, or a fallback after key / agent authentication. */
     password?: string
+    /** False keeps the password in this Host process only; omitted preserves legacy saving. */
+    rememberPassword?: boolean
     /**
      * ssh-agent endpoint for 'agent' auth. A socket path, the special value
      * 'pageant' (PuTTY Pageant on Windows), or undefined for auto-detect
@@ -63,6 +65,9 @@ export interface SshHostSummary {
   auth: SshAuthKind
   /** Whether the key path exists on the host machine (key auth only). */
   keyReady: boolean
+  /** Credential presence only; password bytes are never returned. */
+  passwordAvailable?: boolean
+  passwordRemembered?: boolean
   proxyJump: string[]
   /** Configured ProxyCommand, echoed to the browser so the form can edit it. */
   proxyCommand?: string

@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import type { Duplex } from 'node:stream'
 import { StringDecoder } from 'node:string_decoder'
-import { Client, type ClientChannel, type ConnectConfig } from 'ssh2'
+import ssh2, { Client, type AuthenticationType, type ClientChannel, type ConnectConfig } from 'ssh2'
 import type { ExecResult, SshHostEntry, TerminalTarget } from '../protocol.ts'
 import { expandHome, normalizeAgentPath, type HostStore } from '../store.ts'
 import { startProxyCommand, type ProxyTarget } from './proxy-command.ts'
@@ -91,25 +91,38 @@ export function buildConnectConfig(entry: SshHostEntry, sock: ConnectConfig['soc
   }
   installHostVerifier(config, opts.knownHostsPaths ?? DEFAULT_KNOWN_HOSTS)
   if (sock !== undefined) config.sock = sock
-  if (entry.auth.kind === 'password') {
-    config.password = entry.auth.password
-  } else if (entry.auth.kind === 'agent') {
+  if (entry.auth.password !== undefined && entry.auth.password !== '') config.password = entry.auth.password
+  if (entry.auth.kind === 'agent') {
     const agentPath = resolveAgentPath(entry.auth.agentPath)
-    if (agentPath === undefined) {
+    if (agentPath === undefined && config.password === undefined) {
       throw new Error('ssh-agent is not available: set SSH_AUTH_SOCK or configure an agent path (use \'pageant\' for PuTTY Pageant on Windows)')
     }
-    config.agent = agentPath
-  } else {
+    if (agentPath !== undefined) config.agent = agentPath
+  } else if (entry.auth.kind === 'key') {
     const keyPath = entry.auth.keyPath === undefined ? undefined : expandHome(entry.auth.keyPath)
-    if (keyPath === undefined || !existsSync(keyPath)) {
-      throw new Error('private key not found: ' + (entry.auth.keyPath ?? '(unset)'))
-    }
-    config.privateKey = readFileSync(keyPath, 'utf8')
-    if (entry.auth.passphrase !== undefined && entry.auth.passphrase !== '') {
-      config.passphrase = entry.auth.passphrase
+    try {
+      if (keyPath === undefined || !existsSync(keyPath)) throw new Error('private key not found: ' + (entry.auth.keyPath ?? '(unset)'))
+      const key = readFileSync(keyPath, 'utf8')
+      const passphrase = entry.auth.passphrase || undefined
+      const parsed = ssh2.utils.parseKey(key, passphrase)
+      if (parsed instanceof Error) throw parsed
+      if (!parsed.isPrivateKey()) throw new Error('private key file contains no private key')
+      config.privateKey = key
+      if (passphrase !== undefined) config.passphrase = passphrase
+    } catch (error) {
+      if (config.password === undefined) throw error
+      // A missing/encrypted/unreadable primary key must not prevent an
+      // explicitly configured password from being tried on this handshake.
     }
   }
+  config.authHandler = ['none', ...(config.privateKey !== undefined ? ['publickey' as const] : []),
+    ...(config.agent !== undefined ? ['agent' as const] : []), ...(config.password !== undefined ? ['password' as const] : []), 'keyboard-interactive']
   return config
+}
+
+/** Do not send a reusable account password to an OTP/passcode challenge. */
+export function isAccountPasswordPrompt(prompt: string): boolean {
+  return /password|密码|口令/i.test(prompt) && !/one[ -]?time|verification|passcode|\botp\b|token|\bcode\b|验证码|动态|一次性/i.test(prompt)
 }
 
 /** Resolve the ssh2 agent path for 'agent' auth. */
@@ -142,6 +155,28 @@ export function connectClient(config: ConnectConfig, onKeyboardInteractive?: Key
   return new Promise((resolve, reject) => {
     const client = new Client()
     let settled = false
+    let automaticPasswordUsed = false
+    const attempted: string[] = []
+    let advertised: AuthenticationType[] = []
+    let partialSuccess = false
+    const methods = Array.isArray(config.authHandler) && config.authHandler.every(method => typeof method === 'string')
+      ? config.authHandler as AuthenticationType[] : undefined
+    let nextMethod = 0
+    const authHandler: ConnectConfig['authHandler'] = methods === undefined ? config.authHandler : (remaining, partial, next) => {
+      if (remaining !== null) advertised = remaining
+      partialSuccess ||= partial === true
+      let method: AuthenticationType | undefined
+      while ((method = methods[nextMethod++]) !== undefined) {
+        // Agent is a client-side publickey provider, not a wire method.
+        const wireMethod = method === 'agent' ? 'publickey' : method
+        if (remaining === null || remaining.length === 0 || remaining.includes(wireMethod) || method === 'none') {
+          if (method !== 'none') attempted.push(method)
+          next(method)
+          return
+        }
+      }
+      return false
+    }
     let interactiveTimer: ReturnType<typeof setTimeout> | undefined
     const arm = (ms: number, message: string): void => {
       if (onKeyboardInteractive === undefined) return
@@ -162,7 +197,11 @@ export function connectClient(config: ConnectConfig, onKeyboardInteractive?: Key
         try { (sock as { destroy: () => void }).destroy() } catch { /* already closed */ }
       }
       try { client.destroy() } catch { /* already closed */ }
-      reject(hostKeyFailure(config) ?? (error instanceof Error ? error : new Error(String(error))))
+      const cause = error instanceof Error ? error : new Error(String(error))
+      const rejectedAuthentication = (cause as Error & { level?: string }).level === 'client-authentication'
+      reject(hostKeyFailure(config) ?? (rejectedAuthentication ? new Error('SSH authentication failed: '
+        + (partialSuccess ? 'the server requires another authentication factor. ' : 'the server rejected the configured credentials. ')
+        + `Tried: ${attempted.join(', ') || 'configured methods'}. Server offers: ${advertised.join(', ') || 'not reported'}.`) : cause))
     }
     client.once('ready', () => {
       if (settled) return
@@ -174,8 +213,10 @@ export function connectClient(config: ConnectConfig, onKeyboardInteractive?: Key
     client.on('keyboard-interactive', (name, instructions, instructionsLang, prompts, finish) => {
       if (settled) return
       // Use this connection's configured password, including at jump hosts.
-      if (config.password !== undefined && prompts.length > 0 && prompts.every(p => /password/i.test(p.prompt))) {
-        finish(prompts.map(() => config.password as string))
+      if (prompts.length === 0) { finish([]); return }
+      if (!automaticPasswordUsed && config.password !== undefined && prompts.length === 1 && !prompts[0]!.echo && isAccountPasswordPrompt(prompts[0]!.prompt)) {
+        automaticPasswordUsed = true
+        finish([config.password])
         return
       }
       if (onKeyboardInteractive !== undefined) {
@@ -196,14 +237,19 @@ export function connectClient(config: ConnectConfig, onKeyboardInteractive?: Key
     // once-listener is gone, which would surface as an unhandled 'error' event.
     // The settled guard turns later emissions into a no-op; other callers
     // (like doAcquire) attach their own error listeners and all fire together.
-    client.on('error', fail)
+    client.on('error', error => {
+      // ssh2 emits recoverable agent errors and then advances authHandler.
+      // Let that same handshake reach the explicitly configured fallback.
+      if (!settled && config.password !== undefined && error.level === 'agent') return
+      fail(error)
+    })
     client.once('close', () => fail(new Error('SSH connection closed before authentication completed')))
     const cancel = (): void => fail(signal?.reason ?? new Error('SSH connection cancelled'))
     signal?.addEventListener('abort', cancel, { once: true })
     try {
       signal?.throwIfAborted()
       arm(config.readyTimeout ?? 20_000, 'SSH connection timed out')
-      client.connect(onKeyboardInteractive === undefined ? config : { ...config, readyTimeout: 0 })
+      client.connect({ ...config, authHandler, ...(onKeyboardInteractive === undefined ? {} : { readyTimeout: 0 }) })
     } catch (error) {
       fail(error)
     }
