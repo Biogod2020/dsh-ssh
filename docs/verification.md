@@ -50,3 +50,8 @@
 - Release snapshot passed typecheck, all 61 suites / 582 tests, build and artifact checks. Verified prebuilt archive SHA-256: `b975f1201963d80e02e3b18881fbc05c9483ddf5fbb695ef202b59ebfe497664`. Isolated runtimes passed on DSH 0.2.0-rc.2 and 0.2.1-alpha.4.
 - Isolated browser acceptance used generated loopback SSH identities. Importing only `dev-two` saved only that candidate; opening, importing and choosing it produced zero SSH connections and zero commands. Explicit Browse produced exactly one connection and zero commands. UI screenshot and private evidence: `/Users/jay/scratch/dsh-ssh-selection-release-20261016/`.
 - Desktop rc.2 installed the verified .27 tarball through the plugin GUI and was fully quit/reopened. Other plugin dependencies and the private host store were preserved. npm .27 is staged pending the account holder's publication authentication; registry/mirror acceptance will be recorded after approval.
+
+
+### Automatic publisher bootstrap
+
+GitHub Actions preflight run `38876888021` passed all 61 suites / 582 tests, artifact checks and both DSH runtime acceptances on Ubuntu. The package owner completed the one-time GitHub trusted publisher binding for `Biogod2020/dsh-ssh`, `publish.yml`, with direct publish permission. Tagged run `38877111308` authenticated and signed npm provenance, then npm rejected .27 with E409 because a previously staged version reserves that version number. That pending stage is left unchanged. The same SSH behavior is released as .28 to validate direct OIDC publication without another maintainer approval.

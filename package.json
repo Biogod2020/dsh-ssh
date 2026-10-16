@@ -7,7 +7,7 @@
   },
   "packageManager": "pnpm@11.20.0",
   "description": "Standalone SSH operations and full remote workspaces for DSH, with strict known_hosts verification, authenticated browser access, no operation replay, and no telemetry.",
-  "version": "0.3.24-jay.27",
+  "version": "0.3.24-jay.28",
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
