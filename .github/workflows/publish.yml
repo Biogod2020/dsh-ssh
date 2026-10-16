@@ -16,8 +16,6 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -48,6 +46,8 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/dsh-alpha" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.4
           npm install --prefix "$RUNNER_TEMP/dsh-rc" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
       - name: Test, typecheck, build and pack the verified archive
+        env:
+          DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
         run: pnpm release:local "$RUNNER_TEMP/release"
       - name: Accept the exact archive in both supported DSH runtimes
         run: |
