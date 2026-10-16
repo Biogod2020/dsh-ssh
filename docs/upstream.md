@@ -4,7 +4,7 @@
 
 - 基线：上游 `v0.3.24`，commit `221d0a7a8c12d8124db9c214ec1b1bb8ad4fa5e4`。
 - 原包：`@linxin666/dsh-ssh@0.3.24`，Apache-2.0。
-- 本包：`@jay-local/dsh-ssh-ops`，保留包名以支持既有本地安装升级，不发布 npm。
+- npm 公开包：`@biogod/dsh-ssh`。历史 GitHub Release 使用 `@jay-local/dsh-ssh-ops`；迁移时先卸载旧包，再安装公开包，保留原主机与工作区数据。
 
 独立维护的主要改动包括严格 known_hosts 验证、移除已派发操作重放、官方 HTTP / WebSocket 认证、移除匿名统计、完整远端 DSH 工作区、多终端与有界显示恢复、传输队列和结果检查、集群流式执行与历史回执。
 

@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto'
 const run = promisify(execFile)
 const dsh = process.argv[2] ?? 'dsh'
 const source = process.argv[3] ?? `link:${process.cwd()}`
+const registryArgs = process.env.DSH_SMOKE_REGISTRY ? [`--registry=${process.env.DSH_SMOKE_REGISTRY}`] : []
 const version = (await run(dsh, ['--version'])).stdout.trim()
 const root = await mkdtemp(join(tmpdir(), 'dsh-compat-smoke-'))
 const home = join(root, 'home'), logPath = join(root, 'server.log')
@@ -18,7 +19,7 @@ const env = { ...process.env, HOME: home, DSH_HOME: join(home, '.dsh') }
 if (process.argv[4] === '--from-link') {
   await run(dsh, ['plugin', '--profile', 'web', 'add', `link:${process.cwd()}`], { env, timeout: 60000 })
 }
-await run(dsh, ['plugin', '--profile', 'web', 'add', source], { env, timeout: 60000 })
+await run(dsh, ['plugin', '--profile', 'web', 'add', source, ...registryArgs], { env, timeout: 60000 })
 const log = await open(logPath, 'wx', 0o600)
 const child = spawn(dsh, ['web', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
   env, stdio: ['ignore', log.fd, log.fd],

@@ -9,6 +9,6 @@
 # (exports "./client", served at /plugins/<id>/client.js) load in the web GUI.
 - insert:
     - id: ssh-ops
-      name: '@jay-local/dsh-ssh-ops'
+      name: '@biogod/dsh-ssh'
       config:
         announceToAgent: true

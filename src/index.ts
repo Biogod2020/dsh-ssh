@@ -58,7 +58,7 @@ export const SSH_GUIDANCE = '本机安装独立维护的 SSH Ops 插件（侧边
  * @param ctx - host plugin context carrying webServer/tools/systemPrompt.
  * @param config - resolved plugin config (schema defaults applied by the loader).
  */
-export const apply = mountOnce('@jay-local/dsh-ssh-ops', applyImpl)
+export const apply = mountOnce('@biogod/dsh-ssh', applyImpl)
 
 function applyImpl(ctx: Context, config?: Config): void {
   // The live source the surfaces read: the settings section once the web

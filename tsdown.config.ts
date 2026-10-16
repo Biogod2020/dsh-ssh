@@ -9,7 +9,7 @@
  */
 import { clientBundle } from './scripts/tsdown.client.ts'
 
-export default clientBundle('@jay-local/dsh-ssh-ops', ['src/index.ts', 'src/invariant.ts'], {
+export default clientBundle('@biogod/dsh-ssh', ['src/index.ts', 'src/invariant.ts'], {
   libExternal: [
     '@deepseek-ai/dsh-client-locale',
     '@deepseek-ai/dsh-client-ui-slots',

@@ -1,6 +1,10 @@
 {
-  "name": "@jay-local/dsh-ssh-ops",
-  "private": true,
+  "name": "@biogod/dsh-ssh",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org",
+    "tag": "latest"
+  },
   "packageManager": "pnpm@11.20.0",
   "description": "Standalone SSH operations and full remote workspaces for DSH, with strict known_hosts verification, authenticated browser access, no operation replay, and no telemetry.",
   "version": "0.3.24-jay.25",

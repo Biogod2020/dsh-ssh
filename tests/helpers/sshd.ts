@@ -5,7 +5,7 @@
  */
 
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
-import { appendFileSync, chmodSync, createWriteStream, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { DEFAULT_KNOWN_HOSTS } from '../../src/engine/known-hosts.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -85,13 +85,16 @@ export class TestSshd {
     ].join('\n')
     writeFileSync(join(dir, 'sshd_config'), config + '\n', 'utf8')
     const log = join(dir, 'sshd.log')
-    const logStream = createWriteStream(log)
-    const child = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', join(dir, 'sshd_config')], {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    })
+    // Give sshd its own descriptor. Ending a piped WriteStream after readiness
+    // races with later sshd diagnostics and can throw write-after-end in tests.
+    const logFd = openSync(log, 'wx', 0o600)
+    let child: ChildProcess
+    try {
+      child = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', join(dir, 'sshd_config')], {
+        stdio: ['ignore', 'ignore', logFd],
+      })
+    } finally { closeSync(logFd) }
     spawned.push(child)
-    // -e sends logs to stderr; capture them so failures are diagnosable.
-    child.stderr?.pipe(logStream)
     let spawnError: Error | undefined
     child.once('error', (error) => { spawnError = error })
     try {
@@ -100,7 +103,6 @@ export class TestSshd {
         : undefined)
     } catch (error) {
       child.kill()
-      logStream.end()
       let detail = ''
       try {
         detail = readFileSync(log, 'utf8').slice(0, 2000)
@@ -108,7 +110,6 @@ export class TestSshd {
       rmSync(dir, { recursive: true, force: true })
       throw new Error(`sshd failed to start: ${String(error)} ${detail}`)
     }
-    logStream.end()
     appendFileSync(DEFAULT_KNOWN_HOSTS[0], `[127.0.0.1]:${port} ${readFileSync(join(dir, 'etc', 'host_key.pub'), 'utf8')}\n`, { mode: 0o600 })
     return new TestSshd(port, join(dir, 'client'), root, child, dir)
   }

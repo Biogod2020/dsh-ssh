@@ -10,23 +10,25 @@
 
 当前版本：**0.3.24-jay.25**。
 
-在 DSH 左侧打开 **插件 → 添加插件 → 安装第三方插件**，填入以下完整链接并安装：
+在 DSH 左侧打开 **插件 → 添加插件**，在「包名或地址」填入：
 
 ```text
-https://github.com/Biogod2020/dsh-ssh/releases/download/v0.3.24-jay.25/jay-local-dsh-ssh-ops-0.3.24-jay.25.tgz
+@biogod/dsh-ssh@0.3.24-jay.25
 ```
 
-或在终端执行：
+选择 **npm 官方源** 或 **中国大陆镜像源**，点击 **安装 → 立即启用**。若提示需要重启，在空闲时重启 DSH，侧栏会出现 **SSH**。安装和启用以界面实际结果为准。
+
+也可以在终端执行：
 
 ```sh
-dsh plugin --profile web add https://github.com/Biogod2020/dsh-ssh/releases/download/v0.3.24-jay.25/jay-local-dsh-ssh-ops-0.3.24-jay.25.tgz
+dsh plugin --profile web add @biogod/dsh-ssh@0.3.24-jay.25
 ```
 
-安装后在空闲时重启 DSH，侧栏会出现 **SSH**。包名保留为 `@jay-local/dsh-ssh-ops`，已有本地维护版可以直接升级，无需先卸载或迁移主机配置。重启本机 DSH 会结束它持有的 SSH 运维终端；远端工作区的 DSH 服务和数据继续保留。
+**从旧版迁移：**若已安装 `@jay-local/dsh-ssh-ops`，在插件页先卸载旧包，再安装本包，避免两个包同时提供相同服务。卸载不删除主机配置和已保存的工作区记录。重启本机 DSH 会结束它持有的 SSH 运维终端；远端工作区的 DSH 服务和数据继续保留。
 
-Release 包包含构建产物和 ssh2 的必需纯 JavaScript 依赖，无需本地编译原生模块或放开构建脚本。安装仍需下载其余运行依赖。这个包不发布到 npm，不能通过 npm 包名安装。
+发布包包含构建产物和 ssh2 的必需纯 JavaScript 依赖，无需本地编译原生模块或放开构建脚本。安装仍需下载其余运行依赖。国内镜像提供 npm 包，不会镜像 GitHub 仓库或 Release。
 
-**请使用 Release 的 `.tgz` 链接。** GitHub 默认分支是源码，不包含 `lib/` 构建产物；`github:Biogod2020/dsh-ssh` 不等于预构建包。
+GitHub 默认分支保存源码，不包含 `lib/` 构建产物。历史 [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.25) 保留旧包名的预构建 `.tgz`，可作为备用安装方式。
 
 ## 兼容版本
 
@@ -81,12 +83,12 @@ pnpm verify
 dsh plugin --profile web add "link:$(pwd)"
 ```
 
-已链接客户端的构建可能触发 DSH 热更新并重置页面状态，因此日常使用推荐安装 Release 包。不要用开发中的热更新代替最终构建验收。
+已链接客户端的构建可能触发 DSH 热更新并重置页面状态，因此日常使用推荐安装 npm 发布包。不要用开发中的热更新代替最终构建验收。
 
 ## 卸载
 
 ```sh
-dsh plugin --profile web remove @jay-local/dsh-ssh-ops
+dsh plugin --profile web remove @biogod/dsh-ssh
 ```
 
 卸载会断开本机插件持有的连接和网关，不删除远端 DSH 服务、远端数据或原有会话。

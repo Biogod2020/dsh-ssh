@@ -8,5 +8,5 @@
 - Before deployment run `pnpm test`, `pnpm typecheck`, `pnpm build`, artifact checks and isolated runtime acceptance.
 - Test only in private disposable homes with generated SSH identities unless the user explicitly authorizes a real host.
 - Preserve existing working-tree changes and never put credentials or access-bearing URLs into Git or shared logs.
-- Do not publish to npm. Git pushes and GitHub releases require user authorization.
+- npm publication, Git pushes and GitHub releases require user authorization. Publish only a verified prebuilt tarball, then check official and mirror integrity and isolated DSH installation by package name.
 - Release packages include the required pure-JS SSH dependency closure. Keep archive paths inside `package/` and exclude optional native binaries.

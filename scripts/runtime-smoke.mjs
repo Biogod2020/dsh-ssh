@@ -34,11 +34,11 @@ assert.equal(unauth.status, 401)
 const crossSite = await fetch(api('hosts'), { headers: { ...headers, Origin: 'https://untrusted.invalid' } })
 assert.equal(crossSite.status, 403)
 const html = await (await fetch(login.origin, { headers })).text()
-const bundlePath = html.match(/"id":"@jay-local\/dsh-ssh-ops","url":"([^"]+)"/)?.[1]
+const bundlePath = html.match(/"id":"@biogod\/dsh-ssh","url":"([^"]+)"/)?.[1]
 assert(bundlePath, 'plugin must be present in the official browser manifest')
 const bundle = await fetch(new URL(bundlePath, login.origin), { headers })
 assert.equal(bundle.status, 200)
-assert((await bundle.text()).includes('@jay-local/dsh-ssh-ops'))
+assert((await bundle.text()).includes('@biogod/dsh-ssh'))
 for (const [wsHeaders, expected] of [[{}, 401], [{ Cookie: cookie, Origin: 'https://untrusted.invalid' }, 403]]) {
   await new Promise((resolve, reject) => {
     const ws = new WebSocket(api('terminal?alias=fixture').replace('http:', 'ws:'), { headers: wsHeaders, handshakeTimeout: 3000 })
