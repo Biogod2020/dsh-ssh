@@ -9,4 +9,5 @@
 - Test only in private disposable homes with generated SSH identities unless the user explicitly authorizes a real host.
 - Preserve existing working-tree changes and never put credentials or access-bearing URLs into Git or shared logs.
 - npm publication, Git pushes and GitHub releases require user authorization. Publish only a verified prebuilt tarball, then check official and mirror integrity and isolated DSH installation by package name.
+- For an authorized release, push a matching `v<version>` tag to run `.github/workflows/publish.yml`. Use its npm OIDC direct publisher; do not stage the package or request per-release 2FA. Report completion only after the registry, mirror and DSH installation checks pass. Initial trust setup or account changes can still require owner verification. See `docs/publishing.md`.
 - Release packages include the required pure-JS SSH dependency closure. Keep archive paths inside `package/` and exclude optional native binaries.
