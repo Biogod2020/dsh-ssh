@@ -91,3 +91,12 @@ The OIDC [release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/3
 - Remote model relay and local-Agent/remote-executor modes remain documented design options, not enabled features. Independent remote DSH processes continue after local gateway/controller shutdown subject to the remote process and network environment.
 
 The jay.32 tagged run stopped before npm publication: its additional alpha.4 test assumed the root DSH version determined the terminal protocol. A clean alpha.4 installation can resolve a newer terminal-controller dependency with the duplex attach endpoint. The integration fixture now negotiates only the read-only attachment, falling back on explicit endpoint absence, before sending exactly one terminal write. This changes test compatibility, not the generic production gateway. The failed jay.32 tag is retained; jay.33 is the next release candidate.
+
+
+### jay.33 registry and macOS installation acceptance
+
+- GitHub Actions OIDC accepted the release and signed npm provenance. npm processing delayed public visibility; the official registry and the actual mainland mirror CDN subsequently served the same tested archive: 1,177,983 bytes, SHA-256 `01f3ee02bad6682213ba2663f47cbe30b1f371c3ff0a28b9a5e454693058d030`.
+- macOS independently installed `@biogod/dsh-ssh@0.3.24-jay.33` by package name from npm into DSH 0.2.1-rc.2 and from the mirror into DSH 0.2.1-alpha.4. Both authenticated runtime, native settings and enable/disable checks passed in isolated homes. The daily Desktop configuration and sessions were not changed for publication.
+- The mirror initially cached the previous package index. The verifier now waits for the official archive before requesting synchronization and uses the mirror-supported cache refresh parameters. A delayed-publication fixture verified that synchronization never precedes official archive acceptance, and the corrected verifier checked the actual npm and `cdn.npmmirror.com` downloads. This only changes future release checks; the published runtime sources are unchanged.
+
+The [tagged release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/39607583854) completed all three jobs successfully: verify, publish and verify-installation. The exact archive and the three by-name installation acceptances passed on Ubuntu without another publication or a workflow rerun. Both registries advertise jay.33 as latest and expose the signed provenance.

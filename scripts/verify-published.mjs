@@ -14,7 +14,7 @@ const request = (url, options = {}) => fetch(url, { ...options, signal: AbortSig
 async function verify(registry) {
   // Read the canonical package document, as npm clients do. A version URL
   // requested before publication can retain a negative CDN cache entry.
-  const metadata = await request(`${registry}/${pkg.name}?verify=${Date.now()}`, { headers: { 'Cache-Control': 'no-cache' } })
+  const metadata = await request(`${registry}/${pkg.name}?t=${Date.now()}&cache=0`, { headers: { 'Cache-Control': 'no-cache' } })
   if (!metadata.ok) return false
   const published = (await metadata.json()).versions?.[pkg.version]
   if (!published) return false
@@ -32,24 +32,32 @@ async function verify(registry) {
   return { registry, version: pkg.version, bytes: actual.length, integrity: expected, downloadHost: new URL(tarball.url).hostname }
 }
 
-// Request only this package's mirror synchronization, not its dependency tree.
+// npm can accept a publish before processing exposes the version. Synchronize
+// only after its official archive is available, otherwise the mirror may cache
+// the previous release for the whole verification window.
 let sync
-try {
-  const response = await request(`${mirror}/-/package/${encodeURIComponent(pkg.name)}/syncs`, {
-    method: 'PUT', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ skipDependencies: true, syncDownloadData: false }),
-  })
-  sync = { status: response.status }
-  console.log(`Mirror sync requested: HTTP ${response.status}`)
-} catch (error) { console.log(`Mirror sync request unavailable: ${error.message}; checking published version`) }
+async function syncMirror() {
+  // Request only this package, not its dependency tree.
+  try {
+    const response = await request(`${mirror}/-/package/${encodeURIComponent(pkg.name)}/syncs`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ skipDependencies: true, syncDownloadData: false }),
+    })
+    sync = { status: response.status }
+    console.log(`Mirror sync requested: HTTP ${response.status}`)
+  } catch (error) { console.log(`Mirror sync request unavailable: ${error.message}; checking published version`) }
+}
 
 const results = new Map()
 for (let attempt = 0; attempt < 60; attempt++) {
   for (const registry of [official, mirror]) {
-    if (results.has(registry)) continue
+    if (results.has(registry) || (registry === mirror && !results.has(official))) continue
     try {
       const result = await verify(registry)
-      if (result) results.set(registry, result)
+      if (result) {
+        results.set(registry, result)
+        if (registry === official) await syncMirror()
+      }
     } catch (error) {
       if (error.code === 'ERR_ASSERTION') throw error
       console.log(`${registry}: ${error.message}; waiting for availability`)

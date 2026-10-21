@@ -31,10 +31,19 @@ npm exec --yes --package=npm@11.15.0 -- npm trust github @biogod/dsh-ssh --repo=
 官方说明：[Trusted publishing](https://docs.npmjs.com/trusted-publishers/)、[Staged publishing](https://docs.npmjs.com/staged-publishing/)。
 
 
-## 当前启用状态（2026-10-16）
+## 首次启用验收（2026-10-16）
 
 已完成账号首次绑定，并由版本标签 `v0.3.24-jay.28` 验证自动发布成功：[完整流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/38877659704)。三个任务 `verify`、`publish`、`verify-installation` 全部成功；npm 与国内镜像 CDN 的 SHA-512 一致，两个 DSH 版本按包名安装验收通过。macOS 上也从官方源及镜像完成了隔离安装。
 
 正常发版直接使用上述工作流，不再执行 `npm trust`、`npm stage publish` 或 `npm stage approve`，也不再要求维护者逐版完成 2FA。增改账号或信任关系仍遵循 npm 本身的身份验证要求。发布前更新 `package.json` 与 README 中的版本，提交后推送对应 `v<version>` 标签，并核对三个任务的最终结果；手动运行 main 分支只做验收。
 
-旧的 .27 暂存版本保留，不再复用这个版本号。正式发行是 .28，SSH 实现与本机已验收的 .27 相同；本机 Desktop 的 .27 验收包并不表示已安装 .28。
+旧的 .27 暂存版本保留，不再复用这个版本号。首次自动发行是 .28，SSH 实现与当时本机已验收的 .27 相同；本机 Desktop 的 .27 验收包并不表示已安装 .28。
+
+
+## 当前发行状态（2026-10-21）
+
+当前 npm 与国内镜像的 latest 均为 `0.3.24-jay.33`。对应 [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39607583854) 的三个任务全部通过；完整测试为 68 个文件、615 项。最终归档在 DSH `0.2.0-rc.2`、`0.2.1-alpha.4` 和 `0.2.1-rc.2` 中通过安装验收，两个源按包名安装也通过。macOS 另外完成官方源 → 0.2.1-rc.2、镜像 → alpha.4 的隔离安装。
+
+npm 可能在接受并签名后继续处理新版本，暂时不向公开索引提供该版本。镜像同步因此在官方归档可读且完整性正确后发起，元数据读取使用 `t` 与 `cache=0` 刷新参数；仍必须下载实际 CDN 文件并校验 SHA-512，不以同步成功回执替代文件核对。
+
+日常发版继续推送匹配版本标签，由已有 OIDC 权限发布；不重复绑定信任关系，不执行 stage 审批，也不重新提交已经被 npm 接收的发行。
