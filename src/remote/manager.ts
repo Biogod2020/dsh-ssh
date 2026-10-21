@@ -7,7 +7,8 @@ import { RemoteGateway } from './gateway.ts'
 import { RemoteFailureError, remoteErrorCode } from './errors.ts'
 import { RemoteActivityStore } from './activity-store.ts'
 import { remoteScript, shellQuote } from './transport.ts'
-import type { RemoteOperation, RemotePhase, RemoteReceipt, RemoteWorkspace } from './types.ts'
+import type { RemoteOperation, RemotePhase, RemoteReceipt, RemoteWorkspace, RemoteSessionCatalog } from './types.ts'
+import { RemoteSessionCache } from './session-catalog.ts'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS, compatibleRemoteVersion } from './types.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
@@ -29,6 +30,8 @@ export class RemoteWorkspaces {
   private pending = new Map<string, string>()
   private runtimes = new Map<string, Runtime>()
   private path: string
+  private sessionCache: RemoteSessionCache
+  private catalogReads = new Map<string, Promise<RemoteSessionCatalog>>()
   private journal?: RemoteActivityStore
   private journalIssue?: string
   private recoveryKey: Buffer
@@ -39,6 +42,7 @@ export class RemoteWorkspaces {
   constructor(readonly engine: SshEngine, private options: ManagerOptions) {
     const root = options.root ?? join(dshHome(), 'remote-workspaces')
     mkdirSync(root, { recursive: true, mode: 0o700 }); this.path = join(root, 'workspaces.json')
+    this.sessionCache = new RemoteSessionCache(join(root, 'session-catalog.json'))
     const keyPath = join(root, 'recovery.key')
     if (!existsSync(keyPath)) {
       try { writeFileSync(keyPath, randomBytes(32), { mode: 0o600, flag: 'wx' }) }
@@ -271,7 +275,42 @@ export class RemoteWorkspaces {
     writeFileSync(temporary, JSON.stringify(this.list()), { mode: 0o600, flag: 'wx' }); renameSync(temporary, this.path)
     return item
   }
-  async open(id: string, preferredSessionId?: string): Promise<{ url: string }> {
+  /** Metadata reads use an existing carrier only; opening the sidebar never starts SSH. */
+  async sessions(id: string): Promise<RemoteSessionCatalog> {
+    const item = this.workspaces.get(id)
+    if (!item) throw new Error('Unknown remote workspace')
+    const cached = () => this.sessionCache.get(id, item.workspaceId)
+    const runtime = this.runtimes.get(item.hostId), epoch = this.epoch
+    if (!runtime || this.disposed || !this.enabled || this.hostId(item.alias) !== item.hostId) return cached()
+    const pending = this.catalogReads.get(id)
+    if (pending) return pending
+    const read = (async () => {
+      try {
+        const [workspaces, result] = await Promise.all([runtime.gateway.workspaceSnapshot(),
+          runtime.gateway.rpc<{ items: Array<{ sessionId: string; updatedAt: number; running: boolean; blank: boolean;
+            origin?: string; projections?: { values?: { title?: unknown } } }> }>('session/list', { _request: {} })])
+        this.assertActive(epoch); this.assertOwner(item.alias, item.hostId, runtime.updatedAt)
+        const workspace = workspaces.items.find(x => x.workspaceId === item.workspaceId)
+        if (!workspace || !Array.isArray(workspace.sessionIds) || !Array.isArray(result.items)) throw new Error('Remote workspace catalog is incompatible')
+        const members = new Set(workspace.sessionIds), archived = new Set(workspaces.archivedSessionIds)
+        const sessions = result.items.filter(x => members.has(x.sessionId) && !archived.has(x.sessionId) && x.origin !== 'subagent')
+          .map(x => ({ sessionId: x.sessionId, title: typeof x.projections?.values?.title === 'string' ? x.projections.values.title.slice(0, 1024) : '',
+            running: x.running === true, blank: x.blank === true, updatedAt: Number.isFinite(x.updatedAt) ? x.updatedAt : 0 }))
+          .sort((a, b) => b.updatedAt - a.updatedAt)
+        const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt: Date.now() }
+        this.sessionCache.save(id, catalog)
+        return { ...catalog, ...(cached().warning ? { warning: cached().warning } : {}) }
+      } catch { return { ...cached(), warning: 'Remote session status could not be checked. Showing the last saved list.' } }
+    })()
+    this.catalogReads.set(id, read)
+    try { return await read } finally { if (this.catalogReads.get(id) === read) this.catalogReads.delete(id) }
+  }
+  async createSession(id: string): Promise<{ sessionId: string }> {
+    const { item, runtime, check } = await this.connectedWorkspace(id)
+    const result = await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })
+    check(); return result
+  }
+  private async connectedWorkspace(id: string) {
     const epoch = this.epoch
     this.assertActive(epoch)
     const item = this.workspaces.get(id)
@@ -281,13 +320,18 @@ export class RemoteWorkspaces {
     if (!runtime || !await runtime.gateway.healthy()) throw new Error('Remote DSH is disconnected. Connect the workspace first.')
     const check = () => { this.assertActive(epoch); this.assertOwner(item.alias, item.hostId, runtime.updatedAt) }
     check()
+    return { item, runtime, check }
+  }
+  async open(id: string, preferredSessionId?: string): Promise<{ url: string; sessionId: string }> {
+    const { item, runtime, check } = await this.connectedWorkspace(id)
     const value = await runtime.gateway.rpc<{ workspace: { sessionIds: string[] } }>('workspace/create', { request: { path: item.remotePath } })
     check()
     if (preferredSessionId !== undefined && (!preferredSessionId || preferredSessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(preferredSessionId))) throw new Error('Invalid remote session identity')
+    if (preferredSessionId && !value.workspace.sessionIds.includes(preferredSessionId)) throw new Error('Session does not belong to this remote workspace')
     let sessionId = preferredSessionId ?? value.workspace.sessionIds.at(-1)
     if (!sessionId) sessionId = (await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })).sessionId
     check()
-    return { url: runtime.gateway.launch(sessionId) }
+    return { url: runtime.gateway.launch(sessionId), sessionId }
   }
   setEnabled(enabled: boolean): void {
     if (enabled === this.enabled) return

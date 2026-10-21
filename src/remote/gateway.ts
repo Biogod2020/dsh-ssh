@@ -5,6 +5,8 @@ import type { Duplex } from 'node:stream'
 import type { RemoteReceipt } from './types.ts'
 import { remotePage } from './page.ts'
 import { RemoteFailureError } from './errors.ts'
+import { WebSocket } from 'ws'
+import { navigationClient } from './navigation-client.ts'
 
 /** One isolated browser origin per remote Host. All native and plugin HTTP/WS traffic shares it. */
 export class RemoteGateway {
@@ -86,6 +88,38 @@ export class RemoteGateway {
       await response.body?.cancel(); return response.status === 200
     } catch { return false }
   }
+  /** Read one baseline and release the observer; never activate a Session. */
+  async workspaceSnapshot(): Promise<{ items: Array<{ workspaceId: string; sessionIds: string[] }>; archivedSessionIds: string[] }> {
+    return new Promise((resolve, reject) => {
+      const streamId = randomUUID()
+      const socket = new WebSocket(`ws://127.0.0.1:${this.localPort}/api/remote.mux`, {
+        headers: { Host: new URL(this.upstreamOrigin).host, Origin: this.upstreamOrigin, Cookie: this.upstreamCookie },
+        handshakeTimeout: 5000, maxPayload: 8 * 1024 * 1024,
+      })
+      let settled = false
+      const finish = (cause?: Error, value?: Parameters<typeof resolve>[0]) => {
+        if (settled) return
+        settled = true; clearTimeout(deadline)
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ type: 'cancel', streamId })); socket.close()
+        } else socket.terminate()
+        if (cause) reject(cause); else resolve(value!)
+      }
+      const deadline = setTimeout(() => finish(new Error('Remote workspace catalog timed out')), 8000)
+      socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } })))
+      socket.on('message', bytes => {
+        try {
+          const frame = JSON.parse(bytes.toString())
+          if (frame.streamId !== streamId) return
+          if (frame.type === 'item' && frame.value?.type === 'baseline' && Array.isArray(frame.value.value?.items)
+            && Array.isArray(frame.value.value?.archivedSessionIds)) finish(undefined, frame.value.value)
+          else if (frame.type === 'error' || frame.type === 'end') finish(new Error('Remote workspace catalog is unavailable'))
+        } catch { finish(new Error('Remote workspace catalog is incompatible')) }
+      })
+      socket.once('error', () => finish(new Error('Remote workspace catalog is unavailable')))
+      socket.once('close', () => finish(new Error('Remote workspace catalog disconnected')))
+    })
+  }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (!this.origin || req.headers.host !== new URL(this.origin).host) { res.writeHead(403); res.end(); return }
     const url = new URL(req.url ?? '/', this.origin)
@@ -100,6 +134,10 @@ export class RemoteGateway {
     }
     const session = this.authenticated(req)
     if (!session) { res.writeHead(401); res.end('Reopen this remote workspace from the local DSH window.'); return }
+    if (url.pathname === '/__dsh_remote/navigation-client.js' && req.method === 'GET' && session.embedded) {
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+      res.end(`(${navigationClient.toString()})();`); return
+    }
     if (url.pathname === '/__dsh_remote/status') {
       res.writeHead(200, { 'content-type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ready: await this.healthy() })); return
     }

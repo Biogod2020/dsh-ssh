@@ -5,6 +5,7 @@ import { subscribeBodyInvalidations } from './body-mutations.ts'
 import { tt } from './panel/helpers.ts'
 import css from './panel/panel.module.css'
 import type { LocaleRefreshSource } from './sidebar-entry.ts'
+import { remoteNavigation, resolveRemoteNavigation } from './remote-navigation.ts'
 
 /** Native rows have no extension slot yet. Add only an owned, non-interactive dot. */
 export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource): () => void {
@@ -19,13 +20,17 @@ export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource):
     if (disposed) return
     const seen = new Set<HTMLElement>()
     for (const row of document.querySelectorAll<HTMLElement>('[data-pane="sidebar"] [role="treeitem"][class*="projectRow"], [class*="sidebarCol"] [role="treeitem"][class*="projectRow"]')) {
+      const key = row.getAttribute('data-row-key')
+      const remote = key?.startsWith('workspace:') ? resolveRemoteNavigation(key.slice('workspace:'.length))?.workspace : undefined
       const title = row.querySelector('[class*="projectText"] [class*="title"]')?.textContent
       const matches = workspaces.filter(item => item.title === title)
-      if (!matches.length) continue
+      if (!remote && !matches.length) continue
       const aliases = new Set(matches.map(item => item.alias))
-      const workspace = matches[0]
-      const state: ConnectionState | 'unknown' = stale || aliases.size !== 1 ? 'unknown'
-        : statuses.find(item => item.alias === workspace.alias)?.state ?? 'disconnected'
+      const workspace = remote ?? matches[0]
+      const phase = remote && remoteNavigation.getSnapshot().hosts?.get(remote.hostId)
+      const state: ConnectionState | 'unknown' = remote
+        ? stale || !phase ? 'unknown' : phase === 'ready' ? 'connected' : phase === 'failed' ? 'failed' : phase === 'disconnected' ? 'disconnected' : 'connecting'
+        : stale || aliases.size !== 1 ? 'unknown' : statuses.find(item => item.alias === workspace.alias)?.state ?? 'disconnected'
       let dot = row.querySelector<HTMLElement>('[data-dsh-ssh-status]')
       if (!dot) {
         dot = document.createElement('span')
@@ -64,13 +69,14 @@ export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource):
     if (document.visibilityState !== 'hidden') void poll()
   }
   const stopObserve = subscribeBodyInvalidations(render)
+  const stopNavigation = remoteNavigation.subscribe(render)
   const stopLocale = locale?.subscribe(render)
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('offline', onVisibility)
   window.addEventListener('online', onVisibility)
   void poll()
   return () => {
-    disposed = true; clearTimeout(timer); stopObserve(); stopLocale?.()
+    disposed = true; clearTimeout(timer); stopObserve(); stopLocale?.(); stopNavigation()
     document.removeEventListener('visibilitychange', onVisibility)
     window.removeEventListener('offline', onVisibility); window.removeEventListener('online', onVisibility)
     for (const dot of dots) dot.remove()

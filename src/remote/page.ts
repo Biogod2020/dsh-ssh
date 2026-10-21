@@ -1,3 +1,5 @@
+import { navigationManifest } from './navigation-client.ts'
+
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const jsonScript = (value: unknown) => JSON.stringify(value).replaceAll('<', '\\u003c')
 
@@ -128,5 +130,37 @@ export function remotePage(html: string, options: { alias: string; returnUrl: st
     @media(max-width:640px){#dsh-remote-host{padding:0 10px;gap:0 10px;font-size:11px}#dsh-remote-back-full{display:none}#dsh-remote-back-compact{display:inline}#dsh-remote-help{grid-column:1/-1;margin-bottom:6px}#dsh-remote-recover{grid-column:1/-1;justify-self:start}}
   </style>
   <script>(${connectionLamp.toString()})(${jsonScript({ returnUrl: options.returnUrl, hostId: options.hostId, proof: options.recoveryProof })});</script>`
-  return html.replace(/<head([^>]*)>/i, `<head$1>${init}`).replace(/<body([^>]*)>/i, `<body$1>${bar}`)
+  const docked = options.embedded ? `<style>
+    html,body{background:var(--dsw-alias-bg-base,#141414)!important}
+    body{padding-top:0!important;--dsh-remote-bar-height:0px!important}
+    #root{height:100dvh!important}
+    [class*="sidebarCol"]{visibility:hidden!important;pointer-events:none!important}
+    [style*="grid-template-columns"]:has(>[class*="sidebarCol"]){grid-template-columns:var(--dsh-remote-columns,0px minmax(0,1fr) 0px)!important}
+    #dsh-remote-host{display:none!important}
+    #dsh-remote-back,#dsh-remote-recover{display:none!important}
+  </style><script>(${embeddedWorkspace.toString()})();</script>` : ''
+  return html.replace(/<head([^>]*)>/i, `<head$1>${init}`)
+    .replace(/<\/head>/i, `${options.embedded ? `<script>(${navigationManifest.toString()})();</script>` : ''}</head>`)
+    .replace(/<body([^>]*)>/i, `<body$1>${bar}${docked}`)
+}
+
+/** Keep one outer project sidebar; this guest retains its own Host context. */
+function embeddedWorkspace(): void {
+  let frame: number | undefined
+  const sync = () => {
+    frame = undefined
+    for (const sidebar of document.querySelectorAll<HTMLElement>('[class*="sidebarCol"]')) {
+      sidebar.inert = true
+      const shell = sidebar.parentElement
+      const columns = shell?.style.gridTemplateColumns
+      if (!shell || !columns) continue
+      const rest = columns.replace(/^\S+\s+/, '')
+      const value = `0px ${rest}`
+      if (shell.style.getPropertyValue('--dsh-remote-columns') !== value) shell.style.setProperty('--dsh-remote-columns', value)
+    }
+  }
+  const observer = new MutationObserver(() => { if (frame === undefined) frame = requestAnimationFrame(sync) })
+  observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] })
+  window.addEventListener('pagehide', () => { observer.disconnect(); if (frame !== undefined) cancelAnimationFrame(frame) }, { once: true })
+  sync()
 }

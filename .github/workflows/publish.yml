@@ -45,17 +45,23 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
           npm install --prefix "$RUNNER_TEMP/dsh-alpha" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.4
           npm install --prefix "$RUNNER_TEMP/dsh-rc" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+          npm install --prefix "$RUNNER_TEMP/dsh-rc21" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.2
       - name: Test, typecheck, build and pack the verified archive
         env:
-          DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
+          DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc21/node_modules/.bin/dsh
         run: pnpm release:local "$RUNNER_TEMP/release"
-      - name: Accept the exact archive in both supported DSH runtimes
+      - name: Accept the exact archive in all three reviewed DSH runtimes
         run: |
           shopt -s nullglob
           archives=("$RUNNER_TEMP/release/"*.tgz)
           test "${#archives[@]}" -eq 1
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-alpha/node_modules/.bin/dsh" "${archives[0]}"
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc/node_modules/.bin/dsh" "${archives[0]}"
+          node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
+      - name: Verify the retained alpha.4 remote runtime
+        env:
+          DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
+        run: pnpm exec vitest run tests/remote-runtime.test.ts
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: verified-npm-package
@@ -123,11 +129,13 @@ jobs:
           pnpm install --frozen-lockfile --ignore-scripts
           npm install --prefix "$RUNNER_TEMP/dsh-alpha" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-alpha.4
           npm install --prefix "$RUNNER_TEMP/dsh-rc" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.0-rc.2
+          npm install --prefix "$RUNNER_TEMP/dsh-rc21" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.2
       - name: Accept installation by package name from npm and mainland mirror
         run: |
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json","utf8")).version')
           DSH_SMOKE_REGISTRY=https://registry.npmjs.org node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-alpha/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
           DSH_SMOKE_REGISTRY=https://registry.npmmirror.com node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
+          DSH_SMOKE_REGISTRY=https://registry.npmmirror.com node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:

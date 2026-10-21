@@ -19,6 +19,14 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
         const operation = manager.operation(url.searchParams.get('id') ?? '')
         writeJson(res, operation ? 200 : 404, operation ? { operation } : { error: 'Unknown connection operation' }); return
       }
+      if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/sessions') {
+        writeJson(res, 200, await manager.sessions(url.searchParams.get('id') ?? '')); return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/session/create') {
+        const body = await readJsonBody(req) as { id?: unknown }
+        if (typeof body?.id !== 'string') throw new Error('workspace id is required')
+        writeJson(res, 200, await manager.createSession(body.id)); return
+      }
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/connect') {
         const body = await readJsonBody(req) as { alias?: unknown; remotePath?: unknown; expectedHostId?: unknown }
         if (typeof body?.alias !== 'string' || typeof body.remotePath !== 'string') throw new Error('alias and remotePath are required')

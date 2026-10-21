@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
 import { mountRemoteWorkspaces } from '../src/client/remote-workspaces.ts'
+import { registerRemotePresentation } from '../src/client/remote-presentation.ts'
 
 afterEach(() => {
   vi.unstubAllGlobals(); vi.useRealTimers(); document.body.replaceChildren()
@@ -41,6 +42,24 @@ const workspace = { id: 'workspace-1', hostId: 'a'.repeat(24), alias: 'fixture',
 const response = (value: object) => ({ ok: true, json: async () => value })
 const sidebar = () => { document.documentElement.lang = 'en'; document.body.innerHTML = '<aside data-pane="sidebar"><div role="tree"></div></aside>' }
 
+it('switches an already connected remote conversation without setup or a leftover connecting notice', async () => {
+  vi.useFakeTimers(); sidebar()
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => String(input).includes('/sessions?')
+    ? response({ workspaceId: workspace.workspaceId, stale: false, sessions: [{ sessionId: 'original', title: 'Original remote conversation', running: false, blank: false, updatedAt: 1 }] })
+    : response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'ready' }] }))
+  vi.stubGlobal('fetch', fetchMock)
+  const resume = vi.fn(() => true), unregister = registerRemotePresentation({ resume, open: vi.fn() })
+  const dispose = mountRemoteWorkspaces()
+  try {
+    await vi.advanceTimersByTimeAsync(0)
+    document.querySelector<HTMLButtonElement>('[data-remote-session-id="original"]')!.click()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(resume).toHaveBeenCalledExactlyOnceWith(workspace, 'original')
+    expect(fetchMock.mock.calls.every(([url]) => !String(url).endsWith('/connect') && !String(url).endsWith('/open'))).toBe(true)
+    expect(document.querySelector('[data-dsh-remote-workspaces] [aria-live="polite"]')?.textContent).not.toContain('Connecting')
+  } finally { dispose(); unregister() }
+})
+
 it('retains row identity and focus across health changes; failed reads become unknown rather than disconnected', async () => {
   vi.useFakeTimers(); sidebar()
   let phase = 'ready', failed = false
@@ -67,21 +86,23 @@ it('retains row identity and focus across health changes; failed reads become un
 it('invalidates an in-flight health read on offline and refreshes immediately on online', async () => {
   vi.useFakeTimers(); sidebar()
   let release!: (value: object) => void
-  const fetchMock = vi.fn().mockResolvedValueOnce(response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'ready' }] }))
+  const health = vi.fn().mockResolvedValueOnce(response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'ready' }] }))
     .mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
     .mockResolvedValue(response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'disconnected' }] }))
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).includes('/sessions?')
+    ? Promise.resolve(response({ workspaceId: workspace.workspaceId, sessions: [], stale: true })) : health(input, init))
   vi.stubGlobal('fetch', fetchMock)
   const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(5000)
   window.dispatchEvent(new Event('offline'))
   expect(document.querySelector('[data-remote-workspace-id]')?.textContent).toContain('Browser offline')
-  const signal = fetchMock.mock.calls[1]![1].signal as AbortSignal
+  const signal = health.mock.calls[1]![1].signal as AbortSignal
   expect(signal.aborted).toBe(true)
   release(response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'ready' }] }))
   await vi.advanceTimersByTimeAsync(15000)
-  expect(fetchMock).toHaveBeenCalledTimes(2)
+  expect(health).toHaveBeenCalledTimes(2)
   expect(document.querySelector('[data-remote-workspace-id]')?.textContent).toContain('Browser offline')
   window.dispatchEvent(new Event('online')); await vi.advanceTimersByTimeAsync(0)
-  expect(fetchMock).toHaveBeenCalledTimes(3)
+  expect(health).toHaveBeenCalledTimes(3)
   expect(document.querySelector('[data-remote-workspace-id]')?.textContent).toContain('DSH disconnected')
   dispose()
 })

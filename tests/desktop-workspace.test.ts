@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mountDesktopWorkspaces } from '../src/client/desktop-workspace.ts'
 import { openRemoteWorkspace } from '../src/client/remote-workspaces.ts'
 import type { RemoteWorkspace } from '../src/remote/types.ts'
+import { remotePresentation } from '../src/client/remote-presentation.ts'
 
 const workspace: RemoteWorkspace = { id: 'fixture', hostId: 'a'.repeat(24), alias: 'fixture', remotePath: '/work', title: 'work', workspaceId: 'remote-work' }
 let dispose: (() => void) | undefined
@@ -10,12 +11,12 @@ afterEach(() => { dispose?.(); dispose = undefined; vi.restoreAllMocks(); vi.uns
 function fixture() {
   document.documentElement.lang = 'en'
   const local = document.createElement('button'); local.textContent = 'Local draft'; document.body.append(local); local.focus()
-  const guests: Array<HTMLElement & { loadURL: ReturnType<typeof vi.fn>; insertCSS: ReturnType<typeof vi.fn> }> = []
+  const guests: Array<HTMLElement & { loadURL: ReturnType<typeof vi.fn>; insertCSS: ReturnType<typeof vi.fn>; executeJavaScript: ReturnType<typeof vi.fn> }> = []
   const create = document.createElement.bind(document)
   vi.spyOn(document, 'createElement').mockImplementation((name: string, options?: ElementCreationOptions) => {
     const node = create(name, options)
     if (name === 'webview') {
-      const guest = Object.assign(node, { loadURL: vi.fn(async (_url: string) => {}), insertCSS: vi.fn(async () => '') })
+      const guest = Object.assign(node, { loadURL: vi.fn(async (_url: string) => {}), insertCSS: vi.fn(async () => ''), executeJavaScript: vi.fn(async () => true) })
       guests.push(guest)
     }
     return node
@@ -27,11 +28,11 @@ function fixture() {
     onOpenRequested: vi.fn((lease: string, fn: (url: string) => void) => { links.set(lease, fn); return () => links.delete(lease) }),
   }
   vi.stubGlobal('dshDesktop', { browser: bridge })
-  const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ url: 'http://127.0.0.1:40200/?dsh-remote-ticket=private-fixture-ticket' }) }))
+  const fetch = vi.fn(async (_input?: unknown, options?: RequestInit) => ({ ok: true, json: async () => ({ url: 'http://127.0.0.1:40200/?dsh-remote-ticket=private-fixture-ticket', sessionId: JSON.parse(options?.body as string).sessionId ?? 'first' }) }))
   vi.stubGlobal('fetch', fetch)
   dispose = mountDesktopWorkspaces()
-  const start = async (value = workspace, signal?: AbortSignal) => {
-    const promise = openRemoteWorkspace(value, undefined, { signal })
+  const start = async (value = workspace, signal?: AbortSignal, sessionId?: string) => {
+    const promise = openRemoteWorkspace(value, sessionId, { signal })
     // Resolve the local API and reservation; the guest must attach on blank.
     for (let i = 0; i < 8; i++) await Promise.resolve()
     return { promise, guest: guests.at(-1)! }
@@ -46,7 +47,7 @@ it('uses an isolated Desktop guest without leaving the app, and returning/reopen
   expect(guest.getAttribute('partition')).toBe('partition-0')
   expect(guest.hasAttribute('preload')).toBe(false)
   expect(guest.hasAttribute('allowpopups')).toBe(false)
-  expect(f.bridge.acquire).toHaveBeenCalledWith(`dsh-ssh:${workspace.hostId}:fixture`)
+  expect(f.bridge.acquire).toHaveBeenCalledWith(`dsh-ssh:${workspace.hostId}`)
   expect(guest.loadURL).not.toHaveBeenCalled()
   guest.dispatchEvent(new Event('dom-ready')); await promise
   expect(guest.loadURL).toHaveBeenCalledOnce()
@@ -65,7 +66,7 @@ it('uses an isolated Desktop guest without leaving the app, and returning/reopen
   expect(f.local.inert).not.toBe(true)
 })
 
-it('keeps different workspaces separate and blocks silent session/host retargeting', async () => {
+it('isolates Hosts and selects another Session through native navigation without replacing the client document', async () => {
   const f = fixture(), first = await f.start()
   first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
   const second = await f.start({ ...workspace, id: 'second', hostId: 'b'.repeat(24), alias: 'second' })
@@ -74,7 +75,11 @@ it('keeps different workspaces separate and blocks silent session/host retargeti
   await openRemoteWorkspace(workspace)
   expect(first.guest.hidden).toBe(false); expect(second.guest.hidden).toBe(true)
   await expect(openRemoteWorkspace({ ...workspace, hostId: 'c'.repeat(24) })).rejects.toThrow('identity changed')
-  await expect(openRemoteWorkspace(workspace, 'different-session')).rejects.toThrow('already open')
+  const session = await f.start(workspace, undefined, 'different-session')
+  await session.promise
+  await openRemoteWorkspace(workspace, 'different-session')
+  expect(first.guest.hidden).toBe(false); expect(second.guest.hidden).toBe(true)
+  expect(first.guest.executeJavaScript).toHaveBeenCalledWith('window.__dshSshView.open("different-session")')
   expect(f.guests).toHaveLength(2)
   expect(f.guests.every(guest => guest.loadURL.mock.calls.length === 1)).toBe(true)
 })
@@ -92,14 +97,14 @@ it('cancels a pending view without leaking its lease, replaying setup, or disclo
 
 it('does not accept arbitrary launch origins or open guest links in the system browser', async () => {
   const f = fixture()
-  f.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ url: 'https://untrusted.test/?dsh-remote-ticket=ticket' }) })
+  f.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ url: 'https://untrusted.test/?dsh-remote-ticket=ticket', sessionId: 'first' }) })
   await expect(openRemoteWorkspace(workspace)).rejects.toThrow('Invalid remote workspace gateway')
   expect(f.bridge.acquire).not.toHaveBeenCalled()
   const view = await f.start(); view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
   const request = f.links.get('lease-0')!
   request('https://untrusted.test/'); request('http://127.0.0.1:3080/'); request('javascript:alert(1)')
   expect(view.guest.loadURL).toHaveBeenCalledOnce()
-  request('http://127.0.0.1:40200/help'); expect(view.guest.loadURL).toHaveBeenCalledTimes(2)
+  request('http://127.0.0.1:40200/help'); expect(view.guest.loadURL).toHaveBeenCalledOnce()
 })
 
 it('reports a failed guest load without echoing credential-bearing URLs and releases the guest', async () => {
@@ -114,4 +119,15 @@ it('reports a failed guest load without echoing credential-bearing URLs and rele
 
 it('leaves web deployments on their existing presentation when no Desktop guest API is available', () => {
   expect(mountDesktopWorkspaces()).toBeUndefined()
+})
+
+it('requires draft-loss confirmation before releasing a Host view without any remote operation', async () => {
+  const f = fixture(), view = await f.start()
+  view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
+  const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  remotePresentation()!.close!(workspace)
+  expect(view.guest.isConnected).toBe(true); expect(f.bridge.release).not.toHaveBeenCalled()
+  confirmation.mockReturnValue(true); remotePresentation()!.close!(workspace)
+  expect(view.guest.isConnected).toBe(false); expect(f.bridge.release).toHaveBeenCalledExactlyOnceWith('lease-0')
+  expect(f.fetch).toHaveBeenCalledOnce()
 })

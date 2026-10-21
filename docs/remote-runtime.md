@@ -2,9 +2,9 @@
 
 ## Ownership and reference
 
-The local DSH owns SSH host configuration, the workspace catalog, setup operations and authenticated browser gateways. Each remote account owns a complete DSH process, its plugin runtime, filesystem, terminals, sessions and model configuration. The browser loads the remote service's own frontend and plugin manifest through a separate local origin; changing hosts reloads that host's client composition. No SDK mutation or DSH monorepo patch is required.
+The local DSH owns SSH host configuration, the workspace catalog, setup operations and authenticated browser gateways. Each remote account owns a complete DSH process, its plugin runtime, filesystem, terminals, sessions and model configuration. The browser loads each remote service's own frontend and plugin manifest through a separate local origin. Desktop retains a client composition per Host while switching projects and sessions. No SDK mutation or DSH monorepo patch is required.
 
-The architecture reference is upstream `openai/codex`, commit `4b1c0c30dabd08fed7d6523844f9156d982eb297`. Inspected modules:
+The architectural reference is upstream `openai/codex`, commit `4b1c0c30dabd08fed7d6523844f9156d982eb297`. Inspected modules:
 
 - [app-server-client README](https://github.com/openai/codex/blob/4b1c0c30dabd08fed7d6523844f9156d982eb297/codex-rs/app-server-client/README.md): shared client lifecycle and transport semantics.
 - [remote client transport](https://github.com/openai/codex/blob/4b1c0c30dabd08fed7d6523844f9156d982eb297/codex-rs/app-server-client/src/remote.rs): initialization identity, authenticated transport, request/response and event ownership.
@@ -22,7 +22,7 @@ These informed the process/transport boundary. This implementation speaks DSH's 
 6. Establish an SSH port forward and authenticate DSH through that HTTP authority. Create the workspace through `workspace/create`, persist its Host + canonical path identity locally, and open/create its remote session.
 7. Exchange a short-lived, single-use local launch ticket for an HttpOnly gateway cookie, redirect to a clean URL, and load the complete remote frontend. The upstream DSH token/cookie never reaches browser HTML or the workspace catalog.
 
-Node pins were checked against official release checksums on 2026-09-25. The reviewed DSH pin is `0.2.1-alpha.4` (official npm metadata checked 2026-10-15); its version, integrity and exact compatible releases live in `src/remote/types.ts` and are passed explicitly to the installer/bootstrap. The installer reports the actual chosen version and reuses tested `0.1.6-alpha.2` / `0.1.7-alpha.1` / `0.2.0-rc.2` installations. A compatible live daemon is not restarted to follow the new pin. Node platform prerequisites follow the [Node 22 to 24 migration documentation](https://nodejs.org/en/blog/migrations/v22-to-v24).
+Node pins were checked against official release checksums on 2026-09-25. The reviewed DSH pin is `0.2.1-alpha.4` (official npm metadata checked 2026-10-15); its version, integrity and exact compatible releases live in `src/remote/types.ts` and are passed explicitly to the installer/bootstrap. The installer reports the actual chosen version and reuses tested `0.1.6-alpha.2` / `0.1.7-alpha.1` / `0.2.0-rc.2` / `0.2.1-rc.2` installations. A compatible live daemon is not restarted to follow the new pin. Node platform prerequisites follow the [Node 22 to 24 migration documentation](https://nodejs.org/en/blog/migrations/v22-to-v24).
 
 ## Runtime and reconnect
 
@@ -48,7 +48,7 @@ After a local DSH restart, an old gateway port and its browser cookie cannot be 
 - Old local workspace conversations remain locally readable. Their tools are blocked; their remote paths appear in the new catalog for explicit connection. History and model credentials are not imported.
 - The initial remote profile is independent. Configure a model and install remote plugins through its native UI. A local-only model endpoint requires a separately configured route reachable from the remote host.
 - Plugin backends using `node:fs` now run beside their files. Plugins using desktop-native dialogs, platform-specific renderers or special browser cookie/auth flows may still need adaptation. Runtime installation does not promise arbitrary plugin compatibility.
-- Host switching uses complete client compositions, with a return/switch link. This is not a cross-host merged session archive or simultaneous multi-host client context.
+- Desktop presents local and remote projects/conversations in the same outer sidebar. A native keyed main panel seats retained isolated guests without detaching their DOM; each remote conversation keeps its Host's complete client composition. This unifies navigation, while archives, credentials and client contexts remain on their original Hosts.
 - Install and startup locks fail closed on an unverified/interrupted owner. No automatic lock deletion, sudo, shell-profile edits, global upgrades, or unrelated-service restarts are performed.
 
 ## Verification
@@ -68,10 +68,20 @@ node --experimental-transform-types scripts/agent-tools-smoke.ts /printed/dsh-re
 The runtime test uses the supplied CLI instead of downloading a release during every test run. Installer unit tests retain version/integrity rejection coverage; cold installation is separately exercised by the browser fixture. Tool smoke runs the six actual tool implementations through a real SSH engine without calling a model. It validates the fixture root/HOME boundary before writing, and keeps logs/results private. See [verification.md](verification.md) for observed results and incomplete browser-save coverage.
 
 
-## Desktop presentation (jay.29)
+## Historical full-view presentation (jay.29)
 
 Desktop launches use the shipped `dshDesktop.browser` guest interface. A workspace-scoped lease and isolated storage partition are acquired before attaching a `webview` at `about:blank#<lease>`. Only after the Desktop shell authenticates that guest does the plugin load the loopback gateway's single-use ticket. The gateway, HttpOnly/SameSite cookie and every SSH host-key check are unchanged; the guest has no Node, preload or local Host bridge. The main window stays on `dsh-app://app/` and does not navigate out to the system browser.
 
 A parent toolbar returns to local UI without detaching the remote client. Reopening the same Host/workspace keeps that client and its unsent draft instead of reloading it. Up to eight views are retained. Explicitly closing a view confirms draft loss, releases only its guest lease, and leaves the remote service running. Host or explicitly selected-session changes cannot silently retarget an already-open view. Aborting a pending view releases its lease; cancelling the completed workspace observer does not close an opened view. Failed loads never print ticket-bearing URLs or retry submitted remote work.
+
+## Native Desktop navigation (jay.32)
+
+The public `sidebar.workspaces` entry is projected with its original component, native viewing store and child slots. Host-scoped remote navigation metadata joins the local Workspace and Session snapshots only inside that view; synthetic navigation IDs are never registered with the local Controllers. Remote open/create actions route to their recorded Host, local actions retain their original callbacks, and remote rows never invoke local pin/archive/fork actions. Legacy local SSH conversations remain readable under a Local history label. The native New Session controls follow the visible remote Workspace. Host status dots distinguish connected, disconnected and unknown state.
+
+Each Host retains one isolated guest and one native remote Client composition. Backend opening validates Workspace membership; switching calls the remote public `uiWorkspace.openSession` service without replacing the document or discarding per-Session drafts. The authenticated gateway contributes an ordinary page-local navigation plugin before boot. A Cordis root injection owns it for the page lifetime, separately from server-manifest entries, so the first Host manifest cannot remove it. No installed remote files, global transports or SDK services are rewritten.
+
+The native main seat measures only the content rectangle; local Files/Terminal panes are covered and inert while remote content is visible. Switching to a local conversation or another local panel hides the retained guest. The embedded remote sidebar, Host bar and its height reservation are absent; a small parent loading surface covers the first load until the remote Client is ready. Hidden WebContents must not be used to gate boot because their animation frames may be suspended. Up to eight Host views can remain loaded; explicit closure from a remote conversation menu confirms draft loss and releases only that Host view. Legacy Desktop shells retain their full-window presentation.
+
+The local controller reads `workspace/follow`'s first baseline and `session/list` over an existing authenticated carrier; these reads do not activate Agents, create Workspaces, dispatch commands, or reconnect SSH. It filters by the recorded remote Workspace membership and archive set. A private atomic `session-catalog.json` stores only navigation metadata for disconnected display. Stale lists never claim a running state. An unsafe or corrupt cache is preserved and reported. Explicit session creation uses `session/create` once; opening a selected session verifies its Workspace membership. No uncertain creation or operation is automatically retried.
 
 The desktop's standard guest policy blocks page downloads and native privileges. Local SSH transfer tools remain available after returning to local. This presentation does not merge local model settings or local/remote session archives. Browser deployments retain top-level in-tab navigation; a Desktop shell without the guest API reports an update requirement instead of automatically opening a browser.

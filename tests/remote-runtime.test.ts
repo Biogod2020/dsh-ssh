@@ -117,6 +117,13 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
     const body = await response.json(); expect(body.result.ok, body.result.error?.message).toBe(true); return body.result.value
   }
   const { sessionId } = await rpc('session/create', { request: { workspaceId: first.workspaceId } })
+  await rpc('session/rename', { request: { sessionId, title: 'Unified sidebar fixture' } })
+  const catalog = await manager.sessions(first.id)
+  expect(catalog.stale).toBe(false)
+  expect(catalog.sessions).toContainEqual(expect.objectContaining({ sessionId, title: 'Unified sidebar fixture' }))
+  const added = await manager.createSession(first.id)
+  expect(added.sessionId).not.toBe(sessionId)
+  expect((await manager.sessions(first.id)).sessions.some(x => x.sessionId === added.sessionId)).toBe(true)
   const terminal = await rpc('terminal/create', { agentId: sessionId, request: { id: 'remote-smoke-terminal', cols: 80, rows: 24 } })
   expect(terminal.cwd).toBe(project)
   expect(terminal.state).toBe('running')
@@ -137,7 +144,29 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect((await fetch(login.origin, { headers: { Cookie: cookie } })).status).toBe(200)
   expect(readFileSync(join(project, 'plugin.txt'), 'utf8')).toBe('remote-plugin-write')
   expect(JSON.parse(readFileSync(join(remoteRoot, 'state/server.json'), 'utf8')).pid).toBe(receipt.pid)
+  const attachmentId = randomUUID(), terminalId = 'remote-smoke-terminal', duplex = receipt.version === '0.2.1-rc.2'
+  const terminalStream = new WebSocket(login.origin.replace('http:', 'ws:') + '/api/remote.mux', { headers: authHeaders, handshakeTimeout: 5000 })
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Terminal attachment did not open')), 8000)
+    terminalStream.once('error', reject)
+    terminalStream.once('open', () => terminalStream.send(JSON.stringify({ type: 'open', streamId: 'terminal-continuity', endpoint: duplex ? 'terminal/attach' : 'terminal/follow',
+      payload: { args: { agentId: sessionId, id: terminalId, ...(duplex ? {} : { attachmentId }) } } })))
+    terminalStream.once('message', bytes => {
+      clearTimeout(timer)
+      try { const frame = JSON.parse(bytes.toString()); if (frame.type === 'error') throw new Error(frame.error?.message ?? 'Terminal attachment failed'); expect(frame.value?.type).toBe('snapshot'); resolve() } catch (error) { reject(error) }
+    })
+  })
+  const started = join(project, 'detached-started.txt'), completed = join(project, 'detached-completed.txt')
+  const data = `printf started > ${shellQuote(started)}; sleep 1; printf completed > ${shellQuote(completed)}\n`
+  if (duplex) terminalStream.send(JSON.stringify({ type: 'item', streamId: 'terminal-continuity', value: { type: 'write', sequence: 1, data } }))
+  else await rpc('terminal/write', { agentId: sessionId, id: terminalId, attachmentId, data })
+  for (let n = 0; n < 80 && !existsSync(started); n++) await new Promise(resolve => setTimeout(resolve, 25))
+  expect(existsSync(started)).toBe(true); expect(existsSync(completed)).toBe(false)
   manager.setEnabled(false)
+  engine.dropAlias('fixture')
+  for (let n = 0; n < 160 && !existsSync(completed); n++) await new Promise(resolve => setTimeout(resolve, 25))
+  expect(readFileSync(completed, 'utf8')).toBe('completed')
+  terminalStream.close()
   expect(engine.listTunnels()).toHaveLength(0)
   expect(() => manager.connect('fixture', project)).toThrow('stopped')
   await expect(manager.open(first.id)).rejects.toThrow('stopped')
@@ -146,6 +175,9 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect((await connected()).id).toBe(first.id)
   const recoveryProof = manager.recoveryProof(first.hostId)
   manager.dispose()
+  const disconnectedCatalog = await manager.sessions(first.id)
+  expect(disconnectedCatalog.stale).toBe(true)
+  expect(disconnectedCatalog.sessions.some(x => x.sessionId === sessionId)).toBe(true)
   expect(() => process.kill(receipt.pid, 0)).not.toThrow()
   manager = new RemoteWorkspaces(engine, options)
   expect(manager.list()).toEqual([first])

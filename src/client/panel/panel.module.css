@@ -731,8 +731,41 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 .importCandidate:focus-within { border-color: var(--dsw-alias-state-business-primary); }
 .importIdentity { display: flex; flex-direction: column; gap: 3px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
 
+.hostPickerResults { border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; overflow: hidden; }
+.hostPickerList { max-height: min(260px, 32vh); overflow-y: auto; overscroll-behavior: contain; }
+.hostPickerHeading { padding: 6px 10px 3px; color: var(--dsw-alias-label-secondary); font-size: 11.5px; }
+.hostPickerOption, .hostPickerSelection { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 9px 10px; }
+.hostPickerOption { width: 100%; border: 0; text-align: left; background: transparent; color: var(--dsw-alias-label-primary); cursor: pointer; font: inherit; }
+.hostPickerOption:hover:not(:disabled), .hostPickerActive { background: var(--dsw-alias-interactive-bg-hover); }
+.hostPickerOption:disabled { opacity: .55; cursor: default; }
+.hostPickerSelection { border: 1px solid var(--dsw-alias-border-l2); border-radius: 8px; }
+.hostPickerSelection button { flex-shrink: 0; }
+.hostPickerIdentity { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.hostPickerIdentity strong { font-weight: 600; }
+.hostPickerAddress { color: var(--dsw-alias-label-secondary); font-size: 11.5px; }
+.hostPickerTag { flex-shrink: 0; max-width: 35%; overflow-wrap: anywhere; color: var(--dsw-alias-label-secondary); font-size: 11.5px; }
+.hostPickerCount { margin: 0; padding: 7px 10px; border-top: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); font-size: 11.5px; }
+
 .desktopWorkspace { position: fixed; inset: 0; z-index: 1000; display: flex; flex-direction: column; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
 .desktopWorkspace[hidden] { display: none; }
+.desktopWorkspace[data-docked="true"] { inset: auto; z-index: 20; }
+.desktopWorkspace[data-docked="true"] .desktopWorkspaceToolbar { display: none; }
+.desktopWorkspaceLoading { position: absolute; inset: 0; z-index: 2; background: var(--dsw-alias-bg-base, #141414); display: grid; place-content: center; gap: 12px; padding: 24px; color: var(--dsw-alias-label-secondary); font-size: 13px; text-align: center; }
+.desktopWorkspaceLoading[hidden] { display: none; }
+.desktopWorkspaceLoading::before { content: ''; width: 18px; height: 18px; margin: auto; border: 2px solid var(--dsw-alias-border-l2); border-top-color: var(--dsw-alias-label-secondary); border-radius: 50%; animation: sshLoading .8s linear infinite; }
+@keyframes sshLoading { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .desktopWorkspaceLoading::before { animation: none; } }
+.remoteProject { min-width: 0; border-radius: 7px; }
+.remoteProject[data-active="true"] > .remoteWorkspaceRow { background: var(--dsw-alias-interactive-bg-hover); }
+.remoteSessionTree { min-width: 0; padding: 0 4px 6px 17px; }
+.remoteSessionToggle, .remoteSessionNew, .remoteSessionRow { display: block; width: 100%; min-width: 0; border: 0; border-radius: 5px; background: transparent; color: inherit; text-align: left; font: inherit; font-size: 12px; padding: 6px 8px; cursor: pointer; }
+.remoteSessionToggle, .remoteSessionNew { color: var(--dsw-alias-label-secondary); }
+.remoteSessionList { border-left: 1px solid var(--dsw-alias-border-l2); margin-left: 5px; padding-left: 4px; }
+.remoteSessionRow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remoteSessionRow:hover, .remoteSessionToggle:hover, .remoteSessionNew:hover, .remoteSessionRow[aria-current="page"] { background: var(--dsw-alias-interactive-bg-hover); }
+.remoteSessionRow[aria-current="page"] { color: var(--dsw-alias-state-business-primary); }
+.remoteSessionRow[data-running="true"]::before { content: '●'; margin-right: 5px; color: var(--dsw-alias-state-success-primary); }
+.remoteSessionHint { margin: 3px 8px; font-size: 11px; line-height: 1.5; color: var(--dsw-alias-label-secondary); }
 .desktopWorkspaceToolbar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; min-height: 48px; box-sizing: border-box; border-bottom: 1px solid var(--dsw-alias-border-l2); -webkit-app-region: drag; }
 :global(html[data-platform="darwin"]) .desktopWorkspaceToolbar { padding-left: 96px; }
 .desktopWorkspaceToolbar button { -webkit-app-region: no-drag; }
@@ -1235,6 +1268,10 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 .remoteWorkspaceList[hidden], .remoteWorkspaceList [hidden] { display: none; }
 .remoteWorkspaceHeading { padding: 6px 4px; font-size: 11px; font-weight: 600; color: var(--dsw-alias-label-secondary); display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 8px; }
 .remoteWorkspaceHeading button { font-size: 10px; font-weight: 400; }
+.remoteWorkspaceList[data-native="true"] { padding: 4px 12px; }
+.remoteWorkspaceList[data-native="true"] .remoteWorkspaceHeading { padding: 0; }
+.remoteNavigationMenuItem { border: 0; background: transparent; color: var(--dsw-alias-label-primary); text-align: left; padding: 8px 12px; cursor: pointer; font: inherit; }
+.remoteNavigationMenuItem:hover, .remoteNavigationMenuItem:focus-visible { background: var(--dsw-alias-interactive-bg-hover); }
 .remoteWorkspaceHeading:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 .remoteWorkspaceRows { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .remoteWorkspaceRow {
