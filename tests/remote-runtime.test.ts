@@ -144,18 +144,31 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect((await fetch(login.origin, { headers: { Cookie: cookie } })).status).toBe(200)
   expect(readFileSync(join(project, 'plugin.txt'), 'utf8')).toBe('remote-plugin-write')
   expect(JSON.parse(readFileSync(join(remoteRoot, 'state/server.json'), 'utf8')).pid).toBe(receipt.pid)
-  const attachmentId = randomUUID(), terminalId = 'remote-smoke-terminal', duplex = receipt.version === '0.2.1-rc.2'
-  const terminalStream = new WebSocket(login.origin.replace('http:', 'ws:') + '/api/remote.mux', { headers: authHeaders, handshakeTimeout: 5000 })
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Terminal attachment did not open')), 8000)
-    terminalStream.once('error', reject)
-    terminalStream.once('open', () => terminalStream.send(JSON.stringify({ type: 'open', streamId: 'terminal-continuity', endpoint: duplex ? 'terminal/attach' : 'terminal/follow',
-      payload: { args: { agentId: sessionId, id: terminalId, ...(duplex ? {} : { attachmentId }) } } })))
-    terminalStream.once('message', bytes => {
-      clearTimeout(timer)
-      try { const frame = JSON.parse(bytes.toString()); if (frame.type === 'error') throw new Error(frame.error?.message ?? 'Terminal attachment failed'); expect(frame.value?.type).toBe('snapshot'); resolve() } catch (error) { reject(error) }
+  const attachmentId = randomUUID(), terminalId = 'remote-smoke-terminal'
+  // DSH's root version does not pin every runtime dependency. Negotiate only
+  // the read-only attachment; never probe or repeat a terminal write.
+  async function attach(endpoint: 'terminal/attach' | 'terminal/follow') {
+    const stream = new WebSocket(login.origin.replace('http:', 'ws:') + '/api/remote.mux', { headers: authHeaders, handshakeTimeout: 5000 })
+    await new Promise<void>((resolve, reject) => {
+      const fail = (error: unknown) => { clearTimeout(timer); stream.terminate(); reject(error) }
+      const timer = setTimeout(() => fail(new Error('Terminal attachment did not open')), 8000)
+      stream.once('error', fail)
+      stream.once('open', () => stream.send(JSON.stringify({ type: 'open', streamId: 'terminal-continuity', endpoint,
+        payload: { args: { agentId: sessionId, id: terminalId, ...(endpoint === 'terminal/follow' ? { attachmentId } : {}) } } })))
+      stream.once('message', bytes => {
+        clearTimeout(timer)
+        try { const frame = JSON.parse(bytes.toString()); if (frame.type === 'error') throw new Error(frame.error?.message ?? 'Terminal attachment failed'); expect(frame.value?.type).toBe('snapshot'); resolve() } catch (error) { fail(error) }
+      })
     })
-  })
+    return stream
+  }
+  let duplex = true, terminalStream: WebSocket
+  try { terminalStream = await attach('terminal/attach') }
+  catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('terminal/attach: no active Remote method exports this endpoint')) throw error
+    duplex = false
+    terminalStream = await attach('terminal/follow')
+  }
   const started = join(project, 'detached-started.txt'), completed = join(project, 'detached-completed.txt')
   const data = `printf started > ${shellQuote(started)}; sleep 1; printf completed > ${shellQuote(completed)}\n`
   if (duplex) terminalStream.send(JSON.stringify({ type: 'item', streamId: 'terminal-continuity', value: { type: 'write', sequence: 1, data } }))
