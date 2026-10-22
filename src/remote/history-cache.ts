@@ -10,12 +10,21 @@ export interface HistoryMeta {
 export interface HistoryDocument { meta: HistoryMeta; records: HistoryRecord[]; page?: { beforeSeq: number; hasMore: boolean; omitted?: Array<{seq:number;bytes:number}> } }
 export type HistoryToken = number | { key: string; generation: number; owner: string }
 export type HistoryInput = Omit<HistoryMeta, 'bytes' | 'records' | 'firstSavedAt'>
+export interface HistoryStorageSummary {
+  observedAt: number; fileBytes: number; files: number; unreferencedBytes: number
+  skipped: number; incomplete: boolean; stale: boolean
+}
+export interface HistoryStorageAudit extends HistoryStorageSummary {
+  byKey: Record<string, { fileBytes: number; files: number; unreferencedBytes: number; clearedGeneration?: number }>
+}
 export interface HistoryStore {
   token(key?: string): HistoryToken
   current(token: HistoryToken): boolean
   meta(key: string): Promise<HistoryMeta | undefined>
   present(key: string): Promise<boolean>
-  list(): Promise<{ entries: HistoryMeta[]; bytes: number; reminder: boolean; reasons: string[]; warning?: string }>
+  list(): Promise<{ entries: HistoryMeta[]; bytes: number; reminder: boolean; reasons: string[]; warning?: string; storage?: HistoryStorageSummary }>
+  audit?(): Promise<HistoryStorageAudit>
+  finishClear?(selection: { key: string; generation: number }[]): Promise<void>
   read(key: string): Promise<HistoryDocument | undefined>
   save(meta: HistoryInput, records: HistoryRecord[], token: HistoryToken): Promise<boolean>
   clear(keys: string[]): Promise<void>

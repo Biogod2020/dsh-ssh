@@ -10,10 +10,14 @@ import assert from 'node:assert/strict'
 // Run in a disposable child process; count application IO, including metadata,
 // instead of treating the compressed network response as the whole cost.
 const originalOpen = fs.open, originalRead = fs.readFile
-let io = { read: 0, written: 0, writes: 0 }
+let io = { read: 0, written: 0, writes: 0, metadata: 0 }
+for(const name of ['lstat','stat','readdir','opendir']){
+  const original=fs[name];fs[name]=async function(...args){io.metadata++;return original.apply(this,args)}
+}
 fs.open = async function (...args) {
   const handle = await originalOpen.apply(this, args)
-  const write = handle.writeFile.bind(handle), read = handle.readFile.bind(handle), rangeRead=handle.read.bind(handle)
+  const write = handle.writeFile.bind(handle), read = handle.readFile.bind(handle), rangeRead=handle.read.bind(handle), stat=handle.stat.bind(handle)
+  handle.stat=async(...args)=>{io.metadata++;return stat(...args)}
   let fullRead=false
   handle.writeFile = async function (data, ...options) {
     io.written += Buffer.byteLength(data); io.writes++
@@ -47,13 +51,14 @@ const summarize = values => { const sorted = [...values].sort((a,b) => a-b); ret
   samples: values.length, p50: sorted[Math.ceil(sorted.length * .5) - 1], p95: sorted[Math.ceil(sorted.length * .95) - 1], max: sorted.at(-1),
 } }
 async function measure(n, fn) {
-  const times = [], bytesRead = [], bytesWritten = [], writes = []
+  const times = [], bytesRead = [], bytesWritten = [], writes = [], metadata = []
   for (let i=0;i<n;i++) {
-    global.gc?.(); io = { read:0, written:0, writes:0 }
+    global.gc?.(); io = { read:0, written:0, writes:0, metadata:0 }
     const start = performance.now(); await fn(i); times.push(performance.now()-start)
     bytesRead.push(io.read); bytesWritten.push(io.written); writes.push(io.writes)
+    metadata.push(io.metadata)
   }
-  return { milliseconds: summarize(times), applicationBytesRead: summarize(bytesRead), applicationBytesWritten: summarize(bytesWritten), writeCalls: summarize(writes) }
+  return { milliseconds: summarize(times), applicationBytesRead: summarize(bytesRead), applicationBytesWritten: summarize(bytesWritten), writeCalls: summarize(writes), fileMetadataCalls: summarize(metadata) }
 }
 try {
   await cache.list(); await cache.resume?.(key)
@@ -72,7 +77,13 @@ try {
   })
   const unchanged = await measure(samples, async () => { assert((await cache.meta(key)).cursor===meta.cursor); assert(await cache.present(key)) })
   const restart = await measure(30, async () => { await cache.close?.(); cache = new Cache(root); await readWindow() })
+  await cache.audit?.()
+  const inventory = cache.audit ? await measure(30, async () => {
+    const report=await cache.audit();assert(!report.incomplete&&!report.stale&&report.fileBytes>0)
+    assert.equal(io.read,0,'File inventory must not read history bodies or metadata file contents')
+    assert.equal(io.written,0,'File inventory must not write or delete history')
+  }) : undefined
   console.log(JSON.stringify({ schema:1, store:Cache.name, node:process.version, platform:platform(), arch:arch(), memoryBytes:totalmem(),
-    events:count, initialBytes, methodology:'generated mixed text; fixed 100-record window; GC before each untimed sample; filesystem cache not flushed; application IO includes metadata, not physical SSD bytes',
-    warm,append,unchanged,restart,failures:0 },null,2))
+    events:count, initialBytes, methodology:'generated mixed text; fixed 100-record window; GC before each untimed sample; filesystem cache not flushed; application byte IO includes metadata file contents; fileMetadataCalls counts explicit stat/lstat/readdir/opendir and handle.stat API calls, not kernel syscalls or physical SSD bytes; inventory is a separate 30-sample metadata-only scan',
+    warm,append,unchanged,restart,...(inventory?{inventory}:{}),failures:0 },null,2))
 } finally { await cache.close?.(); await rm(root,{recursive:true,force:true}) }

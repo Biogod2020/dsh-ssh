@@ -110,6 +110,11 @@ export class RemoteWorkspaces {
   }
   list(): RemoteWorkspace[] { return [...this.workspaces.values()].map(x => ({ ...x })) }
   historyCopies() { return this.historyCache.status() }
+  auditHistory() { return this.historyCache.cache.audit?.() }
+  finishHistoryClear(selection: { key: string; generation: number }[]) {
+    if (!this.historyCache.cache.finishClear) throw new Error('Interrupted clear recovery is unavailable in this storage')
+    return this.historyCache.cache.finishClear(selection)
+  }
   historyEvent(key:string,seq:number) { return this.historyCache.cache.event?.(key,seq) }
   historyCopy(key: string, window?: {beforeSeq?:number;limit:number}) {
     return window && this.historyCache.cache.window ? this.historyCache.cache.window(key,window.beforeSeq,window.limit) : this.historyCache.cache.read(key)

@@ -16,7 +16,7 @@ const api = path => login.origin + '/api/dsh-ssh/' + path
 const hosts = await fetch(api('hosts'), { headers })
 assert.equal(hosts.status, 200)
 assert.deepEqual(await hosts.json(), { hosts: [] }, 'refuse to alter a real/nonempty host store')
-for (const endpoint of ['workspaces', 'connections', 'remote/workspaces']) {
+for (const endpoint of ['workspaces', 'connections', 'remote/workspaces', 'remote/history/audit']) {
   assert.equal((await fetch(api(endpoint))).status, 401)
   assert.equal((await fetch(api(endpoint), { headers: { ...headers, Origin: 'https://untrusted.invalid' } })).status, 403)
   assert.equal((await fetch(api(endpoint), { headers })).status, 200)
@@ -24,7 +24,7 @@ for (const endpoint of ['workspaces', 'connections', 'remote/workspaces']) {
 assert.equal((await fetch(api('directories'))).status, 401)
 assert.equal((await fetch(api('directories'), { headers: { ...headers, Origin: 'https://untrusted.invalid' } })).status, 403)
 assert.equal((await fetch(api('directories'), { headers })).status, 400)
-for (const endpoint of ['remote/connect', 'remote/open', 'remote/recover']) {
+for (const endpoint of ['remote/connect', 'remote/open', 'remote/recover', 'remote/history/finish-clear']) {
   assert.equal((await fetch(api(endpoint), { method: 'POST', body: '{}' })).status, 401)
   assert.equal((await fetch(api(endpoint), { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.invalid' }, body: '{}' })).status, 403)
   assert.equal((await fetch(api(endpoint), { method: 'POST', headers, body: '{}' })).status, 400)

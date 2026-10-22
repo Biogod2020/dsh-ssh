@@ -52,6 +52,16 @@ it('keeps a durable clear barrier after process death before physical legacy del
   await store.resume(f.key)
   expect(await readdir(f.root)).not.toContain(f.key+'.json');expect(await store.read(f.key)).toBeUndefined()
 })
+it('explicitly finishes a durable clear interrupted by SIGKILL without restoring the copy',async()=>{
+  const f=await fixture();crash(f.root,f.key,'clear')
+  const store=new SegmentedHistoryCache(f.root);stores.push(store)
+  const audit=await store.audit(),generation=audit.byKey[f.key]!.clearedGeneration!
+  expect(audit.unreferencedBytes).toBeGreaterThan(0)
+  await store.finishClear([{key:f.key,generation}])
+  expect(await readdir(f.root)).not.toContain(f.key+'.json')
+  expect(await store.read(f.key)).toBeUndefined();expect((await store.list()).entries).toEqual([])
+  expect((await store.audit()).unreferencedBytes).toBe(0)
+})
 
 it('ignores an uncommitted descriptor tail after real process death and preserves the committed prefix on the next append',async()=>{
   const f=await fixture(), first=new SegmentedHistoryCache(f.root);await first.list();await first.prepare(f.key,first.token(f.key));await first.close()

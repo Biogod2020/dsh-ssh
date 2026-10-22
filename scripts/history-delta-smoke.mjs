@@ -168,10 +168,26 @@ try {
   assert.deepEqual((await draft.request()).draft,clearedDraft)
   await api('remote/history/clear',{keys:[offline.meta.key]})
   assert.equal((await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId)).copy,undefined)
+  const clearAudit=(await api('remote/history/audit')).storage
+  assert(clearAudit&&!clearAudit.byKey[offline.meta.key]&&!clearAudit.incomplete)
+  // Model leftover disk data after an already confirmed clear. Real SIGKILL
+  // at that commit boundary is covered separately by history-store-crash;
+  // this checks the packaged routes and generations, not another kill claim.
+  await stop()
+  await writeFile(join(home,'remote-workspaces','history',offline.meta.key+'.json'),JSON.stringify(offline),{mode:0o600})
+  api=await start()
+  assert.equal((await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId)).copy,undefined)
+  assert.deepEqual((await api('connections')).connections,[{alias:'fixture',state:'disconnected'}])
+  const leftover=(await api('remote/history/audit')).storage,clearedGeneration=leftover.byKey[offline.meta.key]?.clearedGeneration
+  assert(Number.isSafeInteger(clearedGeneration)&&leftover.unreferencedBytes>0&&!leftover.incomplete)
+  await api('remote/history/finish-clear',{selection:[{key:offline.meta.key,generation:clearedGeneration}]})
+  assert.equal((await api('remote/history/audit')).storage.byKey[offline.meta.key],undefined)
+  assert.deepEqual((await api('connections')).connections,[{alias:'fixture',state:'disconnected'}], 'local file maintenance must not connect SSH')
   assert.equal(JSON.parse(await readFile(join(remoteRoot,'state/server.json'),'utf8')).pid,remotePid)
   const result={passed:true,runtime:(await run(dsh,['--version'])).stdout.trim(),generatedMessages:1100,records:first.records.length,newEvents:changed.meta.cursor-first.meta.cursor,
     installedBundle:true,diskReadAfterRestartWithoutSsh:true,controllerOutages:outages,selectiveClear:true,remotePidPreserved:true,modelRequests:0,
-    localDraftAcrossControllerRestart:true,draftGatewayOriginChanged:draftOrigins.size>1,draftClearedWithoutRevival:true,serializedDraftClient:true,nativeEditorVerified:false}
+    localDraftAcrossControllerRestart:true,draftGatewayOriginChanged:draftOrigins.size>1,draftClearedWithoutRevival:true,serializedDraftClient:true,nativeEditorVerified:false,
+    localFileInventory:true,maintenanceWithoutSsh:true,interruptedClearRecoveryFixture:'previously confirmed clear plus restored generated v1 file'}
   await writeFile(join(root,'result.json'),JSON.stringify(result,null,2),{mode:0o600})
   if(process.env.DSH_HISTORY_ARCHIVE_REPORT)await writeFile(process.env.DSH_HISTORY_ARCHIVE_REPORT,JSON.stringify(result,null,2),{mode:0o600})
   console.log(JSON.stringify(result));console.log('Private acceptance diagnostics: '+root)

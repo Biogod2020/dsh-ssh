@@ -14,6 +14,9 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history') {
         writeJson(res, 200, await manager.historyCopies()); return
       }
+      if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history/audit') {
+        writeJson(res, 200, { storage: await manager.auditHistory() }); return
+      }
       if (req.method==='GET' && url.pathname==='/api/dsh-ssh/remote/history/event') {
         const seq=Number(url.searchParams.get('seq'))
         if (!/^\d+$/.test(url.searchParams.get('seq')??'') || !Number.isSafeInteger(seq) || seq<0) throw new Error('Invalid saved history event')
@@ -41,6 +44,12 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
         const body = await readJsonBody(req, { maxBytes: 128 * 1024 }) as { keys?: unknown }
         if (!Array.isArray(body.keys) || body.keys.length > 1000 || body.keys.some(x => typeof x !== 'string')) throw new Error('Select cached sessions to clear')
         await manager.clearHistory(body.keys); writeJson(res, 200, { ok: true }); return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/history/finish-clear') {
+        const body = await readJsonBody(req, { maxBytes: 128 * 1024 }) as { selection?: { key: string; generation: number }[] }
+        if (!Array.isArray(body.selection) || body.selection.length > 1000 || body.selection.some(value => !value
+          || typeof value.key !== 'string' || !/^[a-f0-9]{64}$/.test(value.key) || !Number.isSafeInteger(value.generation) || value.generation < 0)) throw new Error('Choose interrupted local clears to finish')
+        await manager.finishHistoryClear(body.selection); writeJson(res, 200, { ok: true }); return
       }
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/history/snooze') {
         await manager.snoozeHistory(); writeJson(res, 200, { ok: true }); return

@@ -6,7 +6,7 @@ let server:Server|undefined
 afterEach(async()=>{await new Promise<void>(resolve=>server?server.close(()=>resolve()):resolve());server=undefined})
 async function fixture(denied?:401|403){
   const record={type:'event',event:{seq:7,type:'tool/result',data:{output:'complete original fixture'}}}
-  const manager={historyCopy:vi.fn(async()=>({records:[record]})),cachedHistory:vi.fn(async()=>({records:[record]})),historyEvent:vi.fn(async()=>record)}
+  const manager={historyCopy:vi.fn(async()=>({records:[record]})),cachedHistory:vi.fn(async()=>({records:[record]})),historyEvent:vi.fn(async()=>record),auditHistory:vi.fn(async()=>({fileBytes:123,files:2,byKey:{}})),finishHistoryClear:vi.fn(async()=>{})}
   const route=remoteRoutes(manager as never,()=>denied)[0]!
   server=createServer((req,res)=>{void route.handler(req,res)})
   await new Promise<void>(resolve=>server!.listen(0,'127.0.0.1',resolve))
@@ -42,6 +42,22 @@ it('downloads the complete event only after authenticated same-origin access',as
 
 it.each([401,403] as const)('does not read local history when official auth denies access (%s)',async denied=>{
   const f=await fixture(denied)
-  for(const path of ['/read?key=fixture&limit=200','/event?key=fixture&seq=0'])expect((await fetch(f.url+path)).status).toBe(denied)
-  expect(f.manager.historyCopy).not.toHaveBeenCalled();expect(f.manager.historyEvent).not.toHaveBeenCalled()
+  for(const path of ['/read?key=fixture&limit=200','/event?key=fixture&seq=0','/audit'])expect((await fetch(f.url+path)).status).toBe(denied)
+  expect(f.manager.historyCopy).not.toHaveBeenCalled();expect(f.manager.historyEvent).not.toHaveBeenCalled();expect(f.manager.auditHistory).not.toHaveBeenCalled()
+  expect((await fetch(f.url+'/finish-clear',{method:'POST',body:JSON.stringify({selection:[]})})).status).toBe(denied)
+  expect(f.manager.finishHistoryClear).not.toHaveBeenCalled()
+})
+it('observes only local file inventory through the authenticated route',async()=>{
+  const f=await fixture(),response=await fetch(f.url+'/audit')
+  expect(response.status).toBe(200);expect((await response.json()).storage.fileBytes).toBe(123)
+  expect(f.manager.auditHistory).toHaveBeenCalledOnce();expect(f.manager.historyCopy).not.toHaveBeenCalled()
+})
+it('validates reviewed cleanup identities and generations before dispatch',async()=>{
+  const f=await fixture(),key='a'.repeat(64)
+  expect((await fetch(f.url+'/finish-clear',{method:'POST',body:JSON.stringify({selection:[{key,generation:2}]})})).status).toBe(200)
+  expect(f.manager.finishHistoryClear).toHaveBeenCalledExactlyOnceWith([{key,generation:2}])
+  for(const selection of [[{key:'../outside',generation:2}],[{key,generation:-1}],[{key,generation:1.5}],[{key}]]){
+    expect((await fetch(f.url+'/finish-clear',{method:'POST',body:JSON.stringify({selection})})).status).toBe(400)
+  }
+  expect(f.manager.finishHistoryClear).toHaveBeenCalledOnce()
 })

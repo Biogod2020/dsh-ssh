@@ -1,4 +1,4 @@
-import type { HistoryDocument, HistoryMeta } from '../remote/history-cache.ts'
+import type { HistoryDocument, HistoryMeta, HistoryStorageSummary, HistoryStorageAudit } from '../remote/history-cache.ts'
 import type { RemoteWorkspace } from '../remote/types.ts'
 import { tt } from './panel/helpers.ts'
 import css from './panel/panel.module.css'
@@ -93,7 +93,7 @@ export function renderSavedHistory(copy: HistoryDocument, load: HistoryLoader | 
   return body
 }
 
-interface Summary { entries: HistoryMeta[]; bytes: number; reminder: boolean; warning?: string; failures?: Record<string, string>; syncing?: string[] }
+interface Summary { entries: HistoryMeta[]; bytes: number; reminder: boolean; warning?: string; failures?: Record<string, string>; syncing?: string[]; storage?: HistoryStorageSummary }
 const size = (bytes: number) => bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.ceil(bytes / 1024)} KB`
 /** Same-window disk-cache manager. Clear affects local copies only. */
 export function mountHistoryCache(parent: HTMLElement): () => void {
@@ -107,14 +107,18 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
     try {
       const value = await request<Summary>('', undefined, controller.signal)
       if (disposed || !Array.isArray(value.entries)) return
-      launch.textContent = `${tt('cache.manage')} · ${size(value.bytes)}`
+      launch.textContent = `${tt('cache.manage')} · ${tt('cache.savedSize', { size: size(value.bytes) })}`
       notice.hidden = !value.reminder && !value.warning && !Object.keys(value.failures ?? {}).length
-      reminder.textContent = value.warning || (Object.keys(value.failures ?? {}).length ? tt('cache.syncFailed') : tt('cache.reminder', { size: size(value.bytes), count: String(value.entries.length) }))
+      reminder.textContent = value.warning || (Object.keys(value.failures ?? {}).length ? tt('cache.syncFailed')
+        : value.storage && !value.storage.stale && value.storage.unreferencedBytes > 0 ? tt('cache.extraFiles', { size: size(value.storage.unreferencedBytes) })
+          : value.storage && !value.storage.stale && value.storage.incomplete ? tt('cache.fileScanIncomplete')
+          : tt('cache.reminder', { size: size(value.bytes), count: String(value.entries.length) }))
     } catch { /* The ordinary controller status owns connection errors. */ }
   }
   const open = async () => {
     if (dialog?.isConnected) return
     dialog = document.createElement('dialog'); dialog.className = css.historyCacheDialog
+    const owner = dialog
     const title = document.createElement('h2'); title.textContent = tt('cache.manage')
     const help = document.createElement('p'); help.textContent = tt('cache.help')
     const close = document.createElement('button'); close.type = 'button'; close.textContent = tt('cache.close'); close.className = css.ghostButton
@@ -125,8 +129,40 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
     const choose = document.createElement('button'); choose.type = 'button'; choose.textContent = tt('cache.selectVisible'); choose.className = css.ghostButton
     const clear = document.createElement('button'); clear.type = 'button'; clear.className = css.ghostButton; clear.textContent = tt('cache.clear'); clear.disabled = true
     const list = document.createElement('div'), reader = document.createElement('div'), status = document.createElement('p'); status.setAttribute('role', 'status')
-    dialog.append(title, help, close, filters, choose, clear, status, list, reader); document.body.append(dialog); dialog.showModal()
+    const storageStatus = document.createElement('p'), checkStorage = document.createElement('button'), finishClear = document.createElement('button')
+    storageStatus.setAttribute('role', 'status'); checkStorage.type = 'button'; checkStorage.className = css.ghostButton; checkStorage.textContent = tt('cache.checkFiles')
+    finishClear.type = 'button'; finishClear.className = css.ghostButton; finishClear.textContent = tt('cache.finishClear'); finishClear.hidden = true
+    dialog.append(title, help, close, storageStatus, checkStorage, finishClear, filters, choose, clear, status, list, reader); document.body.append(dialog); dialog.showModal()
     const selected = new Set<string>(); let entries: HistoryMeta[] = [], visible: HistoryMeta[] = [], readEpoch=0
+    let storage: HistoryStorageAudit | undefined, auditEpoch = 0
+    const refreshStorage = async () => {
+      const epoch = ++auditEpoch; checkStorage.disabled = true; storageStatus.textContent = tt('cache.checkingFiles')
+      try {
+        const value = await request<{ storage?: HistoryStorageAudit }>('/audit', undefined, controller.signal)
+        if (disposed || dialog !== owner || !owner.isConnected || epoch !== auditEpoch) return
+        const audit = value.storage
+        if (!audit || !Number.isSafeInteger(audit.fileBytes) || audit.fileBytes < 0 || !audit.byKey) throw new Error('Storage inventory unavailable')
+        storage = audit
+        finishClear.hidden = !Object.values(audit.byKey).some(value => value.clearedGeneration !== undefined)
+        storageStatus.textContent = tt(audit.incomplete ? 'cache.fileSizesPartial' : 'cache.fileSizes', { size: size(audit.fileBytes), time: new Date(audit.observedAt).toLocaleString() })
+          + (audit.unreferencedBytes && !audit.stale ? ' · ' + tt('cache.extraFiles', { size: size(audit.unreferencedBytes) }) : '')
+          + (audit.incomplete ? ' · ' + tt('cache.fileScanIncomplete') : '')
+          + (audit.stale ? ' · ' + tt('cache.fileScanStale') : '')
+        render(); void update()
+      } catch { if (dialog === owner && owner.isConnected && epoch === auditEpoch) storageStatus.textContent = tt('cache.fileScanFailed') }
+      finally { if (dialog === owner && owner.isConnected && epoch === auditEpoch) checkStorage.disabled = false }
+    }
+    checkStorage.onclick = () => { void refreshStorage() }
+    finishClear.onclick = () => {
+      const rows = Object.entries(storage?.byKey ?? {}).filter(([, value]) => value.clearedGeneration !== undefined)
+      if (!rows.length || !window.confirm(tt('cache.confirmFinishClear', { count: String(rows.length), size: size(rows.reduce((sum, [, value]) => sum + value.fileBytes, 0)) }))) return
+      finishClear.disabled = true
+      void request('/finish-clear', { selection: rows.map(([key, value]) => ({ key, generation: value.clearedGeneration })) }, controller.signal).then(() => {
+        if (dialog !== owner || !owner.isConnected) return
+        status.textContent = tt('cache.finishedClear'); void refreshStorage(); void update()
+      }).catch(() => { if (dialog === owner && owner.isConnected) status.textContent = tt('cache.finishClearChanged') })
+        .finally(() => { if (dialog === owner && owner.isConnected) finishClear.disabled = false })
+    }
     const option = (value: string, label: string) => { const element = document.createElement('option'); element.value = value; element.textContent = label; return element }
     const buttons = () => { clear.disabled = !selected.size; clear.textContent = `${tt('cache.clear')} (${selected.size})` }
     const render = () => {
@@ -135,7 +171,7 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
       for (const item of visible) {
         const row = document.createElement('div'); row.className = css.historyCacheRow
         const label = document.createElement('label'), check = document.createElement('input'); check.type = 'checkbox'; check.checked = selected.has(item.key)
-        const name = document.createElement('span'); name.textContent = `${item.alias} · ${item.remotePath} · ${item.title || item.sessionId} · ${size(item.bytes)}`
+        const name = document.createElement('span'); name.textContent = `${item.alias} · ${item.remotePath} · ${item.title || item.sessionId} · ${size(storage?.byKey[item.key]?.fileBytes ?? item.bytes)}`
         check.onchange = () => { if (check.checked) selected.add(item.key); else selected.delete(item.key); buttons() }; label.append(check, name)
         const view = document.createElement('button'); view.type = 'button'; view.className = css.linkButton; view.textContent = tt('cache.view')
         view.onclick = () => {
@@ -157,11 +193,13 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
     host.onchange = () => { projects(); render() }; project.onchange = render
     choose.onclick = () => { const all = visible.every(item => selected.has(item.key)); for (const item of visible) if (all) selected.delete(item.key); else selected.add(item.key); render() }
     clear.onclick = () => {
-      if (!selected.size || !window.confirm(tt('cache.confirmClear', { count: String(selected.size) }))) return
+      const estimate = entries.filter(item => selected.has(item.key)).reduce((sum, item) => sum + (storage?.byKey[item.key]?.fileBytes ?? item.bytes), 0)
+      if (!selected.size || !window.confirm(tt('cache.confirmClear', { count: String(selected.size) }) + '\n' + tt('cache.clearEstimate', { size: size(estimate) }))) return
       clear.disabled = true
       void request('/clear', { keys: [...selected] }, controller.signal).then(() => {
         ++readEpoch;entries = entries.filter(item => !selected.has(item.key)); selected.clear(); requested.clear(); reader.replaceChildren(); projects(); render(); void update()
         status.textContent = tt('cache.cleared')
+        void refreshStorage()
       }).catch(() => { status.textContent = tt('cache.failed'); buttons() })
     }
     try {
@@ -169,7 +207,7 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
       if (!dialog?.isConnected) return
       entries = value.entries; host.append(option('', tt('cache.allHosts')))
       for (const [id, alias] of new Map(entries.map(item => [item.hostId, item.alias]))) host.append(option(id, alias))
-      projects(); render()
+      projects(); render(); void refreshStorage()
     } catch { status.textContent = tt('cache.failed') }
   }
   launch.onclick = review.onclick = () => { void open() }

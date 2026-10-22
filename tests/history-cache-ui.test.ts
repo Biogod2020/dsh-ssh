@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
 import { mountHistoryCache, readHistoryCopy, renderSavedHistory } from '../src/client/history-cache.ts'
-import type { HistoryDocument } from '../src/remote/history-cache.ts'
+import type { HistoryDocument, HistoryStorageAudit } from '../src/remote/history-cache.ts'
 
 const key = 'a'.repeat(64), other = 'b'.repeat(64)
 const copy: HistoryDocument = { meta: { key, hostId: 'host', workspaceId: 'project', sessionId: 'session', alias: 'fixture', remotePath: '/project', title: 'Saved chat',
@@ -12,12 +12,14 @@ const copy: HistoryDocument = { meta: { key, hostId: 'host', workspaceId: 'proje
 let cleanup: (() => void) | undefined
 afterEach(() => { cleanup?.(); cleanup = undefined; vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren() })
 const flush = async () => { for (let n = 0; n < 12; n++) await Promise.resolve() }
-function fixture() {
+function fixture(audit?: () => Promise<HistoryStorageAudit>, finishClear?: () => Promise<void>) {
   document.documentElement.lang = 'en'
   Object.assign(HTMLDialogElement.prototype, { showModal(this: HTMLDialogElement) { this.setAttribute('open', '') }, close(this: HTMLDialogElement) { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) } })
   const entries = [copy.meta, { ...copy.meta, key: other, hostId: 'other-host', workspaceId: 'other-project', alias: 'second-host' }]
   const fetch = vi.fn(async (input: unknown, init?: RequestInit) => ({ ok: true, json: async () => {
     if (String(input).includes('/read?')) return { copy }
+    if (String(input).endsWith('/audit')) return { storage: await audit?.() }
+    if (String(input).endsWith('/finish-clear')) { await finishClear?.(); return { ok: true } }
     if (String(input).endsWith('/clear')) { const selected = JSON.parse(init!.body as string).keys; for (let n = entries.length - 1; n >= 0; n--) if (selected.includes(entries[n]!.key)) entries.splice(n, 1); return { ok: true } }
     return { entries, bytes: 200, reminder: true, reasons: ['age'] }
   } }))
@@ -96,4 +98,54 @@ it('keeps clear reversible at the selection step and supports snoozing reminders
   ;[...document.querySelectorAll('button')].find(x => x.textContent === 'Remind in 7 days')!.click(); await flush()
   expect(f.entries).toHaveLength(2)
   expect(f.fetch.mock.calls.filter(([, init]) => init?.method === 'POST').map(([path]) => path)).toEqual(['/api/dsh-ssh/remote/history/snooze'])
+})
+const storageFixture = (fileBytes = 1048576): HistoryStorageAudit => ({ observedAt: 1, fileBytes, files: 5, unreferencedBytes: 512,
+  stale: false, incomplete: false, skipped: 0, byKey: { [key]: { fileBytes, files: 4, unreferencedBytes: 512 } } })
+const click = (text: string) => [...document.querySelectorAll<HTMLButtonElement>('button')].find(button => button.textContent?.startsWith(text))!.click()
+it('shows the complete file estimate for the selected copy and refreshes only when requested', async () => {
+  vi.useFakeTimers(); const f = fixture(async () => storageFixture()), confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+  await flush(); click('Local history cache'); await flush()
+  expect(document.querySelector('dialog')!.textContent).toContain('History folder files total 1.0 MB')
+  expect(document.querySelector('dialog')!.textContent).toContain('outside the saved-history total')
+  const before = f.fetch.mock.calls.filter(([path]) => String(path).endsWith('/audit')).length
+  await vi.advanceTimersByTimeAsync(60000); await flush()
+  expect(f.fetch.mock.calls.filter(([path]) => String(path).endsWith('/audit'))).toHaveLength(before)
+  const host = document.querySelector<HTMLSelectElement>('select[aria-label="Filter host"]')!; host.value = 'host'; host.dispatchEvent(new Event('change'))
+  click('Select / deselect filtered copies'); click('Clear selected local copies (1)'); await flush()
+  expect(confirm.mock.calls[0]![0]).toContain('1.0 MB')
+  expect(f.entries.map(value => value.key)).toEqual([other])
+})
+it('keeps local history readable while an inventory is pending and fences its late result after reopening', async () => {
+  let first!: (value: HistoryStorageAudit) => void, second!: (value: HistoryStorageAudit) => void
+  const values = [new Promise<HistoryStorageAudit>(resolve => first = resolve), new Promise<HistoryStorageAudit>(resolve => second = resolve)]
+  const f = fixture(() => values.shift()!)
+  await flush(); click('Local history cache'); await flush(); click('Read saved copy'); await flush()
+  expect(document.querySelector('dialog')!.textContent).toContain('Saved assistant answer')
+  click('Close'); click('Local history cache'); await flush()
+  first(storageFixture(9 * 1048576)); await flush()
+  expect(document.querySelector('dialog')!.textContent).toContain('Checking local history file sizes')
+  expect(document.querySelector('dialog')!.textContent).not.toContain('9.0 MB')
+  second(storageFixture(2 * 1048576)); await flush()
+  expect(document.querySelector('dialog')!.textContent).toContain('total 2.0 MB')
+  expect(f.fetch.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+})
+it('finishes only reviewed previous clears and never repeats a dispatched request after a lost reply', async () => {
+  const cleared = 'c'.repeat(64), audit = storageFixture()
+  audit.byKey[cleared] = { fileBytes: 512, files: 2, unreferencedBytes: 512, clearedGeneration: 3 }
+  const f = fixture(async () => audit, async () => { throw new Error('Injected lost reply') })
+  vi.spyOn(window, 'confirm').mockReturnValue(true)
+  await flush(); click('Local history cache'); await flush(); click('Finish the previous local clear'); await flush()
+  expect(document.querySelector('dialog')!.textContent).toContain('Could not confirm the previous clear')
+  click('Check file sizes'); await flush()
+  const writes = f.fetch.mock.calls.filter(([, init]) => init?.method === 'POST')
+  expect(writes).toHaveLength(1)
+  expect(JSON.parse(writes[0]![1]!.body as string)).toEqual({ selection: [{ key: cleared, generation: 3 }] })
+  expect(f.entries.map(value => value.key)).toEqual([key, other])
+})
+it('does not present stale extra-file counts as a current orphan finding and marks incomplete totals as lower bounds', async () => {
+  const audit = { ...storageFixture(), stale: true, incomplete: true }
+  fixture(async () => audit); await flush(); click('Local history cache'); await flush()
+  const text = document.querySelector('dialog')!.textContent
+  expect(text).toContain('Checked at least'); expect(text).toContain('History has changed')
+  expect(text).not.toContain('outside the saved-history total')
 })

@@ -23,10 +23,14 @@ assert(dsh&&isAbsolute(dsh)&&modulePath&&output,'usage: network-history-benchmar
 const rtt=Number(rttArg),mbit=Number(mbitArg),samples=Number(samplesArg),recoveries=Number(recoveriesArg)
 assert(Number.isFinite(rtt)&&rtt>=0&&Number.isFinite(mbit)&&mbit>0)
 assert(Number.isInteger(samples)&&samples>=1&&samples<=200&&Number.isInteger(recoveries)&&recoveries>=1&&recoveries<=100)
-let io={read:0,written:0,writes:0},events=0,historyBodyBytes=0
+let io={read:0,written:0,writes:0,metadata:0},events=0,historyBodyBytes=0
+for(const name of ['lstat','stat','readdir','opendir']){
+  const original=fs[name];fs[name]=async function(...args){io.metadata++;return original.apply(this,args)}
+}
 const originalOpen=fs.open,originalRead=fs.readFile
 fs.open=async function(...args){
-  const f=await originalOpen.apply(this,args),write=f.writeFile.bind(f),read=f.readFile.bind(f),range=f.read.bind(f)
+  const f=await originalOpen.apply(this,args),write=f.writeFile.bind(f),read=f.readFile.bind(f),range=f.read.bind(f),stat=f.stat.bind(f)
+  f.stat=async(...args)=>{io.metadata++;return stat(...args)}
   let full=false
   f.writeFile=async(data,...options)=>{io.written+=Buffer.byteLength(data);io.writes++;return write(data,...options)}
   f.readFile=async(...options)=>{full=true;try{const data=await read(...options);io.read+=Buffer.byteLength(data);return data}finally{full=false}}
@@ -66,14 +70,14 @@ const summarize=values=>{const ordered=values.toSorted((a,b)=>a-b);return{sample
 const failures=[]
 const completedPhases={}
 async function measure(name,count,fn){
-  const fields={milliseconds:[],sshSentBytes:[],sshReceivedBytes:[],historyRecords:[],historyBodyBytes:[],applicationBytesRead:[],applicationBytesWritten:[],writeCalls:[]}
+  const fields={milliseconds:[],sshSentBytes:[],sshReceivedBytes:[],historyRecords:[],historyBodyBytes:[],applicationBytesRead:[],applicationBytesWritten:[],writeCalls:[],fileMetadataCalls:[]}
   for(let n=0;n<count;n++){
-    io={read:0,written:0,writes:0};events=0;historyBodyBytes=0
+    io={read:0,written:0,writes:0,metadata:0};events=0;historyBodyBytes=0
     const before=link.snapshot(),start=performance.now()
     try{await fn(n)}catch(error){failures.push({phase:name,sample:n,errorClass:error?.name??'Error'});throw error}
     const after=link.snapshot()
     for(const [key,value]of Object.entries({milliseconds:performance.now()-start,sshSentBytes:after.sent-before.sent,sshReceivedBytes:after.received-before.received,
-      historyRecords:events,historyBodyBytes,applicationBytesRead:io.read,applicationBytesWritten:io.written,writeCalls:io.writes}))fields[key].push(value)
+      historyRecords:events,historyBodyBytes,applicationBytesRead:io.read,applicationBytesWritten:io.written,writeCalls:io.writes,fileMetadataCalls:io.metadata}))fields[key].push(value)
   }
   const result=Object.fromEntries(Object.entries(fields).map(([key,values])=>[key,summarize(values)]))
   completedPhases[name]=result;return result

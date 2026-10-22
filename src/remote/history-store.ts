@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, lstat, open, rename, unlink, readdir, rm, link } from 'node:fs/promises'
 import { join } from 'node:path'
-import { historyKey, validHistory, validMeta, type HistoryMeta, type HistoryRecord, type HistoryDocument, type HistoryInput, type HistoryStore, type HistoryToken } from './history-cache.ts'
+import { historyKey, validHistory, validMeta, type HistoryMeta, type HistoryRecord, type HistoryDocument, type HistoryInput, type HistoryStore, type HistoryToken, type HistoryStorageAudit } from './history-cache.ts'
+import { auditHistoryFiles } from './history-storage-audit.ts'
 export { historyKey } from './history-cache.ts'
 
 interface Segment { file: string; first: number; last: number; count: number; bytes: number; sha256: string; eventType?:string }
@@ -50,7 +51,16 @@ export class SegmentedHistoryCache implements HistoryStore {
   private writer = false
   private controlHash?: string
   private closed = false
-  constructor(private root: string) { this.store = join(root, 'v2'); this.ready = this.load() }
+  private mutationRevision = 0
+  private writing = 0
+  private storageAudit?: HistoryStorageAudit
+  private auditing?: Promise<HistoryStorageAudit>
+  constructor(private root: string) {
+    this.store = join(root, 'v2'); this.ready = this.load()
+    // One background inventory after startup. Status reads and Session
+    // navigation only consume its snapshot; they never start another scan.
+    void this.audit().catch(() => {})
+  }
   private key(key: string): void { if (!isKey(key)) throw new Error('Invalid history cache identity') }
   private async directory(path: string): Promise<void> {
     await mkdir(path, { recursive: true, mode: 0o700 })
@@ -176,8 +186,14 @@ export class SegmentedHistoryCache implements HistoryStore {
     catch(error){this.writeIssue='History write barriers could not be confirmed; reopen this storage before further writes. Saved files were preserved.';throw error}
     this.controlHash=digest(JSON.stringify(snapshot))
   }
-  private queue<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.chain.then(async () => { await this.ready; this.check(); if(this.writeIssue)throw new Error(this.writeIssue);if (this.closed) throw new Error('History writer is closed'); await this.acquire(); return fn() })
+  private queue<T>(fn: () => Promise<T>, mutates: boolean | (() => boolean | Promise<boolean>) = true): Promise<T> {
+    const next = this.chain.then(async () => {
+      await this.ready; this.check(); if(this.writeIssue)throw new Error(this.writeIssue);if (this.closed) throw new Error('History writer is closed')
+      const changing = !this.writer || (typeof mutates === 'function' ? await mutates() : mutates)
+      if (changing) { ++this.mutationRevision; ++this.writing; if (this.storageAudit) this.storageAudit.stale = true }
+      try { await this.acquire(); return await fn() }
+      finally { if (changing) { --this.writing; ++this.mutationRevision } }
+    })
     this.chain = next.catch(() => {}); return next
   }
   private async acquire(): Promise<void> {
@@ -253,9 +269,34 @@ export class SegmentedHistoryCache implements HistoryStore {
     await this.ready; await this.chain
     const entries = [...this.entries.values()].filter(m => this.enabled(m.key)).map(m => ({ ...m })).sort((a,b) => b.savedAt-a.savedAt)
     const bytes = entries.reduce((sum,m) => sum+m.bytes,0), now = Date.now()
-    const reasons = [bytes >= 512*1024*1024 ? 'size' : '', entries.length >= 100 ? 'count' : '', entries.some(m => now-m.firstSavedAt >= 30*86400000) ? 'age' : ''].filter(Boolean)
-    return { entries, bytes, reminder: reasons.length > 0 && now >= this.control.snoozedUntil, reasons,
+    const storage = this.storageAudit && (({ byKey: _byKey, ...summary }) => ({ ...summary }))(this.storageAudit)
+    const reasons = [Math.max(bytes, storage?.stale ? 0 : storage?.fileBytes ?? 0) >= 512*1024*1024 ? 'size' : '', entries.length >= 100 ? 'count' : '', entries.some(m => now-m.firstSavedAt >= 30*86400000) ? 'age' : '',
+      storage && !storage.stale && storage.unreferencedBytes > 0 ? 'unreferenced' : '',
+      storage && !storage.stale && storage.incomplete ? 'inventory' : ''].filter(Boolean)
+    return { entries, bytes, reminder: reasons.length > 0 && now >= this.control.snoozedUntil, reasons, ...(storage ? { storage } : {}),
       warning: this.fatal ?? this.writeIssue ?? (this.issues.size ? `${this.issues.size} local history issue(s); original files were preserved` : undefined) }
+  }
+  audit(): Promise<HistoryStorageAudit> {
+    if (this.auditing) return this.auditing
+    this.auditing = (async () => {
+      await this.ready; this.check()
+      const revision = this.mutationRevision, writing = this.writing > 0
+      const cleared = new Map(Object.entries(this.control.fences).filter(([, value]) => !value.enabled).map(([key, value]) => [key, value.generation]))
+      const references = new Map<string, number | undefined>()
+      for (const key of this.entries.keys()) if (this.enabled(key) && !this.manifests.has(key)) references.set(key + '.json', undefined)
+      for (const [key, m] of this.manifests) if (this.enabled(key)) {
+        references.set(`v2/${key}/manifest.json`, undefined)
+        references.set(`v2/${key}/${m.generation}/segments.jsonl`, m.indexBytes)
+        for (const segment of m.segments) references.set(`v2/${key}/${m.generation}/${segment.file}`, undefined)
+        if (m.legacyDigest) { references.set(`v2/${key}/legacy.v1.json`, undefined); references.set(key + '.json', undefined) }
+      }
+      const report = await auditHistoryFiles(this.root, references, () => this.closed)
+      for (const [key, value] of Object.entries(report.byKey)) if (cleared.has(key)) value.clearedGeneration = cleared.get(key)
+      report.stale = writing || this.writing > 0 || revision !== this.mutationRevision
+      this.storageAudit = report
+      return structuredClone(report)
+    })().finally(() => { this.auditing = undefined })
+    return this.auditing
   }
   private async segment(key: string, m: Manifest, s: Segment): Promise<HistoryRecord[]> {
     const path = join(this.store, key, m.generation, s.file)
@@ -385,12 +426,15 @@ export class SegmentedHistoryCache implements HistoryStore {
   private async archiveLegacy(key: string, expectedDigest: string): Promise<void> {
     const source=join(this.root,key+'.json'), destination=join(this.store,key,'legacy.v1.json')
     if (!await this.exists(source)) return
-    if (digest(await this.bytes(source)) !== expectedDigest) throw new Error('Legacy history changed during migration; both copies were preserved')
-    if (await this.exists(destination)) {
-      if (digest(await this.bytes(destination)) !== expectedDigest) throw new Error('Legacy history archive conflicts; both copies were preserved')
-      await unlink(source)
-    } else await rename(source,destination)
-    await this.syncDirectory(this.root); await this.syncDirectory(join(this.store,key))
+    ++this.mutationRevision; ++this.writing; if (this.storageAudit) this.storageAudit.stale = true
+    try {
+      if (digest(await this.bytes(source)) !== expectedDigest) throw new Error('Legacy history changed during migration; both copies were preserved')
+      if (await this.exists(destination)) {
+        if (digest(await this.bytes(destination)) !== expectedDigest) throw new Error('Legacy history archive conflicts; both copies were preserved')
+        await unlink(source)
+      } else await rename(source,destination)
+      await this.syncDirectory(this.root); await this.syncDirectory(join(this.store,key))
+    } finally { --this.writing; ++this.mutationRevision }
   }
   private async migrate(key: string, token: HistoryToken): Promise<Manifest | undefined> {
     if (this.issues.has(key)) throw new Error(this.issues.get(key))
@@ -452,6 +496,9 @@ export class SegmentedHistoryCache implements HistoryStore {
       if (!this.allowed(key,token)) return undefined
       const m=await this.migrate(key,token)
       return m ? {meta:{...m.meta},firstSeq:m.segments[0]?.first??0} : undefined
+    }, async () => {
+      const existing = this.manifests.get(key)
+      return !existing || !!existing.legacyDigest && await this.exists(join(this.root, key + '.json'))
     })
   }
   private async remove(key: string): Promise<void> {
@@ -464,11 +511,12 @@ export class SegmentedHistoryCache implements HistoryStore {
   }
   async clear(keys: string[]): Promise<void> {
     if (!Array.isArray(keys) || keys.some(k=>!isKey(k))) throw new Error('Invalid history selection')
+    const selection = [...new Set(keys)]
     await this.ready; this.check()
-    for (const key of new Set(keys)) this.control.fences[key]={generation:(this.control.fences[key]?.generation??0)+1,enabled:false}
+    for (const key of selection) this.control.fences[key]={generation:(this.control.fences[key]?.generation??0)+1,enabled:false}
     return this.queue(async()=>{
       await this.persistControl()
-      for (const key of new Set(keys)) await this.remove(key)
+      for (const key of selection) await this.remove(key)
     })
   }
   async resume(key: string): Promise<void> {
@@ -479,6 +527,21 @@ export class SegmentedHistoryCache implements HistoryStore {
       await this.remove(key)
       this.control.fences[key]={generation:(this.control.fences[key]?.generation??0)+1,enabled:true}
       await this.persistControl()
+    })
+  }
+  /** Continue a previously durable clear only. A reopened copy or a newer
+   * selection is not covered by the old confirmation and is never removed. */
+  finishClear(selection: { key: string; generation: number }[]): Promise<void> {
+    if (!Array.isArray(selection) || selection.length > 1000 || selection.some(value => !value || !isKey(value.key)
+      || !Number.isSafeInteger(value.generation) || value.generation < 0) || new Set(selection.map(value => value.key)).size !== selection.length) throw new Error('Invalid interrupted clear selection')
+    const snapshot = selection.map(value => ({ key: value.key, generation: value.generation }))
+    return this.queue(async () => {
+      const check = (value: { key: string; generation: number }) => {
+        const current = this.control.fences[value.key]
+        if (!current || current.enabled || current.generation !== value.generation) throw new Error('The saved history selection changed. Check file sizes again before continuing the clear.')
+      }
+      for (const value of snapshot) check(value)
+      for (const value of snapshot) { check(value); await this.remove(value.key) }
     })
   }
   snooze(): Promise<void> { return this.queue(async()=>{this.control.snoozedUntil=Date.now()+7*86400000;await this.persistControl()}) }
@@ -498,6 +561,7 @@ export class SegmentedHistoryCache implements HistoryStore {
   }
   async close(): Promise<void> {
     this.closed=true; await this.ready; await this.chain
+    await this.auditing?.catch(() => {})
     if (!this.writer) return
     const path=join(this.store,'writer.lock'), owner=JSON.parse((await this.bytes(path)).toString())
     if (owner.owner!==this.owner) throw new Error('History writer lock changed; it was preserved')
