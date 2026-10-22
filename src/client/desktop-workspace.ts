@@ -100,13 +100,41 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
     view.guest.remove(); void bridge.release(view.lease).catch(() => {})
     if (active === view) { active = undefined; if (preview) { render(); selected() } else hide() }
   }
-  back.onclick = hide
-  close.onclick = () => { if (preview) hide(); else if (active && window.confirm(tt('remote.closeViewConfirm'))) drop(active) }
+  const draftNotice = document.createElement('p'); draftNotice.className = css.hint; draftNotice.setAttribute('role', 'alert'); draftNotice.hidden = true; toolbar.after(draftNotice)
+  const draftError = () => Object.assign(new Error(tt('remote.unsavedDraft')), { name: 'DraftSaveError' })
+  async function flushView(view: View | undefined): Promise<void> {
+    if (!view?.ready || !view.guest.isConnected) return
+    try {
+      const saved = await view.guest.executeJavaScript<boolean>('(async()=>{window.__dshSshView?.cancelNavigation?.();return window.__dshSshDrafts?await window.__dshSshDrafts.flush():true})()')
+      if(saved===false)throw draftError()
+      draftNotice.hidden = true
+    } catch {
+      if(!view.ready)return
+      draftNotice.textContent = tt('remote.unsavedDraft'); draftNotice.hidden = false; throw draftError()
+    }
+  }
+  back.onclick = () => {
+    remoteNavigation.cancelOpen();const intent=remoteNavigation.intent()
+    void flushView(active).then(()=>{if(!disposed&&intent===remoteNavigation.intent())hide()}).catch(()=>{})
+  }
+  close.onclick = () => {
+    if(preview){hide();return}
+    const view=active
+    if(view&&window.confirm(tt('remote.closeViewConfirm'))){
+      remoteNavigation.cancelOpen();const intent=remoteNavigation.intent()
+      void flushView(view).then(()=>{if(!disposed&&intent===remoteNavigation.intent())drop(view)}).catch(()=>{})
+    }
+  }
   const stopLocale = locale?.subscribe(render)
   const unregister = registerRemotePresentation({
+    beforeLeave: () => flushView(active),
     async settings(workspace) {
       const view=views.get(viewKey(workspace))
       if(disposed||!view?.ready||view.workspace.hostId!==workspace.hostId||identities.get(view.workspace.id)!==workspace.hostId)return false
+      remoteNavigation.cancelOpen()
+      const intent=remoteNavigation.intent()
+      if(view!==active)await flushView(active)
+      if(disposed||views.get(viewKey(workspace))!==view||intent!==remoteNavigation.intent())return false
       show(view)
       try{return await view.guest.executeJavaScript<boolean>('Boolean(window.__dshSshView?.settings?.())')}
       catch{return false}
@@ -126,21 +154,27 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
       previewFailures.add(workspace.id)
       if (preview?.workspace.id === workspace.id) savedStatus.textContent = tt('cache.unavailable')
     },
-    close(workspace) {
+    async close(workspace) {
       const view = views.get(viewKey(workspace))
-      if (view && window.confirm(tt('remote.closeViewConfirm'))) drop(view)
+      if (view && window.confirm(tt('remote.closeViewConfirm'))) {
+        if(view===active)remoteNavigation.cancelOpen()
+        const intent=remoteNavigation.intent()
+        await flushView(view); if(!disposed&&intent===remoteNavigation.intent())drop(view)
+      }
     },
     async resume(workspace, sessionId, signal) {
       signal?.throwIfAborted()
       if (identities.has(workspace.id) && identities.get(workspace.id) !== workspace.hostId) throw new Error(tt('remote.desktopIdentityChanged'))
       const view = views.get(viewKey(workspace))
       if (!view || !view.ready) return false
+      if(view!==active||view.workspace.id!==workspace.id||sessionId&&view.sessionId!==sessionId)await flushView(active)
+      signal?.throwIfAborted()
       if (view.workspace.id !== workspace.id || (sessionId && view.sessionId !== sessionId)) {
         if (!sessionId) return false
         let accepted = false
         try {
-          accepted = await view.guest.executeJavaScript<boolean>(`Boolean(window.__dshSshView?.select?.(${JSON.stringify(workspace.workspaceId)},${JSON.stringify(sessionId)}))`)
-        } catch { return false }
+          accepted = await view.guest.executeJavaScript<boolean>(`(async()=>Boolean(await window.__dshSshView?.select?.(${JSON.stringify(workspace.workspaceId)},${JSON.stringify(sessionId)})))()`)
+        } catch(error) { if(String(error).includes('DSH_DRAFT_UNSAVED'))throw draftError();return false }
         signal?.throwIfAborted()
         if (!accepted || disposed || views.get(viewKey(workspace)) !== view || !view.ready) return false
         identities.set(workspace.id, workspace.hostId)
@@ -153,6 +187,7 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
       signal?.throwIfAborted()
       const target = gatewayUrl(url)
       target.searchParams.set('dsh-remote-view', 'desktop')
+      await flushView(active); signal?.throwIfAborted()
       if (disposed || opening) throw new Error(tt('remote.desktopUnavailable'))
       const key = viewKey(workspace)
       const old = views.get(key)
@@ -163,8 +198,8 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
         // through the remote Client's ordinary public navigation service;
         // never navigate its document or recreate its conversation drafts.
         if (old.origin !== target.origin || !sessionId) throw new Error(tt('remote.desktopIdentityChanged'))
-        try { await old.guest.executeJavaScript(`window.__dshSshView.open(${JSON.stringify(sessionId)})`) }
-        catch { throw new Error(tt('remote.desktopLoadFailed')) }
+        try { if(await old.guest.executeJavaScript(`window.__dshSshView.open(${JSON.stringify(sessionId)})`)===false)throw new Error('Navigation superseded') }
+        catch(error) { if(String(error).includes('DSH_DRAFT_UNSAVED'))throw draftError();throw new Error(tt('remote.desktopLoadFailed')) }
         signal?.throwIfAborted()
         old.workspace = workspace; old.sessionId = sessionId
         old.guest.setAttribute('aria-label', `${workspace.alias} · ${workspace.remotePath}`)

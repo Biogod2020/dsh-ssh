@@ -1,0 +1,38 @@
+{
+  "passed": true,
+  "runtime": "0.2.1-rc.2",
+  "generatedMessages": 1100,
+  "records": 1104,
+  "newEvents": 1,
+  "installedBundle": true,
+  "diskReadAfterRestartWithoutSsh": true,
+  "controllerOutages": [
+    {
+      "requestedMilliseconds": 0,
+      "actualMilliseconds": 1.2954170000002705,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 3000,
+      "actualMilliseconds": 3000.6439999999993,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 30000,
+      "actualMilliseconds": 30001.248583,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 300000,
+      "actualMilliseconds": 300001.734125,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    }
+  ],
+  "selectiveClear": true,
+  "remotePidPreserved": true,
+  "modelRequests": 0
+}

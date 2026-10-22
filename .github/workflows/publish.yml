@@ -67,7 +67,7 @@ jobs:
           shopt -s nullglob
           archives=("$RUNNER_TEMP/release/"*.tgz)
           test "${#archives[@]}" -eq 1
-          node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
+          node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}" --outages
       - name: Survive SSH disconnect in the installed archive
         run: |
           shopt -s nullglob

@@ -7,12 +7,15 @@ import { mkdtemp, mkdir, open, readFile, writeFile, symlink } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { performance } from 'node:perf_hooks'
 import { TestSshd } from '../tests/helpers/sshd.ts'
 import { DEFAULT_KNOWN_HOSTS } from '../src/engine/known-hosts.ts'
 import { shellQuote } from '../src/remote/transport.ts'
 
 const run = promisify(execFile), dsh = process.argv[2], archive = process.argv[3]
-assert(dsh && isAbsolute(dsh) && archive && isAbsolute(archive), 'usage: node --experimental-transform-types scripts/history-delta-smoke.mjs <absolute-dsh> <absolute.tgz>')
+assert(dsh && isAbsolute(dsh) && archive && isAbsolute(archive), 'usage: node --experimental-transform-types scripts/history-delta-smoke.mjs <absolute-dsh> <absolute.tgz> [--outages]')
+const outageDurations = process.argv.includes('--outages') ? [0, 3000, 30000, 300000] : [0]
+const baseEnv = { PATH: process.env.PATH, USER: process.env.USER, LOGNAME: process.env.LOGNAME, LANG: 'en_US.UTF-8', SHELL: '/bin/sh' }
 const root = await mkdtemp(join(tmpdir(), 'dsh-history-archive-'))
 const local = join(root, 'local'), remote = join(root, 'remote'), bin = join(root, 'bin'), project = join(remote, 'project')
 const remoteRoot = join(remote, '.local/share/dsh-remote'), home = join(local, '.dsh')
@@ -42,10 +45,11 @@ export function apply(ctx){ctx.effect(()=>ctx.webServer.register({kind:'exact',p
  res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({added:count}));
 }}));}
 `)
-await run(dsh, ['plugin','--profile','web','add','link:'+plugin], { env: {...process.env, HOME:remote, DSH_HOME:join(remoteRoot,'data')}, timeout:60000 })
-const env = {...process.env, HOME:local, DSH_HOME:home, DEEPSEEK_API_KEY:'fixture-only', DEEPSEEK_BASE_URL:'http://127.0.0.1:9'}
+const remoteEnv = {...baseEnv, HOME:remote, DSH_HOME:join(remoteRoot,'data'), DEEPSEEK_API_KEY:'fixture-only', DEEPSEEK_BASE_URL:'http://127.0.0.1:9'}
+await run(dsh, ['plugin','--profile','web','add','link:'+plugin], { env: remoteEnv, timeout:60000 })
+const env = {...baseEnv, HOME:local, DSH_HOME:home, DEEPSEEK_API_KEY:'fixture-only', DEEPSEEK_BASE_URL:'http://127.0.0.1:9'}
 await run(dsh, ['plugin','--profile','web','add',archive,'--ignore-scripts'], {env,timeout:60000})
-const sshd = await TestSshd.start({home:remote,path:bin+':'+process.env.PATH})
+const sshd = await TestSshd.start({home:remote,path:bin+':'+process.env.PATH,env:remoteEnv})
 let child, logPath = join(root,'local.log')
 const delay = ms => new Promise(resolve => setTimeout(resolve,ms))
 async function start() {
@@ -67,9 +71,13 @@ async function start() {
   throw Error('isolated DSH startup timeout')
 }
 async function stop() {
-  if(!child || child.exitCode!==null)return
-  child.kill('SIGTERM')
-  await Promise.race([new Promise(resolve=>child.once('exit',resolve)),delay(5000).then(()=>{if(child.exitCode===null)child.kill('SIGKILL')})])
+  const stopping=child
+  if(!stopping || stopping.exitCode!==null)return
+  await new Promise(resolve=>{
+    const deadline=setTimeout(()=>{if(stopping.exitCode===null)stopping.kill('SIGKILL')},5000)
+    stopping.once('exit',()=>{clearTimeout(deadline);resolve()})
+    stopping.kill('SIGTERM')
+  })
 }
 async function until(fn) { for(let n=0;n<600;n++){ const value=await fn(); if(value)return value; await delay(50) } throw Error('history acceptance timeout; private diagnostics: '+root) }
 try {
@@ -95,15 +103,37 @@ try {
   await api('remote/history/sync',{id:workspace.id,sessionId},202)
   const changed=await until(async()=>{const {copy}=await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId);return copy?.meta.cursor>first.meta.cursor&&copy})
   assert.deepEqual(changed.records.slice(0,first.records.length),first.records)
-  await stop(); api=await start()
-  const offline=(await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId)).copy
-  assert.deepEqual(offline.records,changed.records)
-  assert.deepEqual((await api('connections')).connections,[{alias:'fixture',state:'disconnected'}], 'disk reads after restart must not open SSH')
+  const outages=[]
+  let offline
+  for (const milliseconds of outageDurations) {
+    await stop()
+    const began=performance.now()
+    console.log(JSON.stringify({phase:'controller-offline',requestedMilliseconds:milliseconds}))
+    await delay(milliseconds)
+    const actualMilliseconds=performance.now()-began
+    assert(actualMilliseconds>=milliseconds-10,'Offline timer must not finish early')
+    process.kill(remotePid,0)
+    assert.equal(JSON.parse(await readFile(join(remoteRoot,'state/server.json'),'utf8')).pid,remotePid)
+    api=await start()
+    offline=(await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId)).copy
+    assert.deepEqual(offline.records,changed.records)
+    assert.deepEqual((await api('connections')).connections,[{alias:'fixture',state:'disconnected'}], 'disk reads after restart must not open SSH')
+    outages.push({requestedMilliseconds:milliseconds,actualMilliseconds,offlineDiskRead:true,remotePidPreserved:true})
+    if (milliseconds!==outageDurations.at(-1)) {
+      // A restarted controller has no carrier. Explicitly reattach to the
+      // generated existing service; installer discovery/bootstrap must reuse
+      // its PID. No message, command, cancel or transfer is retried.
+      const reconnect=(await api('remote/connect',{alias:'fixture',remotePath:project,expectedHostId:workspace.hostId},202)).operation
+      const reattached=await until(async()=>{const {operation}=await api('remote/operation?id='+reconnect.id);assert.notEqual(operation.phase,'failed',operation.message);return operation.phase==='ready'&&operation.workspace})
+      assert.equal(reattached.id,workspace.id)
+      assert.equal(JSON.parse(await readFile(join(remoteRoot,'state/server.json'),'utf8')).pid,remotePid)
+    }
+  }
   await api('remote/history/clear',{keys:[offline.meta.key]})
   assert.equal((await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId)).copy,undefined)
   assert.equal(JSON.parse(await readFile(join(remoteRoot,'state/server.json'),'utf8')).pid,remotePid)
   const result={passed:true,runtime:(await run(dsh,['--version'])).stdout.trim(),generatedMessages:1100,records:first.records.length,newEvents:changed.meta.cursor-first.meta.cursor,
-    installedBundle:true,diskReadAfterRestartWithoutSsh:true,selectiveClear:true,remotePidPreserved:true,modelRequests:0}
+    installedBundle:true,diskReadAfterRestartWithoutSsh:true,controllerOutages:outages,selectiveClear:true,remotePidPreserved:true,modelRequests:0}
   await writeFile(join(root,'result.json'),JSON.stringify(result,null,2),{mode:0o600})
   if(process.env.DSH_HISTORY_ARCHIVE_REPORT)await writeFile(process.env.DSH_HISTORY_ARCHIVE_REPORT,JSON.stringify(result,null,2),{mode:0o600})
   console.log(JSON.stringify(result));console.log('Private acceptance diagnostics: '+root)

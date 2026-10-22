@@ -1,4 +1,4 @@
-import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react'
+import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import { MenuItemButton } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -21,7 +21,7 @@ type MenuOwner = readonly [boolean, (open: boolean) => void]
 function RemoteSessionMenu({ sessionId, remote, menu, navigate }: {
   sessionId: string; remote: RemoteNavigationSnapshot; menu?: MenuOwner; navigate(key: string): boolean
 }) {
-  const [settings, setSettings] = useState<{ busy?: boolean; error?: boolean }>({})
+  const [settings, setSettings] = useState<{ busy?: boolean; error?: 'settings' | 'draft' }>({})
   const settingsAttempt = useRef(0)
   const open = menu?.[0] ?? true
   useEffect(() => {
@@ -33,19 +33,22 @@ function RemoteSessionMenu({ sessionId, remote, menu, navigate }: {
     <MenuItemButton disabled={settings.busy} onSelect={() => {
       const attempt = ++settingsAttempt.current
       const target = resolveRemoteNavigation(sessionId, remote)
-      if (!target) { setSettings({ error: true }); return }
+      if (!target) { setSettings({ error: 'settings' }); return }
       const presentation = remotePresentation()
       setSettings({ busy: true })
       void Promise.resolve().then(() => presentation?.settings?.(target.workspace)).then(ok => {
         if (attempt !== settingsAttempt.current) return
-        setSettings({ error: !ok }); if (ok) menu?.[1](false)
-      }).catch(() => { if (attempt === settingsAttempt.current) setSettings({ error: true }) })
+        setSettings({ error: ok ? undefined : 'settings' }); if (ok) menu?.[1](false)
+      }).catch(error => { if (attempt === settingsAttempt.current) setSettings({ error: error?.name === 'DraftSaveError' ? 'draft' : 'settings' }) })
     }}>{tt('remote.modelSettings')}</MenuItemButton>
-    {settings.error && <span role="alert">{tt('remote.settingsUnavailable')}</span>}
+    {settings.error && <span role="alert">{tt(settings.error === 'draft' ? 'remote.unsavedDraft' : 'remote.settingsUnavailable')}</span>}
     <MenuItemButton onSelect={() => {
-      menu?.[1](false)
       const target = resolveRemoteNavigation(sessionId, remote)
-      if (target) remotePresentation()?.close?.(target.workspace)
+      if (!target) return
+      const attempt = ++settingsAttempt.current
+      void Promise.resolve().then(() => remotePresentation()?.close?.(target.workspace)).then(() => {
+        if (attempt === settingsAttempt.current) menu?.[1](false)
+      }).catch(() => { if (attempt === settingsAttempt.current) setSettings({ error: 'draft' }) })
     }}>{tt('remote.closeView')}</MenuItemButton>
   </>
 }
@@ -80,6 +83,13 @@ export function combineNavigation(list: List, workspaces: Workspaces, remote: Re
 }
 
 export function NativeWorkspaces({ original, ...props }: Props & { original: ComponentType<Props> }) {
+  const [navigationIssue, setNavigationIssue] = useState(false)
+  const lifetime = useRef(0)
+  useLayoutEffect(() => { ++lifetime.current; return () => { ++lifetime.current } }, [])
+  // This optional hook is a fixed contract for the lifetime of its native
+  // entry. It also lets a newer global panel win over a pending local click.
+  const localPanel = props.usePanelInfo?.((info: Props) => info.activePanelId) ?? null
+  const panel = useRef(localPanel); panel.current = localPanel
   const localList = props.useSessions((state: List) => state)
   const localWorkspaces = props.useWorkspaces((state: Workspaces) => state)
   const remote = useSyncExternalStore(remoteNavigation.subscribe, remoteNavigation.getSnapshot)
@@ -97,9 +107,19 @@ export function NativeWorkspaces({ original, ...props }: Props & { original: Com
   }, equal)
   const navigate = (key: string, create = false): boolean => {
     if (!isRemoteNavigationKey(key)) return false
+    setNavigationIssue(false)
     const target = resolveRemoteNavigation(key, remote)
     if (target) remoteNavigation.open(target.workspace, target.sessionId, create)
     return true
+  }
+  const localAction = (action: () => void) => {
+    remoteNavigation.cancelOpen(); const intent = remoteNavigation.intent(), expectedPanel = panel.current, epoch = lifetime.current
+    setNavigationIssue(false)
+    const presentation = remotePresentation(), guard = presentation?.beforeLeave
+    if (!guard) { action(); return }
+    void Promise.resolve().then(() => guard.call(presentation)).then(() => {
+      if (epoch === lifetime.current && intent === remoteNavigation.intent() && expectedPanel === panel.current) action()
+    }).catch(() => { if (epoch === lifetime.current && intent === remoteNavigation.intent()) setNavigationIssue(true) })
   }
   const localOnly = (action: string) => (...args: any[]) => {
     if (args.some(isRemoteNavigationKey)) throw new Error(tt('remote.actionInRemote'))
@@ -114,12 +134,12 @@ export function NativeWorkspaces({ original, ...props }: Props & { original: Com
     }
     return props.renderSlot(name, owner, ...rest)
   }
-  return createElement(original, { ...props, useSessions, useWorkspaces, useSessionStatus, usePanelInfo, renderSlot,
-    open: (id: string) => { if (!navigate(id)) props.open(id) },
-    startSession: (id?: string, options?: unknown) => { if (!id || !navigate(id, true)) props.startSession(id, options) },
+  return <>{createElement(original, { ...props, useSessions, useWorkspaces, useSessionStatus, usePanelInfo, renderSlot,
+    open: (id: string) => { if (!navigate(id)) localAction(() => props.open(id)) },
+    startSession: (id?: string, options?: unknown) => { if (!id || !navigate(id, true)) localAction(() => props.startSession(id, options)) },
     requestSessionRename: (id: string, title: string) => { if (!navigate(id)) props.requestSessionRename(id, title) },
     renameWorkspace: localOnly('renameWorkspace'), deleteWorkspace: localOnly('deleteWorkspace'), insertWorkspaceBefore: localOnly('insertWorkspaceBefore'),
-  })
+  })}{navigationIssue && <p role="alert">{tt('remote.unsavedDraft')}</p>}</>
 }
 
 /** Reuse the actual native browser, store, folder rows and keyboard/search UI. */

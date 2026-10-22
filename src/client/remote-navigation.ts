@@ -9,16 +9,21 @@ export interface RemoteNavigationSnapshot {
 let snapshot: RemoteNavigationSnapshot = { workspaces: [], catalogs: new Map(), native: false }
 const listeners = new Set<() => void>()
 let open: ((workspace: RemoteWorkspace, sessionId?: string, create?: boolean) => void) | undefined
+let cancel: (() => void) | undefined
+let intent = 0
 const pending = new Map<string, AbortController>()
 const publish = (next: RemoteNavigationSnapshot) => { snapshot = next; for (const listener of listeners) listener() }
 export const remoteNavigation = {
   getSnapshot: () => snapshot,
   subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
   native(value: boolean) { publish({ ...snapshot, native: value }) },
-  bind(handler: typeof open) { open = handler; return () => { if (open === handler) open = undefined } },
+  bind(handler: typeof open, stop?: () => void) { open = handler; cancel = stop; return () => { if (open === handler) { open = undefined; cancel = undefined } } },
+  /** Stops only local navigation observation; never cancels a remote task. */
+  cancelOpen() { ++intent; cancel?.() },
+  intent: () => intent,
   update(workspaces: readonly RemoteWorkspace[], hosts: readonly { hostId: string; phase: RemotePhase }[] = []) { publish({ ...snapshot, workspaces, hosts: new Map(hosts.map(host => [host.hostId, host.phase])) }) },
   stale() { publish({ ...snapshot, hosts: new Map(), catalogs: new Map([...snapshot.catalogs].map(([id, catalog]) => [id, { ...catalog, stale: true }])) }) },
-  open(workspace: RemoteWorkspace, sessionId?: string, create?: boolean) { open?.(workspace, sessionId, create) },
+  open(workspace: RemoteWorkspace, sessionId?: string, create?: boolean) { ++intent; open?.(workspace, sessionId, create) },
   async refresh(workspace: RemoteWorkspace) {
     if (pending.has(workspace.id)) return
     const controller = new AbortController(); pending.set(workspace.id, controller)

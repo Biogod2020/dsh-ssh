@@ -5,6 +5,7 @@
 export const zh = {
   'cache.manage': '本机历史缓存',
   'remote.modelSettings': '此主机的模型设置',
+  'remote.unsavedDraft': '当前远端草稿尚未确认保存。请先在会话中重试保存或处理草稿冲突。',
   'remote.settingsUnavailable': '暂时无法打开此主机的模型设置。请先打开它的一条会话再试；若仍不可用，可在远端聊天中使用设置快捷键。',
   'cache.user': '你',
   'cache.assistant': '助手',
@@ -524,6 +525,7 @@ export const zh = {
 export const en: Record<keyof typeof zh, string> = {
   'cache.manage': 'Local history cache',
   'remote.modelSettings': 'Model settings on this host',
+  'remote.unsavedDraft': 'The remote draft is not confirmed saved. Retry saving or resolve its draft conflict before leaving.',
   'remote.settingsUnavailable': 'Could not open model settings on this host. Open one of its conversations and try again. If needed, use the settings shortcut inside the remote chat.',
   'cache.user': 'You',
   'cache.assistant': 'Assistant',

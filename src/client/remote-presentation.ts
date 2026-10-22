@@ -3,7 +3,8 @@ import type { RemoteWorkspace } from '../remote/types.ts'
 export interface RemotePresentation {
   resume(workspace: RemoteWorkspace, sessionId?: string, signal?:AbortSignal): boolean | Promise<boolean>
   open(workspace: RemoteWorkspace, url: string, signal?: AbortSignal, sessionId?: string): Promise<void>
-  close?(workspace: RemoteWorkspace): void
+  beforeLeave?(): Promise<void>
+  close?(workspace: RemoteWorkspace): void | Promise<void>
   settings?(workspace:RemoteWorkspace):boolean|Promise<boolean>
   preview?(workspace: RemoteWorkspace, sessionId: string, signal?: AbortSignal): Promise<void>
   previewFailed?(workspace: RemoteWorkspace): void

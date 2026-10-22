@@ -74,7 +74,9 @@ export async function observeRemoteOperation(id: string, progress: Progress, opt
 export async function openRemoteWorkspace(workspace: RemoteWorkspace, sessionId?: string, options: RequestOptions = {}): Promise<void> {
   options.signal?.throwIfAborted()
   const presentation = remotePresentation()
-  if (await presentation?.resume(workspace, sessionId,options.signal)) { warmHistoryCopy(workspace, sessionId); return }
+  const resumed=await presentation?.resume(workspace, sessionId,options.signal)
+  options.signal?.throwIfAborted()
+  if (resumed) { warmHistoryCopy(workspace, sessionId); return }
   if (sessionId) void presentation?.preview?.(workspace, sessionId, options.signal).catch(() => {})
   if (window.location.protocol === 'dsh-app:' && !presentation) throw new Error(tt('remote.desktopUnavailable'))
   const { url, sessionId: selected } = await json<{ url: string; sessionId?: string }>('open', { id: workspace.id, ...(sessionId ? { sessionId } : {}) }, options)
@@ -292,9 +294,13 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     let refreshNeeded = false
     busy = true; activeItem = item.id; operation = undefined; failure = false; status = tt('remote.phase.connecting'); render()
     try {
+      if(create)await remotePresentation()?.beforeLeave?.()
+      attempt.options.signal?.throwIfAborted()
       // A ready retained Client is sufficient for a local switch. A slow or
       // stale health observation must not force another remote preparation.
-      if(!create&&sessionId&&await remotePresentation()?.resume(item,sessionId,attempt.options.signal)){
+      const resumed=!create&&sessionId?await remotePresentation()?.resume(item,sessionId,attempt.options.signal):false
+      attempt.options.signal?.throwIfAborted()
+      if(resumed){
         if(!offline)warmHistoryCopy(item,sessionId)
         if(attempt.epoch===watchEpoch)status=''
         return
@@ -313,7 +319,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
       if (attempt.epoch === watchEpoch && !operation) status = ''
       if (attempt.epoch === watchEpoch && remoteNavigation.getSnapshot().native) { status = ''; operation = undefined }
     }
-    catch (error) { refreshNeeded = true; remotePresentation()?.previewFailed?.(item); report(error, attempt.epoch) }
+    catch (error) { if(attempt.epoch===watchEpoch){refreshNeeded = true; remotePresentation()?.previewFailed?.(item); report(error, attempt.epoch)} }
     finally { finish(attempt.epoch, item.id, false, refreshNeeded) }
   }
   async function observe(item: RemoteOperation): Promise<void> {
@@ -399,7 +405,11 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   }
   const pointerChanged = (event: PointerEvent) => { if (!section.contains(event.target as Node | null)) ownedFocus = undefined }
   document.addEventListener('focusin', focusChanged); document.addEventListener('pointerdown', pointerChanged)
-  const unbindNavigation = remoteNavigation.bind((workspace, sessionId, create) => { if (!busy && (!offline||sessionId&&!create)) void run(workspace, sessionId, create) })
+  const unbindNavigation = remoteNavigation.bind((workspace, sessionId, create) => {
+    if ((!busy || sessionId && !create) && (!offline || sessionId && !create)) void run(workspace, sessionId, create)
+  }, () => {
+    watchEpoch++; watch?.abort(); watch = undefined; busy = false; operation = undefined; status = ''; failure = false; render()
+  })
   const unsubscribe = subscribeBodyInvalidations(render), stopLocale = locale?.subscribe(render), stopSelection = subscribeRemoteSelection(render)
   const stopNavigation = remoteNavigation.subscribe(() => { if (rows.hidden !== remoteNavigation.getSnapshot().native) render() })
   document.addEventListener('visibilitychange', refresh); window.addEventListener('offline', offlineChanged); window.addEventListener('online', onlineChanged)

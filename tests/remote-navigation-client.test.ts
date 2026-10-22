@@ -9,7 +9,8 @@ it('adds a page-local boot contribution without changing original manifest rows'
   navigationManifest(); navigationManifest()
   const result = (window as any).__DSH_BOOT__
   expect(original.entries).toHaveLength(1); expect(original.batches).toHaveLength(1)
-  expect(result.entries).toHaveLength(2); expect(result.batches).toHaveLength(2)
+  expect(result.entries).toHaveLength(3); expect(result.batches).toHaveLength(3)
+  expect(result.entries.some((row: any) => row.id === '@jay-local/dsh-ssh-drafts')).toBe(true)
 })
 
 it('retains only three visited Session clients, reuses them, and releases archives, expiry and page ownership', async () => {
@@ -89,4 +90,28 @@ it('opens Models through the owning remote shell and fails closed when that shel
     models=true;shell=false;expect(bridge.settings()).toBe(false)
     expect(openSession).not.toHaveBeenCalled();expect(openSection).toHaveBeenCalledOnce()
   }finally{cleanup.forEach(fn=>fn());delete(window as any).__dshSshNavigationOwner}
+})
+it('fences asynchronous draft preparation by the latest navigation and rechecks membership before selecting', async () => {
+  let registration:any,finish!:()=>void,firstSignal:AbortSignal|undefined
+  const cleanups:Array<()=>void>=[],archivedSessionIds:string[]=[],openSession=vi.fn()
+  vi.stubGlobal('__ModuleLoader__',{load:(value:any)=>{registration=value}})
+  const prepare=vi.fn(async(id:string,signal?:AbortSignal)=>{
+    if(id==='two'&&!firstSignal){firstSignal=signal;await new Promise<void>(resolve=>{finish=resolve})}
+  })
+  vi.stubGlobal('__dshSshDrafts',{prepare});navigationClient()
+  const ctx:any={uiWorkspace:{openSession},sessions:{list:{getSnapshot:()=>({byId:{one:{id:'one',retainedBy:{mainView:1}}}})}},
+    workspaces:{list:{getSnapshot:()=>({items:[{workspaceId:'project',sessionIds:['one','two','three']}],archivedSessionIds})}},
+    effect:(apply:()=>()=>void)=>cleanups.push(apply())}
+  ctx.root={inject:(_deps:string[],apply:(ctx:any)=>void)=>{apply(ctx);return{dispose:()=>cleanups.forEach(fn=>fn())}}}
+  registration.factory().apply(ctx)
+  try{
+    const bridge=(window as any).__dshSshView
+    const old=bridge.select('project','two');expect(openSession).not.toHaveBeenCalled()
+    expect(await bridge.select('project','three')).toBe(true)
+    expect(firstSignal!.aborted).toBe(true)
+    finish();expect(await old).toBe(false)
+    expect(openSession).toHaveBeenCalledExactlyOnceWith('three')
+    const removed=bridge.select('project','two');archivedSessionIds.push('two')
+    expect(await removed).toBe(false);expect(openSession).toHaveBeenCalledTimes(1)
+  }finally{cleanups.forEach(fn=>fn());delete(window as any).__dshSshNavigationOwner}
 })

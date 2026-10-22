@@ -11,11 +11,12 @@ export function navigationClient(): void {
     effect(fn: () => () => void, label: string): void
     root: { inject(deps: string[], apply: (ctx: Ctx) => void): { dispose(): unknown } }
   }
-  type Bridge = { state(): { sessionId?: string; workspaceId?: string }; open(sessionId: string): void; select(workspaceId: string, sessionId: string): boolean; settings():boolean }
+  type Bridge = { state(): { sessionId?: string; workspaceId?: string }; open(sessionId: string): boolean | Promise<boolean>; select(workspaceId: string, sessionId: string): boolean | Promise<boolean>; settings():boolean; cancelNavigation():void }
   const target = window as unknown as {
     __ModuleLoader__?: { load(value: unknown): void }
     __dshSshView?: Bridge
     __dshSshNavigationOwner?: { dispose(): unknown }
+    __dshSshDrafts?: { prepare(sessionId: string, signal?: AbortSignal): Promise<void> }
   }
   target.__ModuleLoader__?.load({ id: '@jay-local/dsh-ssh-navigation', factory: () => ({
     inject: ['uiWorkspace', 'sessions', 'workspaces','slots'],
@@ -31,6 +32,10 @@ export function navigationClient(): void {
     },
   }) })
   function install(ctx: Ctx): void {
+      let navigationAttempt = 0
+      let navigationRead:AbortController|undefined
+      const cancelNavigation=()=>{++navigationAttempt;navigationRead?.abort();navigationRead=undefined}
+      const attemptNavigation=()=>{cancelNavigation();navigationRead=new AbortController();return{attempt:navigationAttempt,signal:navigationRead.signal}}
       const retained = new Map<string, { reference: { release(): void }; usedAt: number }>()
       const release = (id: string) => { const value = retained.get(id); retained.delete(id); value?.reference.release() }
       const prune = () => {
@@ -60,7 +65,9 @@ export function navigationClient(): void {
         remember(sessionId)
       }
       const bridge: Bridge = {
+        cancelNavigation,
         settings() {
+          cancelNavigation()
           // Reach the owning remote shell's public slot/store contract only.
           // Missing contracts never fall back to the local Host's settings.
           if(!ctx.slots?.entries('settings.section').some(row=>row.options?.id==='models'))return false
@@ -83,7 +90,9 @@ export function navigationClient(): void {
         },
         open(sessionId) {
           if (typeof sessionId !== 'string' || !sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)) throw new Error('Invalid remote Session')
-          open(sessionId)
+          const {attempt,signal}=attemptNavigation()
+          const apply = () => { if (attempt !== navigationAttempt) return false; open(sessionId); return true }
+          return target.__dshSshDrafts ? target.__dshSshDrafts.prepare(sessionId,signal).then(apply) : apply()
         },
         select(workspaceId, sessionId) {
           if (typeof workspaceId !== 'string' || !workspaceId || typeof sessionId !== 'string' || !sessionId
@@ -91,17 +100,21 @@ export function navigationClient(): void {
           // The retained Client already follows this Host's live catalog. Do
           // not add network round trips to ordinary navigation or trust the
           // controller's saved sidebar list as proof of Workspace membership.
-          const catalog = ctx.workspaces.list.getSnapshot()
-          if (!catalog.items.some(item => item.workspaceId === workspaceId && item.sessionIds.includes(sessionId))
-            || catalog.archivedSessionIds?.includes(sessionId)) return false
-          open(sessionId)
-          return true
+          const member = () => {
+            const catalog = ctx.workspaces.list.getSnapshot()
+            return catalog.items.some(item => item.workspaceId === workspaceId && item.sessionIds.includes(sessionId)) && !catalog.archivedSessionIds?.includes(sessionId)
+          }
+          if (!member()) return false
+          const {attempt,signal}=attemptNavigation()
+          const apply = () => { if (attempt !== navigationAttempt || !member()) return false; open(sessionId); return true }
+          return target.__dshSshDrafts ? target.__dshSshDrafts.prepare(sessionId,signal).then(apply) : apply()
         },
       }
       target.__dshSshView = bridge
       const expiry = setInterval(prune, 30000)
       document.documentElement.setAttribute('data-dsh-ssh-navigation', 'ready')
       ctx.effect(() => () => {
+        cancelNavigation()
         clearInterval(expiry)
         for (const id of retained.keys()) release(id)
         if (target.__dshSshView === bridge) { delete target.__dshSshView; document.documentElement.removeAttribute('data-dsh-ssh-navigation') }
@@ -117,9 +130,13 @@ export function navigationManifest(): void {
   const target = window as unknown as { __DSH_BOOT__?: { entries: Row[]; batches?: Batch[] } }
   const boot = target.__DSH_BOOT__
   if (!boot || !Array.isArray(boot.entries)) return
-  const id = '@jay-local/dsh-ssh-navigation', rev = 'native-navigation-4', url = '/__dsh_remote/navigation-client.js?rev=' + rev
-  if (boot.entries.some(row => row.id === id)) return
-  target.__DSH_BOOT__ = { ...boot, entries: [...boot.entries, { id, url, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] }],
-    ...(Array.isArray(boot.batches) ? { batches: [...boot.batches, { phase: 'application', url, rev, entries: [id] }] } : {}),
+  const rev = 'native-navigation-5'
+  const additions: Row[] = [
+    { id: '@jay-local/dsh-ssh-navigation', url: '/__dsh_remote/navigation-client.js?rev=' + rev, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] },
+    { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-1', rev: 'local-drafts-1', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },
+  ].filter(row => !boot.entries.some(existing => existing.id === row.id))
+  if (!additions.length) return
+  target.__DSH_BOOT__ = { ...boot, entries: [...boot.entries, ...additions],
+    ...(Array.isArray(boot.batches) ? { batches: [...boot.batches, ...additions.map(row => ({ phase: 'application', url: row.url, rev: row.rev, entries: [row.id] }))] } : {}),
   }
 }

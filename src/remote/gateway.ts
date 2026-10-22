@@ -8,6 +8,10 @@ import { RemoteFailureError } from './errors.ts'
 import { WebSocket } from 'ws'
 import { navigationClient } from './navigation-client.ts'
 import type { HistoryRecord } from './history-cache.ts'
+import { LocalDraftStore, DraftConflictError, type DraftWrite } from './draft-store.ts'
+import { readJsonBody } from '../http.ts'
+import { draftClient, seedDraft, type DraftSeed } from './draft-client.ts'
+import { createDraftReplica } from './draft-replica.ts'
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
 const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
@@ -29,7 +33,7 @@ export class RemoteGateway {
   onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
   constructor(public localPort: number, readonly receipt: RemoteReceipt, readonly alias: string, readonly returnUrl: string,
-    readonly hostId: string, readonly recoveryProof: string) {
+    readonly hostId: string, readonly recoveryProof: string, private readonly drafts?: LocalDraftStore) {
     this.server = createServer((req, res) => { void this.handle(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' })
       res.end('Remote DSH is unavailable. The request was not replayed.')
@@ -226,12 +230,45 @@ export class RemoteGateway {
     }
     const session = this.authenticated(req)
     if (!session) { res.writeHead(401); res.end('Reopen this remote workspace from the local DSH window.'); return }
+    if (url.pathname === '/__dsh_remote/draft') {
+      const reply = (status: number, value: unknown) => {
+        res.writeHead(status, { 'content-type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+        res.end(JSON.stringify(value))
+      }
+      if (!this.drafts) { reply(404, { error: 'Local draft storage is unavailable' }); return }
+      const sessionId = url.searchParams.get('sessionId') ?? ''
+      if (!sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)) { reply(400, { error: 'Invalid draft session' }); return }
+      try {
+        if (req.method === 'GET') {
+          reply(200, { draft: await this.drafts.read(this.hostId, sessionId), issue: this.drafts.writeIssue }); return
+        }
+        if (req.method !== 'PUT') { reply(405, { error: 'Unsupported draft method' }); return }
+        const body = await readJsonBody(req, { maxBytes: 64 * 1024 * 1024, objectOnly: true })
+        if (!body || typeof body !== 'object') { reply(400, { error: 'Invalid draft snapshot' }); return }
+        reply(200, { draft: await this.drafts.write(this.hostId, sessionId, body as DraftWrite) })
+      } catch (error) {
+        if (error instanceof DraftConflictError) reply(409, { error: error.message, code: 'draft/conflict' })
+        else reply(507, { error: 'Local draft save could not be confirmed. Keep this view open to retain the current input.', code: 'draft/storage-unavailable' })
+      }
+      return
+    }
     if (url.pathname === '/__dsh_remote/navigation-client.js' && req.method === 'GET' && session.embedded) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
       res.end(`(${navigationClient.toString()})();`); return
     }
+    if (url.pathname === '/__dsh_remote/draft-client.js' && req.method === 'GET' && session.embedded) {
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+      res.end(`(${draftClient.toString()})(${JSON.stringify(this.hostId)},(${createDraftReplica.toString()}),(${seedDraft.toString()}));`); return
+    }
     if (url.pathname === '/__dsh_remote/status') {
       res.writeHead(200, { 'content-type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ready: await this.healthy() })); return
+    }
+    const initialSessionId = url.pathname === '/' && req.method === 'GET' ? session.sessionId : undefined
+    let draftSeed: DraftSeed | undefined
+    if (initialSessionId && this.drafts) {
+      draftSeed = { hostId: this.hostId, sessionId: initialSessionId }
+      try { draftSeed.draft = await this.drafts.read(this.hostId, initialSessionId); draftSeed.issue = this.drafts.writeIssue }
+      catch { draftSeed.issue = 'Saved draft could not be read. Keep existing browser text; no saved file was replaced.' }
     }
     const port = this.localPort, release = this.retainRequest(port)
     const upstreamOrigin = `http://127.0.0.1:${port}`
@@ -249,14 +286,17 @@ export class RemoteGateway {
           incoming.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 8 * 1024 * 1024) incoming.destroy(new Error('Remote HTML exceeded limit')); else chunks.push(chunk) })
           incoming.once('error', reject)
           incoming.once('end', () => {
+            try {
             delete headers['content-length']; delete headers['content-encoding']; delete headers.etag
             headers['cache-control'] = 'no-store'
             // Consume navigation once; later reloads preserve the remote client's current session.
-            const selected = session.sessionId; delete session.sessionId
+            const selected = initialSessionId
+            if (session.sessionId === selected) delete session.sessionId
             const body = remotePage(Buffer.concat(chunks).toString('utf8'), {
-              alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded,
+              alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded, draftSeed,
             })
             res.writeHead(incoming.statusCode ?? 200, headers); res.end(body); resolve()
+            } catch (error) { reject(error) }
           })
         })
         upstream.once('error', reject)

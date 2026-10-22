@@ -57,7 +57,7 @@ it('uses an isolated Desktop guest without leaving the app, and returning/reopen
   // Closing the Add workspace observer after opening must not kill the view.
   lifetime.abort(); expect(f.bridge.release).not.toHaveBeenCalled()
   const back = [...document.querySelectorAll('button')].find(button => button.textContent === 'Return to local')!
-  back.click(); expect(f.local.inert).not.toBe(true)
+  back.click(); await vi.waitFor(() => expect(f.local.inert).not.toBe(true))
   expect(guest.isConnected).toBe(true)
   await openRemoteWorkspace(workspace)
   expect(f.fetch).toHaveBeenCalledOnce(); expect(guest.loadURL).toHaveBeenCalledOnce()
@@ -79,7 +79,7 @@ it('isolates Hosts and selects another Session through native navigation without
   await session.promise
   await openRemoteWorkspace(workspace, 'different-session')
   expect(first.guest.hidden).toBe(false); expect(second.guest.hidden).toBe(true)
-  expect(first.guest.executeJavaScript).toHaveBeenCalledWith('Boolean(window.__dshSshView?.select?.("remote-work","different-session"))')
+  expect(first.guest.executeJavaScript).toHaveBeenCalledWith('(async()=>Boolean(await window.__dshSshView?.select?.("remote-work","different-session")))()')
   expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(2)
   expect(f.guests).toHaveLength(2)
   expect(f.guests.every(guest => guest.loadURL.mock.calls.length === 1)).toBe(true)
@@ -88,7 +88,7 @@ it('isolates Hosts and selects another Session through native navigation without
 it('falls back to authenticated backend validation when the retained catalog cannot select a Session', async () => {
   const f = fixture(), first = await f.start()
   first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
-  first.guest.executeJavaScript.mockResolvedValueOnce(false)
+  first.guest.executeJavaScript.mockImplementation(async (code: string) => !code.includes('__dshSshView?.select'))
   await openRemoteWorkspace(workspace, 'not-yet-observed')
   expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(2)
   expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('window.__dshSshView.open("not-yet-observed")')
@@ -100,7 +100,7 @@ it('switches projects on the same retained Host without another launch request o
   first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
   await openRemoteWorkspace({ ...workspace, id: 'other-project', workspaceId: 'other-remote-work', remotePath: '/other' }, 'other-session')
   expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(1)
-  expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('Boolean(window.__dshSshView?.select?.("other-remote-work","other-session"))')
+  expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('(async()=>Boolean(await window.__dshSshView?.select?.("other-remote-work","other-session")))()')
   expect(f.guests).toHaveLength(1); expect(first.guest.loadURL).toHaveBeenCalledOnce()
 })
 
@@ -188,9 +188,9 @@ it('requires draft-loss confirmation before releasing a Host view without any re
   const f = fixture(), view = await f.start()
   view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
   const confirmation = vi.spyOn(window, 'confirm').mockReturnValue(false)
-  remotePresentation()!.close!(workspace)
+  await remotePresentation()!.close!(workspace)
   expect(view.guest.isConnected).toBe(true); expect(f.bridge.release).not.toHaveBeenCalled()
-  confirmation.mockReturnValue(true); remotePresentation()!.close!(workspace)
+  confirmation.mockReturnValue(true); await remotePresentation()!.close!(workspace)
   expect(view.guest.isConnected).toBe(false); expect(f.bridge.release).toHaveBeenCalledExactlyOnceWith('lease-0')
   expect(f.fetch).toHaveBeenCalledOnce()
 })
@@ -205,8 +205,9 @@ it('routes model settings only to the requested retained Host, without opening a
   let finish!:(ok:boolean)=>void
   first.guest.executeJavaScript.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
   const pending=remotePresentation()!.settings!(workspace)
+  await vi.waitFor(()=>expect(first.guest.executeJavaScript).toHaveBeenCalled())
   expect(first.guest.executeJavaScript).toHaveBeenCalledExactlyOnceWith('Boolean(window.__dshSshView?.settings?.())')
-  expect(second.guest.executeJavaScript).not.toHaveBeenCalled()
+  expect(second.guest.executeJavaScript.mock.calls.every(([code])=>code.includes('__dshSshDrafts.flush'))).toBe(true)
   await openRemoteWorkspace(secondWorkspace)
   finish(true);expect(await pending).toBe(true)
   expect(second.guest.hidden).toBe(false);expect(first.guest.hidden).toBe(true)
@@ -221,7 +222,27 @@ it('does not show a superseded retained Session after its native selection resol
   first.guest.executeJavaScript.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
   const observer=new AbortController(),pending=remotePresentation()!.resume(workspace,'superseded',observer.signal)
   const rejected=expect(pending).rejects.toMatchObject({name:'AbortError'})
+  await vi.waitFor(()=>expect(first.guest.executeJavaScript.mock.calls.some(([code])=>code.includes('__dshSshView?.select'))).toBe(true))
   observer.abort();finish(true);await rejected
   expect(first.guest.hidden).toBe(true);expect(second.guest.hidden).toBe(false)
   expect(f.fetch).toHaveBeenCalledTimes(2)
+})
+it('waits for a Promise returned by the remote selector rather than accepting the Promise as true',async()=>{
+  const f=fixture(),view=await f.start();view.guest.dispatchEvent(new Event('dom-ready'));await view.promise
+  vi.stubGlobal('__dshSshView',{select:async()=>false})
+  view.guest.executeJavaScript.mockImplementation(async(code:string)=>code.includes('__dshSshView?.select')?await new Function(`return ${code}`)():true)
+  await openRemoteWorkspace(workspace,'cold')
+  expect(f.fetch.mock.calls.filter(([url])=>String(url).endsWith('/remote/open'))).toHaveLength(2)
+  expect(view.guest.loadURL).toHaveBeenCalledOnce()
+})
+it('retains an unsaved Host view when switching or closing cannot confirm its draft',async()=>{
+  const f=fixture(),view=await f.start();view.guest.dispatchEvent(new Event('dom-ready'));await view.promise
+  view.guest.executeJavaScript.mockImplementation(async(code:string)=>!code.includes('__dshSshDrafts.flush'))
+  await expect(openRemoteWorkspace(workspace,'different')).rejects.toMatchObject({name:'DraftSaveError'})
+  vi.spyOn(window,'confirm').mockReturnValue(true)
+  await expect(remotePresentation()!.close!(workspace)).rejects.toMatchObject({name:'DraftSaveError'})
+  expect(view.guest.isConnected).toBe(true)
+  expect(f.bridge.release).not.toHaveBeenCalled()
+  expect(f.fetch).toHaveBeenCalledOnce()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')
 })

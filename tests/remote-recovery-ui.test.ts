@@ -2,7 +2,9 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { connectRemoteWorkspace, mountRemoteWorkspaces } from '../src/client/remote-workspaces.ts'
 import { registerRemotePresentation } from '../src/client/remote-presentation.ts'
-vi.mock('../src/client/history-cache.ts', () => ({ mountHistoryCache: () => () => {}, warmHistoryCopy() {}, markHistoryRequested() {} }))
+import { remoteNavigation } from '../src/client/remote-navigation.ts'
+import { warmHistoryCopy } from '../src/client/history-cache.ts'
+vi.mock('../src/client/history-cache.ts', () => ({ mountHistoryCache: () => () => {}, warmHistoryCopy:vi.fn(), markHistoryRequested() {} }))
 
 afterEach(() => {
   vi.unstubAllGlobals(); vi.useRealTimers(); document.body.replaceChildren()
@@ -42,6 +44,26 @@ it('starts one authenticated recovery from the local page and leaves a failed at
 const workspace = { id: 'workspace-1', hostId: 'a'.repeat(24), alias: 'fixture', remotePath: '/remote/project', title: 'project [SSH:fixture]', workspaceId: 'remote-1' }
 const response = (value: object) => ({ ok: true, json: async () => value })
 const sidebar = () => { document.documentElement.lang = 'en'; document.body.innerHTML = '<aside data-pane="sidebar"><div role="tree"></div></aside>' }
+
+it('accepts a newer cached choice while a previous choice is waiting and ignores the late completion',async()=>{
+  vi.useFakeTimers();sidebar();vi.mocked(warmHistoryCopy).mockClear()
+  const fetchMock=vi.fn(async()=>response({workspaces:[workspace],hosts:[{hostId:workspace.hostId,phase:'ready'}]}))
+  vi.stubGlobal('fetch',fetchMock)
+  let finish!:(value:boolean)=>void
+  const previewFailed=vi.fn(),resume=vi.fn((_workspace:unknown,id?:string)=>id==='old'?new Promise<boolean>(resolve=>{finish=resolve}):true)
+  const unregister=registerRemotePresentation({resume,previewFailed,open:vi.fn()}),dispose=mountRemoteWorkspaces()
+  try{
+    await vi.advanceTimersByTimeAsync(0)
+    const reads=fetchMock.mock.calls.length
+    remoteNavigation.open(workspace,'old');await vi.advanceTimersByTimeAsync(0)
+    remoteNavigation.open(workspace,'new');await vi.advanceTimersByTimeAsync(0)
+    expect(resume.mock.calls.map(call=>call[1])).toEqual(['old','new'])
+    finish(true);await vi.advanceTimersByTimeAsync(0)
+    expect(warmHistoryCopy).toHaveBeenCalledExactlyOnceWith(workspace,'new')
+    expect(previewFailed).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(reads)
+  }finally{dispose();unregister()}
+})
 
 it('switches an already connected remote conversation without setup or a leftover connecting notice', async () => {
   vi.useFakeTimers(); sidebar()

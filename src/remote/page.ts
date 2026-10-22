@@ -1,4 +1,5 @@
 import { navigationManifest } from './navigation-client.ts'
+import { seedDraft, type DraftSeed } from './draft-client.ts'
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const jsonScript = (value: unknown) => JSON.stringify(value).replaceAll('<', '\\u003c')
@@ -97,8 +98,10 @@ function connectionLamp(recovery: { returnUrl: string; hostId: string; proof: st
 }
 
 /** Host identity stays visible while the remote service owns native workspace/session navigation. */
-export function remotePage(html: string, options: { alias: string; returnUrl: string; hostId: string; recoveryProof: string; sessionId?: string; embedded?: boolean }): string {
-  const init = options.sessionId ? `<script>localStorage.setItem('dsh.sessions.current',${jsonScript(JSON.stringify({ sessionId: options.sessionId }))});</script>` : ''
+export function remotePage(html: string, options: { alias: string; returnUrl: string; hostId: string; recoveryProof: string; sessionId?: string; embedded?: boolean; draftSeed?: DraftSeed }): string {
+  if (options.draftSeed && (options.draftSeed.hostId !== options.hostId || options.draftSeed.sessionId !== options.sessionId)) throw new Error('Invalid saved draft ownership')
+  const init = (options.sessionId ? `<script>localStorage.setItem('dsh.sessions.current',${jsonScript(JSON.stringify({ sessionId: options.sessionId }))});</script>` : '')
+    + (options.draftSeed ? `<script>(${seedDraft.toString()})(${jsonScript(options.draftSeed)},true);</script>` : '')
   const bar = `<div id="dsh-remote-host" data-state="checking" data-recovery="false"${options.embedded ? ' data-desktop="true"' : ''} aria-label="SSH">
     <div class="dsh-remote-identity"><span class="dsh-remote-tag">SSH</span><strong title="${escapeHtml(options.alias)}">${escapeHtml(options.alias)}</strong></div>
     <div class="dsh-remote-connection"><span id="dsh-remote-lamp" role="img" aria-label="SSH checking"></span><span id="dsh-remote-status" role="status" aria-live="polite"></span></div>

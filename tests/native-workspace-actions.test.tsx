@@ -13,13 +13,13 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives',async()=>{
   return{MenuItemButton:({children,disabled,onSelect}:any)=>createElement('button',{type:'button',role:'menuitem',disabled,onClick:onSelect},children)}
 })
 
-let root:Root|undefined,release:(()=>void)|undefined
-afterEach(()=>{act(()=>root?.unmount());root=undefined;release?.();release=undefined;remoteNavigation.clear();selectRemoteView();vi.unstubAllGlobals();document.body.replaceChildren()})
+let root:Root|undefined,release:(()=>void)|undefined,unbind:(()=>void)|undefined
+afterEach(()=>{act(()=>root?.unmount());root=undefined;release?.();release=undefined;unbind?.();unbind=undefined;remoteNavigation.clear();selectRemoteView();vi.restoreAllMocks();vi.unstubAllGlobals();document.body.replaceChildren()})
 function NativeMenuOwner(props:any){
   const [open,setOpen]=useState(false)
   return <><button onClick={()=>setOpen(value=>!value)}>Session actions</button>{open&&<div role="menu">
     {props.renderSlot('sidebar.workspaces.session.menu.item',{sessionId:props.fixtureSessionKey},{hookContext:[open,setOpen]})}
-  </div>}</>
+  </div>}<button onClick={()=>props.open('local-fixture')}>Open local fixture</button><button onClick={()=>props.open(props.fixtureSessionKey)}>Open remote fixture</button></>
 }
 async function fixture(ok=true){
   document.documentElement.lang='en';(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true
@@ -77,4 +77,39 @@ it('does not close a newly opened menu when the previous opening finishes late',
   expect(document.querySelector('[role="menu"]')).not.toBeNull()
   expect(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!.disabled).toBe(false)
   expect(f.settings).toHaveBeenCalledTimes(1)
+})
+it('keeps the current view when local navigation cannot confirm its remote draft save',async()=>{
+  const f=await fixture();release?.()
+  release=registerRemotePresentation({resume:()=>false,open:async()=>{},beforeLeave:async()=>{throw Object.assign(new Error('Generated unsaved'),{name:'DraftSaveError'})}})
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Open local fixture')!.click()})
+  expect(f.local).not.toHaveBeenCalled()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')
+})
+it('lets a newer remote choice supersede an older local click waiting on a save',async()=>{
+  const f=await fixture();release?.()
+  let finish!:()=>void
+  release=registerRemotePresentation({resume:()=>false,open:async()=>{},beforeLeave:()=>new Promise<void>(resolve=>{finish=resolve})})
+  const opened=vi.fn();unbind=remoteNavigation.bind(opened)
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Open local fixture')!.click()})
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Open remote fixture')!.click()})
+  await act(async()=>{finish()})
+  expect(f.local).not.toHaveBeenCalled();expect(opened).toHaveBeenCalledExactlyOnceWith(f.second,'same',false)
+})
+it('does not dispatch an old local callback after its sidebar unmounts',async()=>{
+  const f=await fixture();release?.()
+  let finish!:()=>void
+  release=registerRemotePresentation({resume:()=>false,open:async()=>{},beforeLeave:()=>new Promise<void>(resolve=>{finish=resolve})})
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='Open local fixture')!.click()})
+  await act(async()=>{root!.unmount()});root=undefined
+  await act(async()=>{finish()})
+  expect(f.local).not.toHaveBeenCalled()
+})
+it('keeps a blocked close in the owning menu and explains the unsaved draft',async()=>{
+  const f=await fixture();release?.()
+  const close=vi.fn(async()=>{throw Object.assign(new Error('Generated unsaved'),{name:'DraftSaveError'})})
+  release=registerRemotePresentation({resume:()=>false,open:async()=>{},close})
+  await act(async()=>{document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[2]!.click()})
+  expect(close).toHaveBeenCalledExactlyOnceWith(f.second)
+  expect(document.querySelector('[role="menu"]')).not.toBeNull()
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')
 })
