@@ -91,3 +91,16 @@ it('schedules only saved histories on existing carriers without relying on a mou
   expect(sync).toHaveBeenCalledOnce()
   f.manager.setEnabled(false);await (f.manager as any).refreshSavedHistories();expect(sync).toHaveBeenCalledOnce()
 })
+
+it('returns local Host observations immediately while one shared health probe is unresolved',async()=>{
+  const f=fixture();let finish!:(healthy:boolean)=>void
+  f.gateway.healthy.mockImplementation(()=>new Promise(resolve=>{finish=resolve}))
+  const first=await f.manager.status(),second=await f.manager.status()
+  expect(first).toEqual([{hostId:f.hostId,phase:'connecting',checking:true}]);expect(second).toEqual(first)
+  expect(f.gateway.healthy).toHaveBeenCalledOnce();finish(true)
+  for(let n=0;n<8;n++)await Promise.resolve()
+  expect(await f.manager.status()).toMatchObject([{hostId:f.hostId,phase:'ready',checking:false,checkedAt:expect.any(Number)}])
+  f.store.update('fixture',{user:'different-owner'})
+  expect(await f.manager.status()).toEqual([{hostId:f.hostId,phase:'disconnected'}])
+  expect(f.gateway.healthy).toHaveBeenCalledOnce()
+})

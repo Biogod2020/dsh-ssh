@@ -36,7 +36,7 @@ export function remoteSessionRows(workspace: RemoteWorkspace, open: (sessionId?:
       if (!button) {
         button = document.createElement('button'); button.type = 'button'; button.className = css.remoteSessionRow
         button.dataset.remoteSessionId = session.sessionId
-        button.onclick = () => { if (!busy && !offline) open(session.sessionId) }
+        button.onclick = () => { if (!busy) open(session.sessionId) }
         keyed.set(session.sessionId, button)
       }
       const title = session.title || (session.blank ? tt('remote.newSessionTitle') : session.sessionId)
@@ -45,7 +45,7 @@ export function remoteSessionRows(workspace: RemoteWorkspace, open: (sessionId?:
       if (button.textContent !== title) button.textContent = title
       button.setAttribute('aria-label', label)
       button.title = `${workspace.alias} · ${workspace.remotePath}\n${label}`
-      button.disabled = busy || offline
+      button.disabled = busy
       button.dataset.running = String(!catalog?.stale && session.running)
       if (selected?.workspaceId === workspace.id && selected.sessionId === session.sessionId) button.setAttribute('aria-current', 'page')
       else button.removeAttribute('aria-current')

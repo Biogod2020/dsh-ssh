@@ -212,3 +212,16 @@ it('routes model settings only to the requested retained Host, without opening a
   expect(second.guest.hidden).toBe(false);expect(first.guest.hidden).toBe(true)
   expect(f.fetch).toHaveBeenCalledTimes(2);expect(f.guests).toHaveLength(2)
 })
+
+it('does not show a superseded retained Session after its native selection resolves late',async()=>{
+  const f=fixture(),first=await f.start();first.guest.dispatchEvent(new Event('dom-ready'));await first.promise
+  const secondWorkspace={...workspace,id:'second',hostId:'b'.repeat(24),alias:'second'}
+  const second=await f.start(secondWorkspace);second.guest.dispatchEvent(new Event('dom-ready'));await second.promise
+  let finish!:(ok:boolean)=>void
+  first.guest.executeJavaScript.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
+  const observer=new AbortController(),pending=remotePresentation()!.resume(workspace,'superseded',observer.signal)
+  const rejected=expect(pending).rejects.toMatchObject({name:'AbortError'})
+  observer.abort();finish(true);await rejected
+  expect(first.guest.hidden).toBe(true);expect(second.guest.hidden).toBe(false)
+  expect(f.fetch).toHaveBeenCalledTimes(2)
+})

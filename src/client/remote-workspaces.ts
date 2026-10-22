@@ -74,7 +74,7 @@ export async function observeRemoteOperation(id: string, progress: Progress, opt
 export async function openRemoteWorkspace(workspace: RemoteWorkspace, sessionId?: string, options: RequestOptions = {}): Promise<void> {
   options.signal?.throwIfAborted()
   const presentation = remotePresentation()
-  if (await presentation?.resume(workspace, sessionId)) { warmHistoryCopy(workspace, sessionId); return }
+  if (await presentation?.resume(workspace, sessionId,options.signal)) { warmHistoryCopy(workspace, sessionId); return }
   if (sessionId) void presentation?.preview?.(workspace, sessionId, options.signal).catch(() => {})
   if (window.location.protocol === 'dsh-app:' && !presentation) throw new Error(tt('remote.desktopUnavailable'))
   const { url, sessionId: selected } = await json<{ url: string; sessionId?: string }>('open', { id: workspace.id, ...(sessionId ? { sessionId } : {}) }, options)
@@ -177,7 +177,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
         const path = document.createElement('span'); path.className = css.remoteWorkspacePath
         const state = document.createElement('span'); state.className = css.remoteWorkspaceState
         const node = document.createElement('div'); node.className = css.remoteProject
-        const sessions = remoteSessionRows(item, (sessionId, create) => { if (!busy && !offline) void run(item, sessionId, create) })
+        const sessions = remoteSessionRows(item, (sessionId, create) => { if (!busy && (!offline||sessionId&&!create)) void run(item, sessionId, create) })
         copy.append(name, path, state); button.append(lamp, copy); node.append(button, sessions.node)
         row = { node, sessions, button, lamp, name, path, state }; keyed.set(item.id, row)
       }
@@ -292,6 +292,18 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     let refreshNeeded = false
     busy = true; activeItem = item.id; operation = undefined; failure = false; status = tt('remote.phase.connecting'); render()
     try {
+      // A ready retained Client is sufficient for a local switch. A slow or
+      // stale health observation must not force another remote preparation.
+      if(!create&&sessionId&&await remotePresentation()?.resume(item,sessionId,attempt.options.signal)){
+        if(!offline)warmHistoryCopy(item,sessionId)
+        if(attempt.epoch===watchEpoch)status=''
+        return
+      }
+      if(offline){
+        if(!create&&sessionId){await remotePresentation()?.preview?.(item,sessionId,attempt.options.signal);remotePresentation()?.previewFailed?.(item)}
+        if(attempt.epoch===watchEpoch)status=''
+        return
+      }
       const ready = hosts.find(x => x.hostId === item.hostId)?.phase === 'ready' && !stale
       refreshNeeded = !ready || create || !sessionId
       if (!ready && sessionId) void remotePresentation()?.preview?.(item, sessionId, attempt.options.signal).catch(() => {})
@@ -387,7 +399,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   }
   const pointerChanged = (event: PointerEvent) => { if (!section.contains(event.target as Node | null)) ownedFocus = undefined }
   document.addEventListener('focusin', focusChanged); document.addEventListener('pointerdown', pointerChanged)
-  const unbindNavigation = remoteNavigation.bind((workspace, sessionId, create) => { if (!busy && !offline) void run(workspace, sessionId, create) })
+  const unbindNavigation = remoteNavigation.bind((workspace, sessionId, create) => { if (!busy && (!offline||sessionId&&!create)) void run(workspace, sessionId, create) })
   const unsubscribe = subscribeBodyInvalidations(render), stopLocale = locale?.subscribe(render), stopSelection = subscribeRemoteSelection(render)
   const stopNavigation = remoteNavigation.subscribe(() => { if (rows.hidden !== remoteNavigation.getSnapshot().native) render() })
   document.addEventListener('visibilitychange', refresh); window.addEventListener('offline', offlineChanged); window.addEventListener('online', onlineChanged)

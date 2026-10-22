@@ -18,7 +18,7 @@ import { readHistoryDelta } from './history-reader.ts'
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
 interface HostCatalog { workspaces: Awaited<ReturnType<RemoteGateway['workspaceSnapshot']>>; sessions: { items: SessionSummary[] }; checkedAt: number }
-interface Runtime { node: string; gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
+interface Runtime { node: string; gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; health?:{healthy:boolean;checkedAt:number};healthRead?:Promise<boolean>; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
 interface ManagerOptions {
   installer: string; bootstrap: string; root?: string; remoteRoot?: string; returnUrl: () => string
   legacy?: () => Array<{ alias: string; remotePath: string; title: string }>
@@ -178,16 +178,32 @@ export class RemoteWorkspaces {
     if (!timingSafeEqual(expected, Buffer.from(proof, 'hex'))) throw new Error('Unknown remote recovery link')
     return this.connect(item.alias, item.remotePath)
   }
-  async status(): Promise<Array<{ hostId: string; phase: RemotePhase }>> {
+  async status(): Promise<Array<{ hostId: string; phase: RemotePhase; checkedAt?:number; checking?:boolean }>> {
     const pending = [...this.operations.values()].filter(x => x.hostId && !['ready', 'failed'].includes(x.phase))
-    return Promise.all([...new Set([...this.catalog().map(x => x.hostId), ...pending.map(x => x.hostId!)])].map(async hostId => {
+    return [...new Set([...this.catalog().map(x => x.hostId), ...pending.map(x => x.hostId!)])].map(hostId => {
       const preparing = pending.find(x => x.hostId === hostId)
       if (preparing) return { hostId, phase: preparing.phase }
       const runtime = this.runtimes.get(hostId)
-      const healthy = runtime && await runtime.gateway.healthy()
-      if (runtime && !healthy) runtime.catalog = undefined
-      return { hostId, phase: healthy && runtime && this.ownerMatches(runtime.alias, hostId, runtime.updatedAt) && this.runtimes.get(hostId) === runtime ? 'ready' : 'disconnected' }
-    }))
+      if(!runtime||!this.ownerMatches(runtime.alias,hostId,runtime.updatedAt))return{hostId,phase:'disconnected' as const}
+      const health=runtime.health
+      if(!health||Date.now()-health.checkedAt>=5000)void this.probeHealth(runtime).catch(()=>{})
+      const stale=!health||Date.now()-health.checkedAt>=10000
+      return {hostId,phase:!health||stale?'connecting' as const:health.healthy?'ready' as const:'disconnected' as const,
+        ...(health?{checkedAt:health.checkedAt}:{}),checking:!!runtime.healthRead}
+    })
+  }
+  private probeHealth(runtime:Runtime):Promise<boolean>{
+    if(runtime.healthRead)return runtime.healthRead
+    const port=runtime.gateway.localPort
+    const read=(async()=>{
+      const healthy=await runtime.gateway.healthy()
+      if(!this.disposed&&this.enabled&&this.runtimes.get(runtime.hostId)===runtime&&runtime.gateway.localPort===port
+        &&this.ownerMatches(runtime.alias,runtime.hostId,runtime.updatedAt)){
+        runtime.health={healthy,checkedAt:Date.now()};if(!healthy)runtime.catalog=undefined
+      }
+      return healthy
+    })().finally(()=>{if(runtime.healthRead===read)runtime.healthRead=undefined})
+    runtime.healthRead=read;return read
   }
   /** Health reads and SSH tunnel handshakes may repeat; user commands and writes never do. */
   async repairConnections(): Promise<void> {
@@ -197,7 +213,7 @@ export class RemoteWorkspaces {
       let replacement: string | undefined
       try {
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
-        const healthy = await runtime.gateway.healthy()
+        const healthy = await this.probeHealth(runtime)
         if (this.disposed || !this.enabled || this.runtimes.get(runtime.hostId) !== runtime) return
         if (healthy) { runtime.failures = 0; runtime.healthMisses = 0; return }
         runtime.healthMisses = (runtime.healthMisses ?? 0) + 1
@@ -217,6 +233,7 @@ export class RemoteWorkspaces {
         if (this.disposed || !this.enabled || !this.ownerMatches(runtime.alias, runtime.hostId, runtime.updatedAt) || this.runtimes.get(runtime.hostId) !== runtime) return
         const previousTunnel = runtime.tunnelId
         runtime.tunnelId = tunnel.id; replacement = undefined; runtime.failures = 0; runtime.healthMisses = 0
+        runtime.health={healthy:true,checkedAt:Date.now()}
         await runtime.gateway.retireTunnel(previousPort, () => { this.engine.stopWorkspaceTunnel(previousTunnel) })
       } catch { runtime.retryAt = Date.now() + Math.min(30000, 1000 * 2 ** ++runtime.failures) }
       finally { if (replacement) this.engine.stopWorkspaceTunnel(replacement); runtime.repairing = false }
@@ -333,7 +350,7 @@ export class RemoteWorkspaces {
       const gateway = new RemoteGateway(tunnel.localPort, receipt, alias, this.options.returnUrl(), hostId, this.recoveryProof(hostId))
       try { await gateway.start() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       try { check() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
-      runtime = { node: installed.node, gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0 }; this.runtimes.set(hostId, runtime)
+      runtime = { node: installed.node, gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0,health:{healthy:true,checkedAt:Date.now()} }; this.runtimes.set(hostId, runtime)
       const owner = runtime
       gateway.onCatalogChange = () => {
         if (this.runtimes.get(hostId) !== owner) return

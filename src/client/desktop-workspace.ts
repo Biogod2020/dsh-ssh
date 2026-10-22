@@ -130,7 +130,8 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
       const view = views.get(viewKey(workspace))
       if (view && window.confirm(tt('remote.closeViewConfirm'))) drop(view)
     },
-    async resume(workspace, sessionId) {
+    async resume(workspace, sessionId, signal) {
+      signal?.throwIfAborted()
       if (identities.has(workspace.id) && identities.get(workspace.id) !== workspace.hostId) throw new Error(tt('remote.desktopIdentityChanged'))
       const view = views.get(viewKey(workspace))
       if (!view || !view.ready) return false
@@ -140,12 +141,13 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
         try {
           accepted = await view.guest.executeJavaScript<boolean>(`Boolean(window.__dshSshView?.select?.(${JSON.stringify(workspace.workspaceId)},${JSON.stringify(sessionId)}))`)
         } catch { return false }
+        signal?.throwIfAborted()
         if (!accepted || disposed || views.get(viewKey(workspace)) !== view || !view.ready) return false
         identities.set(workspace.id, workspace.hostId)
         view.workspace = workspace; view.sessionId = sessionId
         view.guest.setAttribute('aria-label', `${workspace.alias} · ${workspace.remotePath}`)
       }
-      show(view); return true
+      signal?.throwIfAborted();show(view); return true
     },
     async open(workspace, url, signal, sessionId) {
       signal?.throwIfAborted()

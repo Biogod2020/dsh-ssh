@@ -56,11 +56,45 @@ it('switches an already connected remote conversation without setup or a leftove
     const reads = fetchMock.mock.calls.length
     document.querySelector<HTMLButtonElement>('[data-remote-session-id="original"]')!.click()
     await vi.advanceTimersByTimeAsync(0)
-    expect(resume).toHaveBeenCalledExactlyOnceWith(workspace, 'original')
+    expect(resume).toHaveBeenCalledExactlyOnceWith(workspace, 'original',expect.any(AbortSignal))
     expect(fetchMock).toHaveBeenCalledTimes(reads)
     expect(fetchMock.mock.calls.every(([url]) => !String(url).endsWith('/connect') && !String(url).endsWith('/open'))).toBe(true)
     expect(document.querySelector('[data-dsh-remote-workspaces] [aria-live="polite"]')?.textContent).not.toContain('Connecting')
   } finally { dispose(); unregister() }
+})
+
+it.each([false,true])('switches a retained conversation before connection preparation when browser offline=%s',async offline=>{
+  vi.useFakeTimers();sidebar()
+  const fetchMock=vi.fn(async(input:RequestInfo|URL)=>String(input).includes('/sessions?')
+    ?response({workspaceId:workspace.workspaceId,stale:true,sessions:[{sessionId:'saved',title:'Saved',running:false,blank:false,updatedAt:1}]})
+    :response({workspaces:[workspace],hosts:[{hostId:workspace.hostId,phase:'disconnected'}]}))
+  vi.stubGlobal('fetch',fetchMock)
+  const resume=vi.fn(()=>true),unregister=registerRemotePresentation({resume,open:vi.fn()})
+  const dispose=mountRemoteWorkspaces()
+  try{
+    await vi.advanceTimersByTimeAsync(0);if(offline)window.dispatchEvent(new Event('offline'))
+    const reads=fetchMock.mock.calls.length
+    const row=document.querySelector<HTMLButtonElement>('[data-remote-session-id="saved"]')!
+    expect(row.disabled).toBe(false);row.click();await vi.advanceTimersByTimeAsync(0)
+    expect(resume).toHaveBeenCalledOnce();expect(fetchMock).toHaveBeenCalledTimes(reads)
+  }finally{dispose();unregister()}
+})
+
+it('opens a saved local preview while offline without dispatching remote setup or opening',async()=>{
+  vi.useFakeTimers();sidebar()
+  const fetchMock=vi.fn(async(input:RequestInfo|URL)=>String(input).includes('/sessions?')
+    ?response({workspaceId:workspace.workspaceId,stale:true,sessions:[{sessionId:'saved',title:'Saved',running:false,blank:false,updatedAt:1}]})
+    :response({workspaces:[workspace],hosts:[]}))
+  vi.stubGlobal('fetch',fetchMock)
+  const preview=vi.fn(async()=>{}),open=vi.fn(),unregister=registerRemotePresentation({resume:()=>false,preview,open})
+  const dispose=mountRemoteWorkspaces()
+  try{
+    await vi.advanceTimersByTimeAsync(0);window.dispatchEvent(new Event('offline'));const reads=fetchMock.mock.calls.length
+    document.querySelector<HTMLButtonElement>('[data-remote-session-id="saved"]')!.click();await vi.advanceTimersByTimeAsync(0)
+    expect(preview).toHaveBeenCalledExactlyOnceWith(workspace,'saved',expect.any(AbortSignal));expect(open).not.toHaveBeenCalled()
+    expect(fetchMock).toHaveBeenCalledTimes(reads)
+    expect(document.querySelector<HTMLButtonElement>('[data-remote-session-id="saved"]')!.disabled).toBe(false)
+  }finally{dispose();unregister()}
 })
 
 it('observes a short reattachment promptly and slows long-setup polling without repeating connect', async () => {

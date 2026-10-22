@@ -98,7 +98,7 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect(manager.activity()).toEqual([])
   expect(first.remotePath).toBe(project)
   expect(first).not.toHaveProperty('localPath')
-  expect(await manager.status()).toEqual([{ hostId: first.hostId, phase: 'ready' }])
+  expect(await manager.status()).toMatchObject([{ hostId: first.hostId, phase: 'ready',checking:false }])
   const receipt = JSON.parse(readFileSync(join(remoteRoot, 'state/server.json'), 'utf8'))
   const { url } = await manager.open(first.id)
   const login = new URL(url)

@@ -46,6 +46,7 @@ export class SegmentedHistoryCache implements HistoryStore {
   private issues = new Map<string, string>()
   private control: Control = { version: 2, snoozedUntil: 0, fences: {} }
   private fatal?: string
+  private writeIssue?:string
   private writer = false
   private controlHash?: string
   private closed = false
@@ -102,11 +103,19 @@ export class SegmentedHistoryCache implements HistoryStore {
   private async atomic(path: string, value: unknown, check = () => true): Promise<boolean> {
     await this.exists(path)
     const temporary = path + '.' + randomUUID() + '.tmp'
+    let published=false
     try {
       const f = await open(temporary, 'wx', 0o600)
       try { await f.writeFile(JSON.stringify(value)); await f.sync() } finally { await f.close() }
       if (!check()) return false
-      await rename(temporary, path); await this.syncDirectory(join(path, '..')); return true
+      await rename(temporary, path);published=true
+      await this.syncDirectory(join(path, '..')); return true
+    } catch(error) {
+      // Rename can succeed before directory fsync fails. Reusing the old
+      // in-memory root could then truncate an index prefix the visible root
+      // already references. Preserve readable snapshots; reopen before writes.
+      if(published)this.writeIssue='A history commit may have reached disk; reopen this storage before further writes. Saved files were preserved.'
+      throw error
     } finally { await unlink(temporary).catch(e => { if (e.code !== 'ENOENT') throw e }) }
   }
   private async load(): Promise<void> {
@@ -158,11 +167,12 @@ export class SegmentedHistoryCache implements HistoryStore {
   }
   private async persistControl(): Promise<void> {
     const snapshot=structuredClone(this.control)
-    await this.atomic(join(this.store,'control.json'),snapshot)
+    try{await this.atomic(join(this.store,'control.json'),snapshot)}
+    catch(error){this.writeIssue='History write barriers could not be confirmed; reopen this storage before further writes. Saved files were preserved.';throw error}
     this.controlHash=digest(JSON.stringify(snapshot))
   }
   private queue<T>(fn: () => Promise<T>): Promise<T> {
-    const next = this.chain.then(async () => { await this.ready; this.check(); if (this.closed) throw new Error('History writer is closed'); await this.acquire(); return fn() })
+    const next = this.chain.then(async () => { await this.ready; this.check(); if(this.writeIssue)throw new Error(this.writeIssue);if (this.closed) throw new Error('History writer is closed'); await this.acquire(); return fn() })
     this.chain = next.catch(() => {}); return next
   }
   private async acquire(): Promise<void> {
@@ -240,7 +250,7 @@ export class SegmentedHistoryCache implements HistoryStore {
     const bytes = entries.reduce((sum,m) => sum+m.bytes,0), now = Date.now()
     const reasons = [bytes >= 512*1024*1024 ? 'size' : '', entries.length >= 100 ? 'count' : '', entries.some(m => now-m.firstSavedAt >= 30*86400000) ? 'age' : ''].filter(Boolean)
     return { entries, bytes, reminder: reasons.length > 0 && now >= this.control.snoozedUntil, reasons,
-      warning: this.fatal ?? (this.issues.size ? `${this.issues.size} local history issue(s); original files were preserved` : undefined) }
+      warning: this.fatal ?? this.writeIssue ?? (this.issues.size ? `${this.issues.size} local history issue(s); original files were preserved` : undefined) }
   }
   private async segment(key: string, m: Manifest, s: Segment): Promise<HistoryRecord[]> {
     const path = join(this.store, key, m.generation, s.file)
