@@ -50,10 +50,18 @@ npm 可能在接受并签名后继续处理新版本，暂时不向公开索引�
 
 本次发行额外要求安装包通过真实 SSH 断线故障注入：失效转发只失败本连接，宿主与独立隧道仍正常，不建立新 SSH 或重放请求。
 
-## 当前发行状态（2026-10-22）
+## 上一发行状态（2026-10-22，jay.35）
 
 `0.3.24-jay.35` 已由 [匹配版本标签的流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39747401517) 通过现有 OIDC 权限直接发布，verify、publish、verify-installation 全部成功，无逐版 2FA 或 stage 审批。npm 与国内镜像的 latest 均为该版本，并提供签名 provenance。
 
 73 个测试文件、645 项测试，以及 typecheck、build 和产物检查通过。最终归档在 DSH `0.2.0-rc.2`、`0.2.1-alpha.4`、`0.2.1-rc.2` 中验收通过；官方源 → alpha.4、镜像 → 两个 rc.2 的按包名安装也通过，覆盖已有磁盘历史、选择清理和提醒。macOS 另完成官方源 → `0.2.1-rc.2` 的隔离安装。
 
 发布包为 1,214,288 字节，SHA-256 `21befec6f1e0dd20cb4cf8b0eda5ba06c3e26aad7b544d52e14f11b2ff2b89d0`。官方源与实际镜像 CDN 文件的 SHA-512 均与 CI 测试归档一致；[GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.35) 附带同一归档和 SHA-256 文件。本次发布未改动日常 Desktop 安装、配置或会话。
+
+## 当前发行状态（2026-10-22，jay.37）
+
+`0.3.24-jay.37` 的 [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39772494386) 三个任务全部成功：73 个文件、658 项测试、typecheck、build、产物检查、三个 DSH 版本的最终归档验收、真实 SSH 验收，以及官方源/国内镜像的实际文件完整性和按包名安装。现有 OIDC 权限直接发布，无 stage 审批或逐版 2FA。
+
+两个源的 latest 均为 jay.37。公开包为 1,218,370 字节，SHA-256 `4b782e2d078d7461c7bdc301f7241d9343a024fc80aca9146d2d2979112bf788`；[GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.37) 的归档、官方源及真实镜像 CDN 内容均与 CI 产物一致。macOS 另完成从 npm 按包名安装到 DSH 0.2.1-rc.2 的隔离验收。本机日常 Desktop 也已更新为正式 npm 版本，前后端与 CI 字节相同，其他插件、模型配置和会话保留。
+
+npm 在签名接收后延迟公开新版本，期间其[官方状态页](https://status.npmjs.org/)报告 publish/install/view 性能异常。本次保留实际下载与安装检查，等待源可用后通过，没有重复发布同一版本或放宽验收。
