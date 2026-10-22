@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "store": "RemoteHistoryCache",
+  "node": "v24.16.0",
+  "platform": "linux",
+  "arch": "x64",
+  "memoryBytes": 16766414848,
+  "events": 10000,
+  "initialBytes": 10403185,
+  "methodology": "generated mixed text; fixed 100-record window; GC before each untimed sample; filesystem cache not flushed; application byte IO includes metadata file contents; fileMetadataCalls counts explicit stat/lstat/readdir/opendir and handle.stat API calls, not kernel syscalls or physical SSD bytes; inventory is a separate 30-sample metadata-only scan",
+  "warm": {
+    "milliseconds": {
+      "samples": 100,
+      "p50": 33.488614000000325,
+      "p95": 37.86390299999994,
+      "max": 41.82898700000004
+    },
+    "applicationBytesRead": {
+      "samples": 100,
+      "p50": 10403185,
+      "p95": 10403185,
+      "max": 10403185
+    },
+    "applicationBytesWritten": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "writeCalls": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "fileMetadataCalls": {
+      "samples": 100,
+      "p50": 1,
+      "p95": 1,
+      "max": 1
+    }
+  },
+  "append": {
+    "milliseconds": {
+      "samples": 30,
+      "p50": 102.41995000000043,
+      "p95": 111.7032049999998,
+      "max": 122.40528199999972
+    },
+    "applicationBytesRead": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 30,
+      "p50": 10405489,
+      "p95": 10407239,
+      "max": 10407364
+    },
+    "writeCalls": {
+      "samples": 30,
+      "p50": 2,
+      "p95": 2,
+      "max": 2
+    },
+    "fileMetadataCalls": {
+      "samples": 30,
+      "p50": 2,
+      "p95": 2,
+      "max": 2
+    }
+  },
+  "unchanged": {
+    "milliseconds": {
+      "samples": 100,
+      "p50": 0.06303500000012718,
+      "p95": 0.3479029999998602,
+      "max": 0.4371979999996256
+    },
+    "applicationBytesRead": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "writeCalls": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "fileMetadataCalls": {
+      "samples": 100,
+      "p50": 1,
+      "p95": 1,
+      "max": 1
+    }
+  },
+  "restart": {
+    "milliseconds": {
+      "samples": 30,
+      "p50": 34.147775000001275,
+      "p95": 35.043822999999975,
+      "max": 35.83041499999945
+    },
+    "applicationBytesRead": {
+      "samples": 30,
+      "p50": 10407364,
+      "p95": 10407364,
+      "max": 10407364
+    },
+    "applicationBytesWritten": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "writeCalls": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "fileMetadataCalls": {
+      "samples": 30,
+      "p50": 4,
+      "p95": 4,
+      "max": 4
+    }
+  },
+  "failures": 0
+}

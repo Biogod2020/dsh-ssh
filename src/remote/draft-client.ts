@@ -96,7 +96,13 @@ export function draftClient(hostId: string, makeReplica: typeof createDraftRepli
         }
         if (state.hadReferences || state.hadAttachments) children.push(e('p', { key: 'references', role: 'status' }, t.references),
           e('button', { key: 'reviewed', type: 'button', onClick: () => replica.acknowledgeReferences() }, t.reviewed))
-        return e('div', { 'data-dsh-local-draft': props.sessionId, 'data-state': state.status, style: { fontSize: '12px', padding: '4px 0', opacity: .85 } }, ...children)
+        // Share the native composer's responsive width and side clearance. This
+        // Slot is outside its card, so it does not inherit the card's layout.
+        return e('div', { 'data-dsh-local-draft': props.sessionId, 'data-state': state.status, style: {
+          boxSizing: 'border-box', width: 'calc(100% - 2 * var(--dsh-composer-side-clearance, 16px))',
+          maxWidth: 'var(--dsh-composer-card-max-width, 100%)', margin: '0 auto', minWidth: 0,
+          fontSize: '12px', padding: '4px 14px', overflowWrap: 'anywhere', opacity: .85,
+        } }, ...children)
       }
       function Entry(props: Props) {
         try {

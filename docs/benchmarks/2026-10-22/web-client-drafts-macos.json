@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "scope": "Real DSH 0.2.1-rc.2 web client through CUA; not native desktop acceptance",
+  "runtime": "0.2.1-rc.2",
+  "modelRequests": 0,
+  "controllerRestarts": 3,
+  "originsChanged": 3,
+  "confirmedDiskDraftRestoredInEditor": true,
+  "confirmedEmptyDraftDidNotRevive": true,
+  "otherSessionDraftUnaffected": true,
+  "sameSessionIdAcrossDistinctLogicalHosts": true,
+  "samePhysicalEndpoint": true,
+  "logicalHostDraftsIsolatedInEditorAndOnDisk": true,
+  "nativeComposerCssVariablesReused": true,
+  "statusAndComposerLeftEdgeAligned": true,
+  "archiveSha256": "9d3adc14ca425bea808b0e0c42d32c9aa99fef0acf2e15479cd4677c1153cb6f",
+  "nativeDesktopVerified": false,
+  "nativeWarmNavigationSamples": 0,
+  "nativeColdNavigationSamples": 0,
+  "actualSleepResumeVerified": false
+}

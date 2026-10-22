@@ -69,6 +69,13 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts
+      - name: Verify the packaged offline downgrade exporter without reviving cleared history
+        run: |
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          test "${#archives[@]}" -eq 1
+          node scripts/fetch-legacy-history-archive.mjs "$RUNNER_TEMP/frozen-jay39.tgz"
+          node --experimental-transform-types scripts/history-downgrade-smoke.mjs "${archives[0]}" "$RUNNER_TEMP/release/downgrade-verification.json" "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "$RUNNER_TEMP/frozen-jay39.tgz"
       - name: Accept incremental disk history in the installed archive
         run: |
           shopt -s nullglob
@@ -96,6 +103,13 @@ jobs:
         with:
           name: history-storage-measurements
           path: ${{ runner.temp }}/history-benchmarks/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: offline-downgrade-verification
+          path: ${{ runner.temp }}/release/downgrade-verification.json
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
