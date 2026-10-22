@@ -16,7 +16,9 @@ async function verify(registry) {
   // requested before publication can retain a negative CDN cache entry.
   const metadata = await request(`${registry}/${pkg.name}?t=${Date.now()}&cache=0`, { headers: { 'Cache-Control': 'no-cache' } })
   if (!metadata.ok) return false
-  const published = (await metadata.json()).versions?.[pkg.version]
+  const document = await metadata.json()
+  if (document['dist-tags']?.latest !== pkg.version) return false
+  const published = document.versions?.[pkg.version]
   if (!published) return false
   assert.equal(published.name, pkg.name)
   assert.equal(published.version, pkg.version)
