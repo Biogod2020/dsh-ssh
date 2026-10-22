@@ -80,7 +80,7 @@ it('isolates Hosts and selects another Session through native navigation without
   await openRemoteWorkspace(workspace, 'different-session')
   expect(first.guest.hidden).toBe(false); expect(second.guest.hidden).toBe(true)
   expect(first.guest.executeJavaScript).toHaveBeenCalledWith('Boolean(window.__dshSshView?.select?.("remote-work","different-session"))')
-  expect(f.fetch).toHaveBeenCalledTimes(2)
+  expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(2)
   expect(f.guests).toHaveLength(2)
   expect(f.guests.every(guest => guest.loadURL.mock.calls.length === 1)).toBe(true)
 })
@@ -90,7 +90,7 @@ it('falls back to authenticated backend validation when the retained catalog can
   first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
   first.guest.executeJavaScript.mockResolvedValueOnce(false)
   await openRemoteWorkspace(workspace, 'not-yet-observed')
-  expect(f.fetch).toHaveBeenCalledTimes(2)
+  expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(2)
   expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('window.__dshSshView.open("not-yet-observed")')
   expect(first.guest.loadURL).toHaveBeenCalledOnce()
 })
@@ -99,7 +99,7 @@ it('switches projects on the same retained Host without another launch request o
   const f = fixture(), first = await f.start()
   first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
   await openRemoteWorkspace({ ...workspace, id: 'other-project', workspaceId: 'other-remote-work', remotePath: '/other' }, 'other-session')
-  expect(f.fetch).toHaveBeenCalledOnce()
+  expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(1)
   expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('Boolean(window.__dshSshView?.select?.("other-remote-work","other-session"))')
   expect(f.guests).toHaveLength(1); expect(first.guest.loadURL).toHaveBeenCalledOnce()
 })
@@ -139,6 +139,25 @@ it('reports a failed guest load without echoing credential-bearing URLs and rele
 
 it('leaves web deployments on their existing presentation when no Desktop guest API is available', () => {
   expect(mountDesktopWorkspaces()).toBeUndefined()
+})
+
+it('shows a saved disk history in the same panel without SSH, and a late preview cannot replace current navigation', async () => {
+  const f = fixture()
+  const copy = { meta: { hostId: workspace.hostId, workspaceId: workspace.workspaceId, sessionId: 'cached', title: 'Saved remote chat', savedAt: 1, complete: true },
+    records: [{ type: 'event', event: { seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'History survives a restart' }] } } }] }
+  f.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ copy }) } as any)
+  await remotePresentation()!.preview!(workspace, 'cached')
+  const surface = document.querySelector<HTMLElement>('[data-dsh-remote-desktop]')!
+  expect(surface.hidden).toBe(false); expect(surface.textContent).toContain('History survives a restart')
+  remotePresentation()!.previewFailed!(workspace)
+  expect(surface.textContent).toContain('remote host is unavailable')
+  expect(f.bridge.acquire).not.toHaveBeenCalled(); expect(f.guests).toHaveLength(0)
+  let resolve!: (value: any) => void
+  f.fetch.mockImplementationOnce(async () => new Promise(value => { resolve = value }))
+  const pending = remotePresentation()!.preview!(workspace, 'cached')
+  ;[...surface.querySelectorAll('button')].find(x => x.textContent === 'Return to local')!.click()
+  resolve({ ok: true, json: async () => ({ copy }) }); await pending
+  expect(surface.hidden).toBe(true)
 })
 
 it('requires draft-loss confirmation before releasing a Host view without any remote operation', async () => {

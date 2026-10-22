@@ -10,6 +10,8 @@ import { remoteScript, shellQuote } from './transport.ts'
 import type { RemoteOperation, RemotePhase, RemoteReceipt, RemoteWorkspace, RemoteSessionCatalog } from './types.ts'
 import { RemoteSessionCache } from './session-catalog.ts'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS, compatibleRemoteVersion } from './types.ts'
+import { RemoteHistoryCache, historyKey } from './history-cache.ts'
+import { RemoteHistoryService } from './history-service.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
@@ -33,6 +35,7 @@ export class RemoteWorkspaces {
   private runtimes = new Map<string, Runtime>()
   private path: string
   private sessionCache: RemoteSessionCache
+  private historyCache: RemoteHistoryService
   private catalogReads = new Map<string, Promise<RemoteSessionCatalog>>()
   private journal?: RemoteActivityStore
   private journalIssue?: string
@@ -45,6 +48,15 @@ export class RemoteWorkspaces {
     const root = options.root ?? join(dshHome(), 'remote-workspaces')
     mkdirSync(root, { recursive: true, mode: 0o700 }); this.path = join(root, 'workspaces.json')
     this.sessionCache = new RemoteSessionCache(join(root, 'session-catalog.json'))
+    this.historyCache = new RemoteHistoryService(new RemoteHistoryCache(join(root, 'history')), async (item, sessionId) => {
+      const { runtime, check } = await this.connectedWorkspace(item.id)
+      const catalog = await this.hostCatalog(runtime); check()
+      if (!catalog.workspaces.items.some(row => row.workspaceId === item.workspaceId && row.sessionIds.includes(sessionId))
+        || catalog.workspaces.archivedSessionIds.includes(sessionId)) throw new Error('Session does not belong to this remote workspace')
+      const summary = catalog.sessions.items.find(row => row.sessionId === sessionId)
+      return { gateway: runtime.gateway, check, updatedAt: summary?.updatedAt ?? 0,
+        title: typeof summary?.projections?.values?.title === 'string' ? summary.projections.values.title : '' }
+    })
     const keyPath = join(root, 'recovery.key')
     if (!existsSync(keyPath)) {
       try { writeFileSync(keyPath, randomBytes(32), { mode: 0o600, flag: 'wx' }) }
@@ -88,6 +100,20 @@ export class RemoteWorkspaces {
     return createHash('sha256').update(JSON.stringify([alias, host.host, host.port, host.user])).digest('hex').slice(0, 24)
   }
   list(): RemoteWorkspace[] { return [...this.workspaces.values()].map(x => ({ ...x })) }
+  historyCopies() { return this.historyCache.status() }
+  historyCopy(key: string) { return this.historyCache.cache.read(key) }
+  async cachedHistory(id: string, sessionId: string) {
+    const item = this.workspaces.get(id)
+    if (!item) throw new Error('Unknown remote workspace')
+    return this.historyCopy(historyKey(item.hostId, item.workspaceId, sessionId))
+  }
+  syncHistory(id: string, sessionId: string): void {
+    const item = this.workspaces.get(id)
+    if (!item) throw new Error('Unknown remote workspace')
+    void this.historyCache.sync(item, sessionId)
+  }
+  clearHistory(keys: string[]) { return this.historyCache.clear(keys) }
+  snoozeHistory() { return this.historyCache.cache.snooze() }
   catalog(): RemoteWorkspace[] {
     const items = this.list()
     for (const old of this.options.legacy?.() ?? []) {
@@ -265,6 +291,12 @@ export class RemoteWorkspaces {
       try { await gateway.start() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       try { check() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       runtime = { gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0 }; this.runtimes.set(hostId, runtime)
+      const owner = runtime
+      gateway.onCatalogChange = () => {
+        if (this.runtimes.get(hostId) !== owner) return
+        owner.catalog = undefined
+        for (const item of this.workspaces.values()) if (item.hostId === hostId) this.catalogReads.delete(item.id)
+      }
       remotePath = receipt.directory
     }
     this.phase(operation, 'connecting')
@@ -324,6 +356,7 @@ export class RemoteWorkspaces {
           .sort((a, b) => b.updatedAt - a.updatedAt)
         const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt }
         this.sessionCache.save(id, catalog)
+        for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt)
         return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
       } catch { return { ...cached(), warning: 'Remote session status could not be checked. Showing the last saved list.' } }
     })()
@@ -365,6 +398,7 @@ export class RemoteWorkspaces {
       finally { runtime.catalog = undefined }
     }
     check()
+    this.syncHistory(id, sessionId)
     return { url: runtime.gateway.launch(sessionId), sessionId }
   }
   setEnabled(enabled: boolean): void {

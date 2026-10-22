@@ -2,6 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { connectRemoteWorkspace, mountRemoteWorkspaces } from '../src/client/remote-workspaces.ts'
 import { registerRemotePresentation } from '../src/client/remote-presentation.ts'
+vi.mock('../src/client/history-cache.ts', () => ({ mountHistoryCache: () => () => {}, warmHistoryCopy() {}, markHistoryRequested() {} }))
 
 afterEach(() => {
   vi.unstubAllGlobals(); vi.useRealTimers(); document.body.replaceChildren()

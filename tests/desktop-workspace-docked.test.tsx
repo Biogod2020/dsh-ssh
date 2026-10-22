@@ -68,7 +68,7 @@ it('keeps local sidebar usable while docking the remote guest to the native main
   expect(f.guests[0]!.isConnected).toBe(true)
   expect(f.main.querySelector('textarea')!.value).toBe('saved local draft')
   await act(async () => openRemoteWorkspace(workspace, 'first'))
-  expect(surface.hidden).toBe(false); expect(f.fetch).toHaveBeenCalledOnce(); expect(f.guests[0]!.loadURL).toHaveBeenCalledOnce()
+  expect(surface.hidden).toBe(false); expect(f.fetch.mock.calls.filter(([url]) => String(url).endsWith('/remote/open'))).toHaveLength(1); expect(f.guests[0]!.loadURL).toHaveBeenCalledOnce()
 })
 it('reuses one attached client for a Host across conversation and local navigation', async () => {
   const f = fixture(); await f.open('first'); const first = f.guests[0]!

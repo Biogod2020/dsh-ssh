@@ -4,6 +4,8 @@ export interface RemotePresentation {
   resume(workspace: RemoteWorkspace, sessionId?: string): boolean | Promise<boolean>
   open(workspace: RemoteWorkspace, url: string, signal?: AbortSignal, sessionId?: string): Promise<void>
   close?(workspace: RemoteWorkspace): void
+  preview?(workspace: RemoteWorkspace, sessionId: string, signal?: AbortSignal): Promise<void>
+  previewFailed?(workspace: RemoteWorkspace): void
 }
 
 let current: RemotePresentation | undefined

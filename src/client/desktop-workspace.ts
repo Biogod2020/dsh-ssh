@@ -5,6 +5,7 @@ import { mountDesktopWorkspaceSeat, type DesktopShellContext } from './desktop-w
 import { tt } from './panel/helpers.ts'
 import css from './panel/panel.module.css'
 import { remoteNavigation } from './remote-navigation.ts'
+import { readHistoryCopy, renderSavedHistory } from './history-cache.ts'
 
 /** The shipped Desktop guest API; no Electron imports or private IPC channels. */
 interface BrowserBridge {
@@ -35,15 +36,19 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
   const title = document.createElement('strong'); title.className = css.desktopWorkspaceTitle
   const host = document.createElement('div'); host.className = css.desktopWorkspaceBody
   const loading = document.createElement('div'); loading.className = css.desktopWorkspaceLoading; loading.setAttribute('role', 'status')
-  toolbar.append(back, title, close); surface.append(toolbar, loading, host); document.body.append(surface)
+  const saved = document.createElement('div'); saved.className = css.desktopHistory; saved.hidden = true
+  toolbar.append(back, title, close); surface.append(toolbar, loading, host, saved); document.body.append(surface)
   let active: View | undefined, disposed = false, opening = false
+  let preview: { workspace: RemoteWorkspace; sessionId: string } | undefined, previewEpoch = 0
+  const previewFailures = new Set<string>()
+  const savedStatus = document.createElement('p'); savedStatus.className = css.hint
   const viewKey = (workspace: RemoteWorkspace) => workspace.hostId
   const identities = new Map<string, string>()
-  const selected = () => selectRemoteView(!surface.hidden && active ? { workspaceId: active.workspace.id, sessionId: active.sessionId } : undefined)
+  const selected = () => { const value = preview ?? active; selectRemoteView(!surface.hidden && value ? { workspaceId: value.workspace.id, sessionId: value.sessionId } : undefined) }
   const seat = ctx ? mountDesktopWorkspaceSeat(ctx, (visible, bounds) => {
     surface.dataset.docked = 'true'
     if (bounds) Object.assign(surface.style, { left: `${bounds.left}px`, top: `${bounds.top}px`, width: `${bounds.width}px`, height: `${bounds.height}px` })
-    surface.hidden = !visible || !active; selected()
+    surface.hidden = !visible || (!active && !preview); selected()
   }) : undefined
   let priorFocus: HTMLElement | null = null
   const inert = new Map<HTMLElement, boolean>()
@@ -56,9 +61,11 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
   const observer = new MutationObserver(isolate); observer.observe(document.body, { childList: true })
   const render = () => {
     back.textContent = tt('remote.returnLocal'); close.textContent = tt('remote.closeView')
-    title.textContent = active ? `${active.workspace.alias} · ${active.workspace.remotePath}` : ''
+    const value = preview ?? active
+    title.textContent = value ? `${value.workspace.alias} · ${value.workspace.remotePath}` : ''
     surface.setAttribute('aria-label', tt('remote.desktopWorkspace'))
-    loading.hidden = !active || active.ready
+    loading.hidden = !!preview || !active || active.ready
+    saved.hidden = !preview; host.hidden = !!preview
     loading.textContent = active ? `${active.workspace.title} · ${tt('remote.loadingConversation')}` : ''
     for (const view of views.values()) {
       view.guest.hidden = view !== active
@@ -69,6 +76,7 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
     }
   }
   const hide = () => {
+    ++previewEpoch; preview = undefined; saved.replaceChildren()
     surface.hidden = true
     seat?.hide(); selected()
     for (const [child, value] of inert) child.inert = value
@@ -76,6 +84,9 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
     if (priorFocus?.isConnected) priorFocus.focus()
   }
   const show = (view: View) => {
+    if (view.ready || preview?.workspace.id !== view.workspace.id || preview.sessionId !== view.sessionId) {
+      ++previewEpoch; preview = undefined; saved.replaceChildren()
+    }
     if (surface.hidden) priorFocus = document.activeElement as HTMLElement | null
     active = view; surface.hidden = false; render(); seat?.select(); isolate(); selected()
     clearTimeout(view.focusTimer)
@@ -87,12 +98,27 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
     view.cancel?.(); view.cancel = undefined
     clearTimeout(view.focusTimer); view.releaseLinks(); views.delete(key)
     view.guest.remove(); void bridge.release(view.lease).catch(() => {})
-    if (active === view) { hide(); active = undefined }
+    if (active === view) { active = undefined; if (preview) { render(); selected() } else hide() }
   }
   back.onclick = hide
-  close.onclick = () => { if (active && window.confirm(tt('remote.closeViewConfirm'))) drop(active) }
+  close.onclick = () => { if (preview) hide(); else if (active && window.confirm(tt('remote.closeViewConfirm'))) drop(active) }
   const stopLocale = locale?.subscribe(render)
   const unregister = registerRemotePresentation({
+    async preview(workspace, sessionId, signal) {
+      const epoch = ++previewEpoch
+      previewFailures.delete(workspace.id)
+      const copy = await readHistoryCopy(workspace, sessionId, signal)
+      if (!copy || disposed || epoch !== previewEpoch || signal?.aborted) return
+      if (copy.meta.hostId !== workspace.hostId || copy.meta.workspaceId !== workspace.workspaceId || copy.meta.sessionId !== sessionId) return
+      if (surface.hidden) priorFocus = document.activeElement as HTMLElement | null
+      preview = { workspace, sessionId }; saved.replaceChildren(renderSavedHistory(copy))
+      savedStatus.textContent = tt(previewFailures.has(workspace.id) ? 'cache.unavailable' : 'cache.reconnecting'); saved.prepend(savedStatus)
+      surface.hidden = false; render(); seat?.select(); isolate(); selected()
+    },
+    previewFailed(workspace) {
+      previewFailures.add(workspace.id)
+      if (preview?.workspace.id === workspace.id) savedStatus.textContent = tt('cache.unavailable')
+    },
     close(workspace) {
       const view = views.get(viewKey(workspace))
       if (view && window.confirm(tt('remote.closeViewConfirm'))) drop(view)
@@ -191,7 +217,7 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
           if (Date.now() > deadline) throw new Error(tt('remote.desktopLoadFailed'))
           await new Promise(resolve => setTimeout(resolve, 100))
         }
-        view.ready = true; render()
+        view.ready = true; show(view)
         guest.addEventListener('render-process-gone', () => { view.ready = false; render(); loading.textContent = tt('remote.desktopLoadFailed') })
       } catch (cause) { drop(view); throw cause }
     },

@@ -11,6 +11,27 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
     if (denied || !isLoopbackRequest(req)) { writeJson(res, denied ?? 403, { error: 'Remote workspace access denied' }); return }
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
+      if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history') {
+        writeJson(res, 200, await manager.historyCopies()); return
+      }
+      if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history/read') {
+        const copy = url.searchParams.has('key') ? await manager.historyCopy(url.searchParams.get('key')!)
+          : await manager.cachedHistory(url.searchParams.get('id') ?? '', url.searchParams.get('sessionId') ?? '')
+        writeJson(res, 200, { copy }); return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/history/sync') {
+        const body = await readJsonBody(req) as { id?: unknown; sessionId?: unknown }
+        if (typeof body.id !== 'string' || typeof body.sessionId !== 'string') throw new Error('Session identity is required')
+        manager.syncHistory(body.id, body.sessionId); writeJson(res, 202, { accepted: true }); return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/history/clear') {
+        const body = await readJsonBody(req, { maxBytes: 128 * 1024 }) as { keys?: unknown }
+        if (!Array.isArray(body.keys) || body.keys.length > 1000 || body.keys.some(x => typeof x !== 'string')) throw new Error('Select cached sessions to clear')
+        await manager.clearHistory(body.keys); writeJson(res, 200, { ok: true }); return
+      }
+      if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/history/snooze') {
+        await manager.snoozeHistory(); writeJson(res, 200, { ok: true }); return
+      }
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/workspaces') {
         const hosts = await manager.status()
         writeJson(res, 200, { workspaces: manager.catalog(), hosts, operations: manager.activity(), history: manager.history(), warning: manager.activityWarning() }); return

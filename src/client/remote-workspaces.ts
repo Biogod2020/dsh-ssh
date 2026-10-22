@@ -8,6 +8,7 @@ import { gatewayUrl, remotePresentation } from './remote-presentation.ts'
 import { remoteSelection, subscribeRemoteSelection } from './remote-presentation.ts'
 import { remoteSessionRows } from './remote-session-rows.ts'
 import { remoteNavigation } from './remote-navigation.ts'
+import { mountHistoryCache, warmHistoryCopy, markHistoryRequested } from './history-cache.ts'
 
 const base = '/api/dsh-ssh/remote/'
 interface RequestOptions { signal?: AbortSignal; expectedHostId?: string }
@@ -73,13 +74,15 @@ export async function observeRemoteOperation(id: string, progress: Progress, opt
 export async function openRemoteWorkspace(workspace: RemoteWorkspace, sessionId?: string, options: RequestOptions = {}): Promise<void> {
   options.signal?.throwIfAborted()
   const presentation = remotePresentation()
-  if (await presentation?.resume(workspace, sessionId)) return
+  if (await presentation?.resume(workspace, sessionId)) { warmHistoryCopy(workspace, sessionId); return }
+  if (sessionId) void presentation?.preview?.(workspace, sessionId, options.signal).catch(() => {})
   if (window.location.protocol === 'dsh-app:' && !presentation) throw new Error(tt('remote.desktopUnavailable'))
   const { url, sessionId: selected } = await json<{ url: string; sessionId?: string }>('open', { id: workspace.id, ...(sessionId ? { sessionId } : {}) }, options)
   gatewayUrl(url)
   options.signal?.throwIfAborted()
   if (presentation) await presentation.open(workspace, url, options.signal, selected ?? sessionId)
   else window.location.assign(url)
+  markHistoryRequested(workspace, selected ?? sessionId)
 }
 interface RecoveryLink { hostId: string; proof: string; sessionId?: string }
 function recoveryFromHash(): RecoveryLink | undefined {
@@ -101,6 +104,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   const headingLabel = document.createElement('span')
   const historyButton = document.createElement('button'); historyButton.type = 'button'; historyButton.className = css.linkButton
   heading.append(headingLabel, historyButton)
+  const stopCache = mountHistoryCache(heading)
   const historyHelp = document.createElement('p'); historyHelp.className = css.hint
   const historyWarning = document.createElement('p'); historyWarning.className = css.hint; historyWarning.setAttribute('role', 'alert')
   const rows = document.createElement('div'); rows.className = css.remoteWorkspaceRows
@@ -290,13 +294,14 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     try {
       const ready = hosts.find(x => x.hostId === item.hostId)?.phase === 'ready' && !stale
       refreshNeeded = !ready || create || !sessionId
+      if (!ready && sessionId) void remotePresentation()?.preview?.(item, sessionId, attempt.options.signal).catch(() => {})
       const workspace = ready ? item : await connectRemoteWorkspace(item.alias, item.remotePath, attempt.progress, { ...attempt.options, expectedHostId: item.hostId })
       if (create) ({ sessionId } = await json<{ sessionId: string }>('session/create', { id: workspace.id }, attempt.options))
       await openRemoteWorkspace(workspace, sessionId, attempt.options)
       if (attempt.epoch === watchEpoch && !operation) status = ''
       if (attempt.epoch === watchEpoch && remoteNavigation.getSnapshot().native) { status = ''; operation = undefined }
     }
-    catch (error) { refreshNeeded = true; report(error, attempt.epoch) }
+    catch (error) { refreshNeeded = true; remotePresentation()?.previewFailed?.(item); report(error, attempt.epoch) }
     finally { finish(attempt.epoch, item.id, false, refreshNeeded) }
   }
   async function observe(item: RemoteOperation): Promise<void> {
@@ -391,7 +396,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   if (recovery) { window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search); void runRecovery() }
   return () => {
     disposed = true; lifetime.abort(); watchEpoch++; watch?.abort(); clearTimeout(timer); pollEpoch++; polling?.abort(); unsubscribe(); stopLocale?.(); stopSelection()
-    unbindNavigation(); stopNavigation(); remoteNavigation.clear()
+    unbindNavigation(); stopNavigation(); stopCache(); remoteNavigation.clear()
     for (const row of keyed.values()) row.sessions.dispose()
     document.removeEventListener('visibilitychange', refresh); window.removeEventListener('offline', offlineChanged); window.removeEventListener('online', onlineChanged); section.remove()
     document.removeEventListener('focusin', focusChanged); document.removeEventListener('pointerdown', pointerChanged); ownedFocus = undefined

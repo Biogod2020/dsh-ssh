@@ -7,6 +7,10 @@ import { remotePage } from './page.ts'
 import { RemoteFailureError } from './errors.ts'
 import { WebSocket } from 'ws'
 import { navigationClient } from './navigation-client.ts'
+import type { HistoryRecord } from './history-cache.ts'
+
+export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
+const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
 
 /** One isolated browser origin per remote Host. All native and plugin HTTP/WS traffic shares it. */
 export class RemoteGateway {
@@ -18,6 +22,7 @@ export class RemoteGateway {
   private requests = new Map<number, Set<Promise<void>>>()
   private drainWaiters = new Set<() => void>()
   origin = ''
+  onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
   constructor(public localPort: number, readonly receipt: RemoteReceipt, readonly alias: string, readonly returnUrl: string,
     readonly hostId: string, readonly recoveryProof: string) {
@@ -99,6 +104,8 @@ export class RemoteGateway {
   }
   async rpc<T>(method: string, args: object): Promise<T> {
     const port = this.localPort, release = this.retainRequest(port)
+    const changesCatalog = catalogMutation(method)
+    if (changesCatalog) this.onCatalogChange()
     try {
       const rpcId = randomUUID()
       const response = await fetch(`http://127.0.0.1:${port}/api/${method}`, {
@@ -110,7 +117,7 @@ export class RemoteGateway {
       if (body.rpcId !== rpcId || !body.result) throw new Error('Remote DSH returned an incompatible RPC response')
       if (!body.result.ok) throw new RemoteFailureError(body.result.error?.message ?? `Remote ${method} failed`, body.result.error?.code)
       return body.result.value as T
-    } finally { release() }
+    } finally { if (changesCatalog) this.onCatalogChange(); release() }
   }
   async healthy(): Promise<boolean> {
     try {
@@ -120,6 +127,16 @@ export class RemoteGateway {
   }
   /** Read one baseline and release the observer; never activate a Session. */
   async workspaceSnapshot(): Promise<{ items: Array<{ workspaceId: string; sessionIds: string[] }>; archivedSessionIds: string[] }> {
+    return this.baseline('workspace/follow', {}, frame => frame?.type === 'baseline' && Array.isArray(frame.value?.items)
+      && Array.isArray(frame.value?.archivedSessionIds) ? frame.value : undefined)
+  }
+  /** Cold-safe history reads never start an Agent or replay an operation. */
+  async historySnapshot(sessionId: string): Promise<HistoryOpening> {
+    return this.baseline('session/follow', { request: { address: { kind: 'session', sessionId }, maxMessages: 500 } },
+      frame => frame?.type === 'snapshot' && frame.header?.id === sessionId && Number.isSafeInteger(frame.cursor)
+        && Array.isArray(frame.records) && typeof frame.hasMore === 'boolean' ? frame : undefined)
+  }
+  private baseline<T>(endpoint: string, args: object, read: (frame: any) => T | undefined): Promise<T> {
     return new Promise((resolve, reject) => {
       const streamId = randomUUID()
       const socket = new WebSocket(`ws://127.0.0.1:${this.localPort}/api/remote.mux`, {
@@ -136,14 +153,15 @@ export class RemoteGateway {
         if (cause) reject(cause); else resolve(value!)
       }
       const deadline = setTimeout(() => finish(new Error('Remote workspace catalog timed out')), 8000)
-      socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint: 'workspace/follow', payload: { args: {} } })))
+      socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } })))
       socket.on('message', bytes => {
         try {
           const frame = JSON.parse(bytes.toString())
           if (frame.streamId !== streamId) return
-          if (frame.type === 'item' && frame.value?.type === 'baseline' && Array.isArray(frame.value.value?.items)
-            && Array.isArray(frame.value.value?.archivedSessionIds)) finish(undefined, frame.value.value)
-          else if (frame.type === 'error' || frame.type === 'end') finish(new Error('Remote workspace catalog is unavailable'))
+          const value = frame.type === 'item' ? read(frame.value) : undefined
+          if (value !== undefined) finish(undefined, value)
+          else if (frame.type === 'error' || frame.type === 'end') finish(new RemoteFailureError(
+            `Remote ${endpoint} is unavailable${typeof frame.error?.code === 'string' ? ' (' + frame.error.code.slice(0, 80) + ')' : ''}`, frame.error?.code))
         } catch { finish(new Error('Remote workspace catalog is incompatible')) }
       })
       socket.once('error', () => finish(new Error('Remote workspace catalog is unavailable')))
@@ -173,6 +191,8 @@ export class RemoteGateway {
     }
     const port = this.localPort, release = this.retainRequest(port)
     const upstreamOrigin = `http://127.0.0.1:${port}`
+    const changesCatalog = req.method === 'POST' && catalogMutation(url.pathname.replace(/^\/api\//, ''))
+    if (changesCatalog) this.onCatalogChange()
     try {
       await new Promise<void>((resolve, reject) => {
         const upstream = request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: this.headers(req) }, incoming => {
@@ -200,7 +220,7 @@ export class RemoteGateway {
         res.once('close', () => { upstream.destroy(); resolve() })
         req.pipe(upstream)
       })
-    } finally { release() }
+    } finally { if (changesCatalog) this.onCatalogChange(); release() }
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.authenticated(req)) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return }
