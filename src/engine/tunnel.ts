@@ -5,6 +5,7 @@
  */
 
 import { createServer, type Server as NetServer, type Socket } from 'node:net'
+import type { ClientChannel } from 'ssh2'
 import type { TunnelInfo } from '../protocol.ts'
 import { acquire, disposeRecord, endRecordChain, type PoolEngine, type PoolRecord } from './connection-pool.ts'
 
@@ -68,24 +69,30 @@ export async function startTunnel(
   const sockets = new Set<Socket>()
   const server = createServer((socket) => {
     sockets.add(socket)
-    socket.on('close', () => { sockets.delete(socket) })
-    client.forwardOut('127.0.0.1', 0, remoteHost, options.remotePort, (error, stream) => {
-      if (error !== undefined) {
-        socket.destroy()
-        return
-      }
-      // Both ends of the pipe can die independently; destroy the pair so an
-      // unhandled 'error' event can never crash the host process.
-      const destroy = (): void => {
-        try { socket.destroy() } catch { /* gone */ }
-        try { stream.close() } catch { /* gone */ }
-      }
-      stream.on('error', destroy)
-      socket.on('error', destroy)
-      stream.on('close', destroy)
-      socket.on('close', destroy)
-      stream.pipe(socket).pipe(stream)
-    })
+    let channel: ClientChannel | undefined
+    const destroy = (): void => {
+      try { socket.destroy() } catch { /* gone */ }
+      const current = channel
+      channel = undefined
+      try { current?.close() } catch { /* gone */ }
+    }
+    // The local peer may fail while forwardOut is still waiting for SSH.
+    socket.on('error', destroy)
+    socket.on('close', () => { sockets.delete(socket); destroy() })
+    try {
+      client.forwardOut('127.0.0.1', 0, remoteHost, options.remotePort, (error, stream) => {
+        if (error !== undefined) { destroy(); return }
+        channel = stream
+        stream.on('error', destroy)
+        stream.on('close', destroy)
+        if (socket.destroyed) { destroy(); return }
+        stream.pipe(socket).pipe(stream)
+      })
+    } catch {
+      // ssh2 throws synchronously when its transport closes before this
+      // accept callback. Fail only this socket; never replay its request.
+      destroy()
+    }
   })
   try {
     await new Promise<void>((resolve, reject) => {

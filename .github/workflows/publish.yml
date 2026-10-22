@@ -62,6 +62,12 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts
+      - name: Survive SSH disconnect in the installed archive
+        run: |
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          test "${#archives[@]}" -eq 1
+          node --experimental-transform-types scripts/tunnel-disconnect-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: verified-npm-package
