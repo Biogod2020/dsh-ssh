@@ -70,6 +70,30 @@ it('recovers only a proven exited writer and refuses malformed saved data', asyn
   await expect(f.store.read(host, 's')).rejects.toThrow()
   await expect(f.store.write(host, 's', input('must not replace damaged data'))).rejects.toThrow()
 })
+it('retains a confirmed real child commit after SIGKILL and recovers its writer lease', async () => {
+  const f = await fixture(), text = 'Generated confirmed draft 草稿 🧪'
+  const source = `import {LocalDraftStore} from ${JSON.stringify(new URL('../src/remote/draft-store.ts', import.meta.url).href)};
+    const store=new LocalDraftStore(process.argv[1]);
+    const saved=await store.write(${JSON.stringify(host)},'s',${JSON.stringify(input(text))});
+    process.send(saved);setInterval(()=>{},1000);`
+  const child = spawn(process.execPath, ['--experimental-transform-types', '--input-type=module', '-e', source, f.root], {
+    env: { PATH: process.env.PATH, LANG: 'en_US.UTF-8' }, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  })
+  const exited = once(child, 'exit')
+  try {
+    const received = once(child, 'message', { signal: AbortSignal.timeout(4000) })
+    const [saved] = await Promise.race([received, exited.then(() => { throw new Error('Draft child exited before confirming its commit') })])
+    child.kill('SIGKILL'); expect((await exited)[1]).toBe('SIGKILL')
+    expect(await f.store.read(host, 's')).toEqual(saved)
+    const next = await f.store.write(host, 's', input('New explicit edit', saved.revision))
+    expect(next.text).toBe('New explicit edit')
+    await expect(f.store.write(host, 's', input('Late old edit', saved.revision))).rejects.toBeInstanceOf(DraftConflictError)
+    expect(await f.store.read(host, 's')).toEqual(next)
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    await exited
+  }
+})
 it('lets exactly one contender own a stale writer lock without replacing the winner', async () => {
   const f = await fixture(); await f.store.read(host, 's')
   const child = spawn(process.execPath, ['-e', '']); await once(child, 'exit')

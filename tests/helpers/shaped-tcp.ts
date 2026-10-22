@@ -3,7 +3,7 @@ import { performance } from 'node:perf_hooks'
 
 /** A loopback-only test link. Adds half the requested RTT in each direction
  * and serializes bytes at a per-direction bandwidth. It never drops bytes:
- * TCP packet loss requires a kernel network namespace, not corrupting SSH. */
+ * TCP packet loss requires kernel network injection, not corrupting SSH. */
 export class ShapedTcpLink {
   readonly port:number
   private sockets=new Set<Socket>()
