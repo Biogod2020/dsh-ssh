@@ -7,10 +7,30 @@ export interface HistoryMeta {
   key: string; hostId: string; workspaceId: string; sessionId: string; alias: string; remotePath: string; title: string
   savedAt: number; firstSavedAt: number; remoteUpdatedAt: number; cursor: number; complete: boolean; bytes: number; records: number
 }
-export interface HistoryDocument { meta: HistoryMeta; records: HistoryRecord[] }
+export interface HistoryDocument { meta: HistoryMeta; records: HistoryRecord[]; page?: { beforeSeq: number; hasMore: boolean; omitted?: Array<{seq:number;bytes:number}> } }
+export type HistoryToken = number | { key: string; generation: number; owner: string }
+export type HistoryInput = Omit<HistoryMeta, 'bytes' | 'records' | 'firstSavedAt'>
+export interface HistoryStore {
+  token(key?: string): HistoryToken
+  current(token: HistoryToken): boolean
+  meta(key: string): Promise<HistoryMeta | undefined>
+  present(key: string): Promise<boolean>
+  list(): Promise<{ entries: HistoryMeta[]; bytes: number; reminder: boolean; reasons: string[]; warning?: string }>
+  read(key: string): Promise<HistoryDocument | undefined>
+  save(meta: HistoryInput, records: HistoryRecord[], token: HistoryToken): Promise<boolean>
+  clear(keys: string[]): Promise<void>
+  snooze(): Promise<void>
+  resume?(key: string): Promise<void>
+  append?(meta: HistoryInput, records: HistoryRecord[], token: HistoryToken): Promise<boolean>
+  prepend?(meta: HistoryInput, records: HistoryRecord[], token: HistoryToken): Promise<boolean>
+  prepare?(key: string, token: HistoryToken): Promise<{ meta: HistoryMeta; firstSeq: number } | undefined>
+  window?(key: string, beforeSeq?: number, limit?: number): Promise<HistoryDocument | undefined>
+  event?(key: string, seq: number): Promise<HistoryRecord | undefined>
+  close?(): Promise<void>
+}
 export const historyKey = (hostId: string, workspaceId: string, sessionId: string) => createHash('sha256').update(JSON.stringify([hostId, workspaceId, sessionId])).digest('hex')
 const isKey = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
-const validMeta = (value: HistoryMeta) => value && isKey(value.key) && typeof value.hostId === 'string' && typeof value.workspaceId === 'string'
+export const validMeta = (value: HistoryMeta) => value && isKey(value.key) && typeof value.hostId === 'string' && typeof value.workspaceId === 'string'
   && typeof value.sessionId === 'string' && historyKey(value.hostId, value.workspaceId, value.sessionId) === value.key
   && typeof value.alias === 'string' && typeof value.remotePath === 'string' && typeof value.title === 'string'
   && [value.savedAt, value.firstSavedAt, value.remoteUpdatedAt, value.bytes, value.records].every(x => Number.isFinite(x) && x >= 0)
@@ -59,7 +79,7 @@ export class RemoteHistoryCache {
       }
     } catch { this.issue = 'Local history cache is unavailable. Its files were preserved.' }
   }
-  token(): number { return this.revision }
+  token(_key?: string): number { return this.revision }
   async meta(key: string): Promise<HistoryMeta | undefined> { await this.ready; const value = this.entries.get(key); return value ? { ...value } : undefined }
   async present(key: string): Promise<boolean> {
     await this.ready; await this.chain
@@ -67,7 +87,7 @@ export class RemoteHistoryCache {
     if (!isKey(key)) throw new Error('Invalid history cache identity')
     return this.privateFile(join(this.root, key + '.json'))
   }
-  current(token: number): boolean { return token === this.revision }
+  current(token: HistoryToken): boolean { return token === this.revision }
   private queue<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.chain.then(async () => { await this.ready; if (this.issue) throw new Error(this.issue); return fn() })
     this.chain = next.catch(() => {}); return next
@@ -112,7 +132,7 @@ export class RemoteHistoryCache {
     }
     return document
   }
-  async save(meta: Omit<HistoryMeta, 'bytes' | 'records' | 'firstSavedAt'>, records: HistoryRecord[], token: number): Promise<boolean> {
+  async save(meta: HistoryInput, records: HistoryRecord[], token: HistoryToken): Promise<boolean> {
     return this.queue(async () => {
       if (!this.current(token)) return false
       if (!validHistory(records, meta.cursor) || (meta.complete && records.length && records[0]!.event.seq !== 0)) throw new Error('History has a gap; it was not cached')

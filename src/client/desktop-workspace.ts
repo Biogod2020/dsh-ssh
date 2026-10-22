@@ -104,6 +104,13 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
   close.onclick = () => { if (preview) hide(); else if (active && window.confirm(tt('remote.closeViewConfirm'))) drop(active) }
   const stopLocale = locale?.subscribe(render)
   const unregister = registerRemotePresentation({
+    async settings(workspace) {
+      const view=views.get(viewKey(workspace))
+      if(disposed||!view?.ready||view.workspace.hostId!==workspace.hostId||identities.get(view.workspace.id)!==workspace.hostId)return false
+      show(view)
+      try{return await view.guest.executeJavaScript<boolean>('Boolean(window.__dshSshView?.settings?.())')}
+      catch{return false}
+    },
     async preview(workspace, sessionId, signal) {
       const epoch = ++previewEpoch
       previewFailures.delete(workspace.id)

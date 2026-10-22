@@ -14,9 +14,22 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history') {
         writeJson(res, 200, await manager.historyCopies()); return
       }
+      if (req.method==='GET' && url.pathname==='/api/dsh-ssh/remote/history/event') {
+        const seq=Number(url.searchParams.get('seq'))
+        if (!/^\d+$/.test(url.searchParams.get('seq')??'') || !Number.isSafeInteger(seq) || seq<0) throw new Error('Invalid saved history event')
+        const record=await manager.historyEvent(url.searchParams.get('key')??'',seq)
+        if (!record) {writeJson(res,404,{error:'Saved history event is unavailable'});return}
+        res.writeHead(200,{'content-type':'application/json; charset=utf-8','content-disposition':`attachment; filename="history-event-${seq}.json"`,'cache-control':'no-store'})
+        res.end(JSON.stringify(record));return
+      }
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history/read') {
-        const copy = url.searchParams.has('key') ? await manager.historyCopy(url.searchParams.get('key')!)
-          : await manager.cachedHistory(url.searchParams.get('id') ?? '', url.searchParams.get('sessionId') ?? '')
+        if (url.searchParams.has('beforeSeq')&&!url.searchParams.has('limit')) throw new Error('A saved history window limit is required')
+        const window=url.searchParams.has('limit') ? {limit:Number(url.searchParams.get('limit')),
+          ...(url.searchParams.has('beforeSeq') ? {beforeSeq:Number(url.searchParams.get('beforeSeq'))} : {})} : undefined
+        if (window && (!Number.isInteger(window.limit) || window.limit<1 || window.limit>500
+          || window.beforeSeq!==undefined && (!Number.isSafeInteger(window.beforeSeq) || window.beforeSeq<0))) throw new Error('Invalid saved history window')
+        const copy = url.searchParams.has('key') ? await manager.historyCopy(url.searchParams.get('key')!,window)
+          : await manager.cachedHistory(url.searchParams.get('id') ?? '', url.searchParams.get('sessionId') ?? '',window)
         writeJson(res, 200, { copy }); return
       }
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/history/sync') {

@@ -1,4 +1,4 @@
-import { createElement, useMemo, useSyncExternalStore, type ComponentType } from 'react'
+import { createElement, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import { projectEntry } from './slot-projection.tsx'
@@ -46,6 +46,8 @@ export function combineNavigation(list: List, workspaces: Workspaces, remote: Re
 }
 
 function NativeWorkspaces({ original, ...props }: Props & { original: ComponentType<Props> }) {
+  const [settings,setSettings]=useState<{id?:string;busy?:boolean;error?:boolean}>({})
+  const settingsAttempt=useRef(0)
   const localList = props.useSessions((state: List) => state)
   const localWorkspaces = props.useWorkspaces((state: Workspaces) => state)
   const remote = useSyncExternalStore(remoteNavigation.subscribe, remoteNavigation.getSnapshot)
@@ -78,6 +80,16 @@ function NativeWorkspaces({ original, ...props }: Props & { original: ComponentT
         <button type="button" role="menuitem" className={css.remoteNavigationMenuItem} onClick={() => {
           rest[0]?.hookContext?.[1]?.(false); navigate(owner.sessionId)
         }}>{tt('remote.openConversation')}</button>
+        <button type="button" role="menuitem" className={css.remoteNavigationMenuItem} disabled={settings.id===owner.sessionId&&settings.busy} onClick={()=>{
+          const id=owner.sessionId, target=resolveRemoteNavigation(id,remote)
+          if(!target)return
+          const attempt=++settingsAttempt.current
+          setSettings({id,busy:true})
+          void Promise.resolve(remotePresentation()?.settings?.(target.workspace)).then(ok=>{
+            if(attempt===settingsAttempt.current)setSettings({id,error:!ok})
+          }).catch(()=>{if(attempt===settingsAttempt.current)setSettings({id,error:true})})
+        }}>{tt('remote.modelSettings')}</button>
+        {settings.id===owner.sessionId&&settings.error&&<span role="alert">{tt('remote.settingsUnavailable')}</span>}
         <button type="button" role="menuitem" className={css.remoteNavigationMenuItem} onClick={() => {
           rest[0]?.hookContext?.[1]?.(false)
           const target = resolveRemoteNavigation(owner.sessionId, remote)

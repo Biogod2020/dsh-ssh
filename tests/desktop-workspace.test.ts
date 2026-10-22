@@ -194,3 +194,21 @@ it('requires draft-loss confirmation before releasing a Host view without any re
   expect(view.guest.isConnected).toBe(false); expect(f.bridge.release).toHaveBeenCalledExactlyOnceWith('lease-0')
   expect(f.fetch).toHaveBeenCalledOnce()
 })
+
+it('routes model settings only to the requested retained Host, without opening a connection or retargeting on late completion',async()=>{
+  const f=fixture(),secondWorkspace={...workspace,id:'second',hostId:'b'.repeat(24),alias:'second'}
+  expect(await remotePresentation()!.settings!(workspace)).toBe(false)
+  expect(f.fetch).not.toHaveBeenCalled();expect(f.bridge.acquire).not.toHaveBeenCalled()
+  const first=await f.start();first.guest.dispatchEvent(new Event('dom-ready'));await first.promise
+  const second=await f.start(secondWorkspace);second.guest.dispatchEvent(new Event('dom-ready'));await second.promise
+  first.guest.executeJavaScript.mockClear();second.guest.executeJavaScript.mockClear()
+  let finish!:(ok:boolean)=>void
+  first.guest.executeJavaScript.mockImplementationOnce(()=>new Promise(resolve=>{finish=resolve}))
+  const pending=remotePresentation()!.settings!(workspace)
+  expect(first.guest.executeJavaScript).toHaveBeenCalledExactlyOnceWith('Boolean(window.__dshSshView?.settings?.())')
+  expect(second.guest.executeJavaScript).not.toHaveBeenCalled()
+  await openRemoteWorkspace(secondWorkspace)
+  finish(true);expect(await pending).toBe(true)
+  expect(second.guest.hidden).toBe(false);expect(first.guest.hidden).toBe(true)
+  expect(f.fetch).toHaveBeenCalledTimes(2);expect(f.guests).toHaveLength(2)
+})

@@ -69,3 +69,24 @@ it('selects through the remote public UI service without creating, submitting or
   dispose.forEach(fn => fn()); expect((window as any).__dshSshView).toBeUndefined()
   delete (window as any).__dshSshNavigationOwner
 })
+
+it('opens Models through the owning remote shell and fails closed when that shell lacks the contract', () => {
+  let registration:any
+  vi.stubGlobal('__ModuleLoader__',{load:(value:unknown)=>{registration=value}})
+  navigationClient()
+  const openSection=vi.fn(),openSession=vi.fn(),cleanup:Array<()=>void>=[]
+  let models=true,shell=true
+  const create=vi.fn(()=>({actions:{openSection}}))
+  const ctx:any={uiWorkspace:{openSession},sessions:{list:{getSnapshot:()=>({})}},workspaces:{list:{getSnapshot:()=>({items:[]})}},
+    slots:{entries:(name:string)=>name==='settings.section'?(models?[{options:{id:'models'}}]:[]):shell?[{store:{create}}]:[]},
+    effect:(fn:()=>()=>void)=>cleanup.push(fn())}
+  ctx.root={inject:(deps:string[],apply:(ctx:unknown)=>void)=>{expect(deps).toContain('slots');apply(ctx);return{dispose:()=>cleanup.forEach(fn=>fn())}}}
+  try{
+    registration.factory().apply(ctx)
+    const bridge=(window as any).__dshSshView
+    expect(bridge.settings()).toBe(true);expect(openSection).toHaveBeenCalledExactlyOnceWith('models')
+    models=false;expect(bridge.settings()).toBe(false);expect(create).toHaveBeenCalledOnce()
+    models=true;shell=false;expect(bridge.settings()).toBe(false)
+    expect(openSession).not.toHaveBeenCalled();expect(openSection).toHaveBeenCalledOnce()
+  }finally{cleanup.forEach(fn=>fn());delete(window as any).__dshSshNavigationOwner}
+})

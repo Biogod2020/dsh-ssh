@@ -10,7 +10,8 @@ import { remoteScript, shellQuote } from './transport.ts'
 import type { RemoteOperation, RemotePhase, RemoteReceipt, RemoteWorkspace, RemoteSessionCatalog } from './types.ts'
 import { RemoteSessionCache } from './session-catalog.ts'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS, compatibleRemoteVersion } from './types.ts'
-import { RemoteHistoryCache, historyKey } from './history-cache.ts'
+import { historyKey } from './history-cache.ts'
+import { SegmentedHistoryCache } from './history-store.ts'
 import { RemoteHistoryService } from './history-service.ts'
 import { readHistoryDelta } from './history-reader.ts'
 
@@ -49,7 +50,7 @@ export class RemoteWorkspaces {
     const root = options.root ?? join(dshHome(), 'remote-workspaces')
     mkdirSync(root, { recursive: true, mode: 0o700 }); this.path = join(root, 'workspaces.json')
     this.sessionCache = new RemoteSessionCache(join(root, 'session-catalog.json'))
-    this.historyCache = new RemoteHistoryService(new RemoteHistoryCache(join(root, 'history')), async (item, sessionId) => {
+    this.historyCache = new RemoteHistoryService(new SegmentedHistoryCache(join(root, 'history')), async (item, sessionId) => {
       const { runtime, check } = await this.connectedWorkspace(item.id)
       const catalog = await this.hostCatalog(runtime); check()
       if (!catalog.workspaces.items.some(row => row.workspaceId === item.workspaceId && row.sessionIds.includes(sessionId))
@@ -103,11 +104,14 @@ export class RemoteWorkspaces {
   }
   list(): RemoteWorkspace[] { return [...this.workspaces.values()].map(x => ({ ...x })) }
   historyCopies() { return this.historyCache.status() }
-  historyCopy(key: string) { return this.historyCache.cache.read(key) }
-  async cachedHistory(id: string, sessionId: string) {
+  historyEvent(key:string,seq:number) { return this.historyCache.cache.event?.(key,seq) }
+  historyCopy(key: string, window?: {beforeSeq?:number;limit:number}) {
+    return window && this.historyCache.cache.window ? this.historyCache.cache.window(key,window.beforeSeq,window.limit) : this.historyCache.cache.read(key)
+  }
+  async cachedHistory(id: string, sessionId: string, window?: {beforeSeq?:number;limit:number}) {
     const item = this.workspaces.get(id)
     if (!item) throw new Error('Unknown remote workspace')
-    return this.historyCopy(historyKey(item.hostId, item.workspaceId, sessionId))
+    return this.historyCopy(historyKey(item.hostId, item.workspaceId, sessionId),window)
   }
   syncHistory(id: string, sessionId: string): void {
     const item = this.workspaces.get(id)
@@ -434,7 +438,8 @@ export class RemoteWorkspaces {
     for (const runtime of this.runtimes.values()) { runtime.gateway.dispose(); this.engine.stopWorkspaceTunnel(runtime.tunnelId) }
     this.runtimes.clear()
   }
-  dispose(): void {
+  dispose(): Promise<void> {
     this.setEnabled(false); this.disposed = true; clearInterval(this.recovery)
+    return this.historyCache.cache.close?.().catch(() => {}) ?? Promise.resolve()
   }
 }

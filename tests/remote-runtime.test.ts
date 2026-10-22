@@ -11,7 +11,7 @@ import { HostStore } from '../src/store.ts'
 import { SshEngine } from '../src/engine.ts'
 import { RemoteWorkspaces } from '../src/remote/manager.ts'
 import { RemoteActivityStore } from '../src/remote/activity-store.ts'
-import { RemoteHistoryCache } from '../src/remote/history-cache.ts'
+import { SegmentedHistoryCache } from '../src/remote/history-store.ts'
 import { compatibleRemoteVersion } from '../src/remote/types.ts'
 import * as transport from '../src/remote/transport.ts'
 import { shellQuote } from '../src/remote/transport.ts'
@@ -313,8 +313,8 @@ it('saves real remote history as restartable disk prefixes and transfers only ne
     deltaRecords: changed.meta.cursor - firstCursor, deltaWireBytes, note: 'gzip/base64 history payload only; SSH framing and outgoing helper source excluded',
   }, null, 2), {mode: 0o600})
   const beforeRestart = JSON.parse(JSON.stringify(changed))
-  manager.dispose(); engine.dropAlias('fixture')
-  const offline = new RemoteHistoryCache(join(options.root, 'history'))
+  await manager.dispose(); engine.dropAlias('fixture')
+  const offline = new SegmentedHistoryCache(join(options.root, 'history'))
   expect((await offline.read(changed.meta.key))?.records).toEqual(beforeRestart.records)
   expect(engine.pool.size).toBe(0)
   manager = ownedManager()

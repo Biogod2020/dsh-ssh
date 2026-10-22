@@ -74,6 +74,22 @@ jobs:
           archives=("$RUNNER_TEMP/release/"*.tgz)
           test "${#archives[@]}" -eq 1
           node --experimental-transform-types scripts/tunnel-disconnect-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
+      - name: Measure immutable history storage against the frozen jay.39 baseline
+        run: |
+          mkdir -p "$RUNNER_TEMP/history-benchmarks"
+          git fetch --no-tags origin tag v0.3.24-jay.39
+          git show v0.3.24-jay.39:src/remote/history-cache.ts > "$RUNNER_TEMP/history-benchmarks/baseline.ts"
+          for events in 10000 100000; do
+            node --expose-gc --experimental-transform-types scripts/history-store-benchmark.mjs "$RUNNER_TEMP/history-benchmarks/baseline.ts" "$events" 100 > "$RUNNER_TEMP/history-benchmarks/baseline-$events.json"
+            node --expose-gc --experimental-transform-types scripts/history-store-benchmark.mjs "$PWD/src/remote/history-store.ts" "$events" 100 > "$RUNNER_TEMP/history-benchmarks/candidate-$events.json"
+          done
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: history-storage-measurements
+          path: ${{ runner.temp }}/history-benchmarks/*.json
+          if-no-files-found: ignore
+          retention-days: 14
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: verified-npm-package

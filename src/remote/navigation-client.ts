@@ -7,23 +7,24 @@ export function navigationClient(): void {
     uiWorkspace: { openSession(id: string): void }
     sessions: { list: { getSnapshot(): Catalog }; retain?(id: string, options: { source: string }): { ready?: Promise<unknown>; release(): void } }
     workspaces: { list: { getSnapshot(): { items: Workspace[]; archivedSessionIds?: string[] } } }
+    slots?: {entries(name:string):readonly {options?:{id?:string};store?:{create?():{actions?:{openSection?(id:string):void}}}}[]}
     effect(fn: () => () => void, label: string): void
     root: { inject(deps: string[], apply: (ctx: Ctx) => void): { dispose(): unknown } }
   }
-  type Bridge = { state(): { sessionId?: string; workspaceId?: string }; open(sessionId: string): void; select(workspaceId: string, sessionId: string): boolean }
+  type Bridge = { state(): { sessionId?: string; workspaceId?: string }; open(sessionId: string): void; select(workspaceId: string, sessionId: string): boolean; settings():boolean }
   const target = window as unknown as {
     __ModuleLoader__?: { load(value: unknown): void }
     __dshSshView?: Bridge
     __dshSshNavigationOwner?: { dispose(): unknown }
   }
   target.__ModuleLoader__?.load({ id: '@jay-local/dsh-ssh-navigation', factory: () => ({
-    inject: ['uiWorkspace', 'sessions', 'workspaces'],
+    inject: ['uiWorkspace', 'sessions', 'workspaces','slots'],
     apply(ctx: Ctx) {
       // Host manifest reconciliation only owns its server-declared entries.
       // Keep this document's contribution under a page-owned root fiber, so
       // the first Host graph cannot remove the bridge immediately after boot.
       if (target.__dshSshNavigationOwner) return
-      const owner = ctx.root.inject(['uiWorkspace', 'sessions', 'workspaces'], install)
+      const owner = ctx.root.inject(['uiWorkspace', 'sessions', 'workspaces','slots'], install)
       target.__dshSshNavigationOwner = owner
       const pageHide = (event: PageTransitionEvent) => { if (!event.persisted) { void owner.dispose(); window.removeEventListener('pagehide', pageHide) } }
       window.addEventListener('pagehide', pageHide)
@@ -59,6 +60,15 @@ export function navigationClient(): void {
         remember(sessionId)
       }
       const bridge: Bridge = {
+        settings() {
+          // Reach the owning remote shell's public slot/store contract only.
+          // Missing contracts never fall back to the local Host's settings.
+          if(!ctx.slots?.entries('settings.section').some(row=>row.options?.id==='models'))return false
+          const shell=ctx.slots.entries('sidebar.settings').find(row=>typeof row.store?.create==='function')
+          const actions=shell?.store?.create?.().actions
+          if(typeof actions?.openSection!=='function')return false
+          actions.openSection('models');return true
+        },
         state() {
           const rows = ctx.sessions.list.getSnapshot().byId
           let sessionId = rows && Object.values(rows).find(row => (row.retainedBy?.mainView ?? 0) > 0)?.id
@@ -107,9 +117,9 @@ export function navigationManifest(): void {
   const target = window as unknown as { __DSH_BOOT__?: { entries: Row[]; batches?: Batch[] } }
   const boot = target.__DSH_BOOT__
   if (!boot || !Array.isArray(boot.entries)) return
-  const id = '@jay-local/dsh-ssh-navigation', rev = 'native-navigation-3', url = '/__dsh_remote/navigation-client.js?rev=' + rev
+  const id = '@jay-local/dsh-ssh-navigation', rev = 'native-navigation-4', url = '/__dsh_remote/navigation-client.js?rev=' + rev
   if (boot.entries.some(row => row.id === id)) return
-  target.__DSH_BOOT__ = { ...boot, entries: [...boot.entries, { id, url, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace'] }],
+  target.__DSH_BOOT__ = { ...boot, entries: [...boot.entries, { id, url, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] }],
     ...(Array.isArray(boot.batches) ? { batches: [...boot.batches, { phase: 'application', url, rev, entries: [id] }] } : {}),
   }
 }

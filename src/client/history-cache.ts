@@ -5,6 +5,8 @@ import css from './panel/panel.module.css'
 
 const base = '/api/dsh-ssh/remote/history'
 const requested = new Map<string, number>()
+type HistoryLoader = (beforeSeq?: number) => Promise<HistoryDocument | undefined>
+const loaders = new WeakMap<HistoryDocument, HistoryLoader>()
 async function request<T>(path: string, body?: object, signal?: AbortSignal): Promise<T> {
   const response = await fetch(base + path, { ...(body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' }), signal })
   if (!response.ok) throw new Error(tt('cache.failed'))
@@ -17,10 +19,15 @@ export function warmHistoryCopy(item: RemoteWorkspace, sessionId?: string): void
   const key = identity(item, sessionId); requested.set(key, Date.now())
   void request('/sync', { id: item.id, sessionId }).catch(() => { requested.delete(key) })
 }
-export async function readHistoryCopy(item: RemoteWorkspace, sessionId: string, signal?: AbortSignal): Promise<HistoryDocument | undefined> {
-  return (await request<{ copy?: HistoryDocument }>('/read?id=' + encodeURIComponent(item.id) + '&sessionId=' + encodeURIComponent(sessionId), undefined, signal)).copy
+export async function readHistoryCopy(item: RemoteWorkspace, sessionId: string, signal?: AbortSignal, beforeSeq?: number): Promise<HistoryDocument | undefined> {
+  const copy=(await request<{ copy?: HistoryDocument }>('/read?id=' + encodeURIComponent(item.id) + '&sessionId=' + encodeURIComponent(sessionId)
+    + '&limit=200' + (beforeSeq===undefined ? '' : '&beforeSeq='+beforeSeq), undefined, signal)).copy
+  // The navigation observer owns only the initial read. Once visible, local
+  // paging must keep working even when SSH observation is stopped/offline.
+  if (copy) loaders.set(copy,before=>readHistoryCopy(item,sessionId,undefined,before))
+  return copy
 }
-export function renderSavedHistory(copy: HistoryDocument): HTMLElement {
+export function renderSavedHistory(copy: HistoryDocument, load: HistoryLoader | undefined = loaders.get(copy)): HTMLElement {
   const body = document.createElement('section'); body.className = css.savedHistory; body.setAttribute('aria-label', tt('cache.savedHistory'))
   const heading = document.createElement('h3'); heading.textContent = copy.meta.title || copy.meta.sessionId
   const status = document.createElement('p'); status.className = css.hint
@@ -40,9 +47,12 @@ export function renderSavedHistory(copy: HistoryDocument): HTMLElement {
     if (row.type === 'image' || row.type === 'file') return tt('cache.attachment')
     return ''
   }
-  const entries = copy.records.filter(row => ['user/message', 'assistant/message', 'tool/call', 'tool/result'].includes(row.event.type))
+  const visible=(value:HistoryDocument)=>value.records.filter(row=>['user/message','assistant/message','tool/call','tool/result'].includes(row.event.type)||value.page?.omitted?.some(x=>x.seq===row.event.seq))
+  let entries = visible(copy)
   const list = document.createElement('div'), older = document.createElement('button'); older.type = 'button'; older.className = css.ghostButton
   older.textContent = tt('cache.older')
+  const latest=document.createElement('button');latest.type='button';latest.className=css.ghostButton;latest.textContent=tt('cache.latest');latest.hidden=true
+  let generation=0
   const draw = () => {
     const previous = shown; shown = Math.min(entries.length, shown + 100)
     const fragment = document.createDocumentFragment()
@@ -50,13 +60,36 @@ export function renderSavedHistory(copy: HistoryDocument): HTMLElement {
       const article = document.createElement('article'), label = document.createElement('strong'), content = document.createElement('pre')
       label.textContent = tt(row.event.type === 'user/message' ? 'cache.user' : row.event.type === 'assistant/message' ? 'cache.assistant' : 'cache.tool')
       // Text nodes only: remote content, tool output and Markdown never become HTML.
-      content.textContent = text(row.event) || JSON.stringify(row.event, null, 2)
-      article.append(label, content); fragment.append(article)
+      const omitted=copy.page?.omitted?.find(x=>x.seq===row.event.seq)
+      content.textContent=omitted ? tt('cache.largeRecord',{size:size(omitted.bytes)}) : text(row.event)||JSON.stringify(row.event,null,2)
+      article.append(label, content)
+      if (omitted) {
+        const download=document.createElement('a');download.textContent=tt('cache.downloadRecord')
+        download.href=base+'/event?key='+encodeURIComponent(copy.meta.key)+'&seq='+row.event.seq
+        download.download='history-event-'+row.event.seq+'.json';article.append(download)
+      }
+      fragment.append(article)
     }
-    list.prepend(fragment); older.hidden = shown >= entries.length
+    list.prepend(fragment); older.hidden = copy.page ? shown >= entries.length && (!copy.page.hasMore || !load) : shown >= entries.length
+    latest.hidden=!copy.page || !load || (copy.records.at(-1)?.event.seq??copy.meta.cursor)>=copy.meta.cursor
+    if (!entries.length && !list.childElementCount) { const empty=document.createElement('p');empty.textContent=tt(copy.page?.hasMore?'cache.emptyWindow':'cache.emptyHistory');list.append(empty) }
   }
-  older.onclick = draw; draw(); body.append(older, list)
-  if (!entries.length) { const empty = document.createElement('p'); empty.textContent = tt('cache.emptyHistory'); body.append(empty) }
+  const page=async(before?:number)=>{
+    if (!load) return
+    const current=++generation;older.disabled=latest.disabled=true
+    try {
+      const next=await load(before)
+      if (current!==generation || !body.isConnected || !next) return
+      if (next.meta.key!==copy.meta.key || next.meta.hostId!==copy.meta.hostId || next.meta.workspaceId!==copy.meta.workspaceId || next.meta.sessionId!==copy.meta.sessionId) throw new Error('Saved history identity changed')
+      copy=next;entries=visible(copy)
+      shown=0;list.replaceChildren();draw()
+      heading.textContent=copy.meta.title||copy.meta.sessionId
+      status.textContent=`${tt('cache.readOnly')} · ${new Date(copy.meta.savedAt).toLocaleString()}${copy.meta.complete?'':' · '+tt('cache.partial')}`
+    } catch { if (current===generation && body.isConnected) status.textContent=tt('cache.failed') }
+    finally { if (current===generation) older.disabled=latest.disabled=false }
+  }
+  older.onclick=()=>{if(copy.page&&load&&shown>=entries.length)void page(copy.page.beforeSeq);else draw()}
+  latest.onclick=()=>{void page()};draw();body.append(older,latest,list)
   return body
 }
 
@@ -93,7 +126,7 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
     const clear = document.createElement('button'); clear.type = 'button'; clear.className = css.ghostButton; clear.textContent = tt('cache.clear'); clear.disabled = true
     const list = document.createElement('div'), reader = document.createElement('div'), status = document.createElement('p'); status.setAttribute('role', 'status')
     dialog.append(title, help, close, filters, choose, clear, status, list, reader); document.body.append(dialog); dialog.showModal()
-    const selected = new Set<string>(); let entries: HistoryMeta[] = [], visible: HistoryMeta[] = []
+    const selected = new Set<string>(); let entries: HistoryMeta[] = [], visible: HistoryMeta[] = [], readEpoch=0
     const option = (value: string, label: string) => { const element = document.createElement('option'); element.value = value; element.textContent = label; return element }
     const buttons = () => { clear.disabled = !selected.size; clear.textContent = `${tt('cache.clear')} (${selected.size})` }
     const render = () => {
@@ -105,8 +138,11 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
         const name = document.createElement('span'); name.textContent = `${item.alias} · ${item.remotePath} · ${item.title || item.sessionId} · ${size(item.bytes)}`
         check.onchange = () => { if (check.checked) selected.add(item.key); else selected.delete(item.key); buttons() }; label.append(check, name)
         const view = document.createElement('button'); view.type = 'button'; view.className = css.linkButton; view.textContent = tt('cache.view')
-        view.onclick = () => { void request<{ copy?: HistoryDocument }>('/read?key=' + item.key, undefined, controller.signal).then(value => {
-          if (dialog?.isConnected && value.copy) reader.replaceChildren(renderSavedHistory(value.copy))
+        view.onclick = () => {
+          const epoch=++readEpoch
+          const load:HistoryLoader=async before=>(await request<{copy?:HistoryDocument}>('/read?key='+item.key+'&limit=200'+(before===undefined?'':'&beforeSeq='+before),undefined,controller.signal)).copy
+          void load().then(copy => {
+          if (epoch===readEpoch && dialog?.isConnected && copy) reader.replaceChildren(renderSavedHistory(copy,load))
         }).catch(() => { status.textContent = tt('cache.failed') }) }
         row.append(label, view); list.append(row)
       }
@@ -124,7 +160,7 @@ export function mountHistoryCache(parent: HTMLElement): () => void {
       if (!selected.size || !window.confirm(tt('cache.confirmClear', { count: String(selected.size) }))) return
       clear.disabled = true
       void request('/clear', { keys: [...selected] }, controller.signal).then(() => {
-        entries = entries.filter(item => !selected.has(item.key)); selected.clear(); requested.clear(); reader.replaceChildren(); projects(); render(); void update()
+        ++readEpoch;entries = entries.filter(item => !selected.has(item.key)); selected.clear(); requested.clear(); reader.replaceChildren(); projects(); render(); void update()
         status.textContent = tt('cache.cleared')
       }).catch(() => { status.textContent = tt('cache.failed'); buttons() })
     }

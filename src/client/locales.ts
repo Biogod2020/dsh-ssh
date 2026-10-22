@@ -4,6 +4,8 @@
 
 export const zh = {
   'cache.manage': '本机历史缓存',
+  'remote.modelSettings': '此主机的模型设置',
+  'remote.settingsUnavailable': '请先打开此主机会话。该远端客户端如不支持此入口，可在远端聊天中使用设置快捷键。',
   'cache.user': '你',
   'cache.assistant': '助手',
   'cache.tool': '工具',
@@ -31,6 +33,10 @@ export const zh = {
   'cache.empty': '当前筛选下没有本机历史副本。打开远端会话后会在后台保存。',
   'cache.emptyHistory': '该会话尚无聊天消息。',
   'cache.older': '显示更早的本机历史',
+  'cache.latest': '返回最新保存的历史',
+  'cache.emptyWindow': '这一页没有聊天内容，可继续读取更早记录。',
+  'cache.largeRecord': '这条记录较大（{size}），完整内容已保存在本机。可下载查看，避免阻塞当前界面。',
+  'cache.downloadRecord': '下载完整记录',
   'cache.failed': '无法读取或清理本机历史，请重试。',
   'workspace.add': '添加工作区',
   'workspace.local': '本地文件夹',
@@ -517,6 +523,8 @@ export const zh = {
 
 export const en: Record<keyof typeof zh, string> = {
   'cache.manage': 'Local history cache',
+  'remote.modelSettings': 'Model settings on this host',
+  'remote.settingsUnavailable': 'Open a conversation on this host first. If its client does not support this entry, use the settings shortcut in the remote chat.',
   'cache.user': 'You',
   'cache.assistant': 'Assistant',
   'cache.tool': 'Tool',
@@ -544,6 +552,10 @@ export const en: Record<keyof typeof zh, string> = {
   'cache.empty': 'No local copies match. Open a remote conversation to save it in the background.',
   'cache.emptyHistory': 'This conversation has no chat messages yet.',
   'cache.older': 'Show earlier saved history',
+  'cache.latest': 'Return to latest saved history',
+  'cache.emptyWindow': 'This page has no chat messages. Earlier records may contain them.',
+  'cache.largeRecord': 'This record is large ({size}). Its complete contents are saved locally. Download it to avoid blocking this view.',
+  'cache.downloadRecord': 'Download complete record',
   'cache.failed': 'Could not read or clear local history. Please retry.',
   'workspace.add': 'Add workspace',
   'workspace.local': 'Local folder',
