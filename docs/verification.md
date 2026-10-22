@@ -2,7 +2,7 @@
 
 验收日期：2026-10-15（America/Los_Angeles）。
 
-## 2026-10-22 — jay.38: cursor-based disk history deltas
+## 2026-10-22 — jay.39: cursor-based disk history deltas
 
 History validation now uses the actual Session event cursor rather than the list activity timestamp, which advances primarily on user messages and can miss assistant/tool events. Complete disk copies are reused: unchanged validation returns no events and does not read or rewrite the full local history document. New records are filtered on the remote machine and gzip/base64 encoded before SSH transport. This read-only helper uses the installer's existing Node and the running DSH's public projections/page APIs; it installs no remote plugin, changes no model settings, and does not restart the remote service.
 
@@ -10,7 +10,7 @@ New copies checkpoint forward prefixes every 500 events, including an fsync befo
 
 The generated-key SSH + DSH 0.2.1-rc.2 fixture saved 1,100 generated messages. History return payload was 16,255 bytes versus 336,889 bytes of uncompressed JSON; unchanged validation returned zero events in 109 bytes, and one new title event returned exactly one event in 257 bytes. Counts include gzip/base64 history framing but exclude SSH framing, outgoing helper source and unrelated UI traffic. They are not a WAN latency or whole-connection traffic benchmark. Native live chat still obtains its current state from the remote service.
 
-Local regression covers interrupted batches across process restart, no-change disk IO avoidance, committed-data/index recovery, missing-file repair, equal list timestamps with new events, old-cache continuation, malformed/gapped/rewound cuts, bounded parallelism and clear/write races. `scripts/history-delta-smoke.mjs` separately exercises the final installed backend bundle with a real generated-key SSH server, disk reads after Host restart without reconnecting SSH, selective cleanup and the same remote DSH PID. Publication and installed-package evidence are added after the release gates complete.
+Local regression covers interrupted batches across process restart, no-change disk IO avoidance, committed-data/index recovery, missing-file repair, equal list timestamps with new events, old-cache continuation, malformed/gapped/rewound cuts, bounded parallelism and clear/write races. `scripts/history-delta-smoke.mjs` separately exercises the final installed backend bundle with a real generated-key SSH server, disk reads after Host restart without reconnecting SSH, selective cleanup and the same remote DSH PID. The first jay.38 CI attempt exposed an existing wall-clock health-poll race in the terminal-continuity fixture. That fixture now drives repair explicitly, while retaining carrier replacement, same-shell-PID and once-only-write assertions; production repair behavior is unchanged. The unpublished jay.38 tag is retained as failed evidence. Publication and installed-package evidence are added after the jay.39 gates complete.
 
 ## 2026-10-22 — jay.37: compressed cold loads over slow links
 

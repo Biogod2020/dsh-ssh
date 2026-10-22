@@ -24,6 +24,13 @@ const options = {
   bootstrap: readFileSync(new URL('../assets/remote-bootstrap.mjs', import.meta.url), 'utf8'),
   root: join(dir, 'local-state'), remoteRoot, returnUrl: () => 'http://127.0.0.1:3080/',
 }
+function ownedManager() {
+  const value = new RemoteWorkspaces(engine, options)
+  // This fixture explicitly drives carrier repair. A wall-clock poll racing
+  // the injected unhealthy probe would test scheduler order, not continuity.
+  clearInterval((value as any).recovery)
+  return value
+}
 beforeAll(async () => {
   const run = promisify(execFile)
   const dsh = process.env.DSH_REMOTE_TEST_DSH ?? (await run('/usr/bin/which', ['dsh'])).stdout.trim()
@@ -59,7 +66,7 @@ ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/history',
   sshd = await TestSshd.start()
   const store = new HostStore(join(dir, 'hosts.json'))
   store.create({ alias: 'fixture', host: '127.0.0.1', port: sshd.port, user: process.env.USER!, auth: { kind: 'key', keyPath: sshd.clientKey } })
-  engine = new SshEngine(store); manager = new RemoteWorkspaces(engine, options)
+  engine = new SshEngine(store); manager = ownedManager()
 }, 75000)
 afterAll(() => {
   manager?.dispose(); engine?.dispose(); sshd?.stop()
@@ -218,7 +225,7 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect(disconnectedCatalog.stale).toBe(true)
   expect(disconnectedCatalog.sessions.some(x => x.sessionId === sessionId)).toBe(true)
   expect(() => process.kill(receipt.pid, 0)).not.toThrow()
-  manager = new RemoteWorkspaces(engine, options)
+  manager = ownedManager()
   expect(manager.list()).toEqual([first])
   expect(manager.operation(preparing.id)).toMatchObject({ phase: 'ready', workspace: first })
   expect(manager.history().every(x => x.phase === 'ready')).toBe(true)
@@ -243,7 +250,7 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect(manager.activity().some(x => x.id === bad.id)).toBe(false)
   expect(manager.operation(bad.id)?.phase).toBe('failed')
   const failedReceipt = manager.operation(bad.id)
-  manager.dispose(); manager = new RemoteWorkspaces(engine, options)
+  manager.dispose(); manager = ownedManager()
   expect(manager.operation(bad.id)).toEqual(failedReceipt)
   expect(manager.history().find(x => x.id === bad.id)?.dismissed).toBe(true)
   expect(manager.activity()).toEqual([])
@@ -310,7 +317,7 @@ it('saves real remote history as restartable disk prefixes and transfers only ne
   const offline = new RemoteHistoryCache(join(options.root, 'history'))
   expect((await offline.read(changed.meta.key))?.records).toEqual(beforeRestart.records)
   expect(engine.pool.size).toBe(0)
-  manager = new RemoteWorkspaces(engine, options)
+  manager = ownedManager()
   const reconnected = await connected(), restarted = (manager as any).historyCache
   await restarted.sync(reconnected, sessionId)
   expect((await manager.cachedHistory(workspace.id, sessionId))?.records).toEqual(beforeRestart.records)
