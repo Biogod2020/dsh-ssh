@@ -111,3 +111,12 @@ The tunnel now handles local socket errors before opening a channel, contains sy
 The release workflow now installs the exact archive into an isolated DSH process, disconnects one generated SSH fixture, sends three requests to the stale forward, and requires the DSH HTTP API and an independent tunnel to remain healthy. It also requires no new SSH connection, no dispatched command and no model request.
 
 Local release verification passed all 69 suites / 619 tests, typecheck, build and artifact checks. The exact jay.34 archive passed DSH 0.2.1-rc.2 isolated compatibility and the installed-archive SSH-disconnect test: the process and independent tunnel remained available after three rejected forwards, with no reconnect, command or model request. The archive installed into the daily Desktop profile matched both tested client/backend bundles byte-for-byte; 6,006 protected files remained byte-identical and only the two expected dependency files changed. The article plugin and all other dependency declarations were preserved.
+
+
+### jay.34 publication verified
+
+The [tagged release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/39698581172) completed verify, OIDC publish and verify-installation successfully. This includes the installed-archive fault injection, three reviewed DSH runtimes, and package-name installation from npm and the mainland mirror. macOS also installed the public package by name into the shipped DSH 0.2.1-rc.2 runtime and passed authenticated runtime/settings checks.
+
+Both latest tags point to jay.34. The published CI archive is 1,178,187 bytes; SHA-256 `eea7ac0b5d0eed3ac0dea65c4fd1cbb5c61bf65b26f11ad2a81de88704d786f7`. Its official and actual `cdn.npmmirror.com` downloads match the tested SHA-512. Its 83 runtime source files match the release commit and the locally tested fix. The local installation uses the macOS acceptance build of the same version/source, with its own frozen archive hash `7bac8b5fb31f44bcef705e56dc23bb5bd1cb6d6a0190e6591657d13307ca9cd6`.
+
+The daily Desktop was fully exited before installation and restarted into its normal native interface. The corrected backend remains alive with no new crash report observed after restart. Original projects and session history remain visible; only SSH dependency metadata changed during installation. No production SSH host or model request was used for tests.
