@@ -9,7 +9,25 @@
   "controllerOutages": [
     {
       "requestedMilliseconds": 0,
-      "actualMilliseconds": 1.4682499999998981,
+      "actualMilliseconds": 1.54950000000008,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 3000,
+      "actualMilliseconds": 3003.4581660000003,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 30000,
+      "actualMilliseconds": 30001.508,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 300000,
+      "actualMilliseconds": 300002.202458,
       "offlineDiskRead": true,
       "remotePidPreserved": true
     }

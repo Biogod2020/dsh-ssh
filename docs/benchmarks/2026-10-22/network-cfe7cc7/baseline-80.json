@@ -1,0 +1,317 @@
+{
+  "schema": 1,
+  "scope": "SSH controller and local store; no native renderer, model request or packet loss emulation",
+  "store": "RemoteHistoryCache",
+  "runtime": "0.2.1-rc.2",
+  "node": "v24.16.0",
+  "platform": "linux",
+  "arch": "x64",
+  "conditions": {
+    "injectedRttMs": 80,
+    "mbitPerSecondPerDirection": 20,
+    "tcpPayloadBytesIncludeSshEncryption": true,
+    "excludeIpTcpHeaders": true,
+    "packetLossPercent": 0
+  },
+  "samplesSufficient": true,
+  "initialRecords": 1104,
+  "firstCopy": {
+    "milliseconds": {
+      "samples": 1,
+      "p50": 2923.6582990000006,
+      "p95": 2923.6582990000006,
+      "max": 2923.6582990000006,
+      "total": 2923.6582990000006
+    },
+    "sshSentBytes": {
+      "samples": 1,
+      "p50": 16756,
+      "p95": 16756,
+      "max": 16756,
+      "total": 16756
+    },
+    "sshReceivedBytes": {
+      "samples": 1,
+      "p50": 3107496,
+      "p95": 3107496,
+      "max": 3107496,
+      "total": 3107496
+    },
+    "historyRecords": {
+      "samples": 1,
+      "p50": 1104,
+      "p95": 1104,
+      "max": 1104,
+      "total": 1104
+    },
+    "historyBodyBytes": {
+      "samples": 1,
+      "p50": 3641082,
+      "p95": 3641082,
+      "max": 3641082,
+      "total": 3641082
+    },
+    "applicationBytesRead": {
+      "samples": 1,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 1,
+      "p50": 10556905,
+      "p95": 10556905,
+      "max": 10556905,
+      "total": 10556905
+    },
+    "writeCalls": {
+      "samples": 1,
+      "p50": 6,
+      "p95": 6,
+      "max": 6,
+      "total": 6
+    }
+  },
+  "localWindow": {
+    "milliseconds": {
+      "samples": 100,
+      "p50": 9.971418999999514,
+      "p95": 12.189507000000958,
+      "max": 18.501172999996925,
+      "total": 1034.7841450000014
+    },
+    "sshSentBytes": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 72,
+      "total": 72
+    },
+    "sshReceivedBytes": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 36,
+      "total": 36
+    },
+    "historyRecords": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "historyBodyBytes": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "applicationBytesRead": {
+      "samples": 100,
+      "p50": 3641599,
+      "p95": 3641599,
+      "max": 3641599,
+      "total": 364159900
+    },
+    "applicationBytesWritten": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "writeCalls": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    }
+  },
+  "unchanged": {
+    "milliseconds": {
+      "samples": 100,
+      "p50": 330.55569900000046,
+      "p95": 627.7714680000063,
+      "max": 662.7475630000008,
+      "total": 37618.04482100002
+    },
+    "sshSentBytes": {
+      "samples": 100,
+      "p50": 4964,
+      "p95": 6640,
+      "max": 6828,
+      "total": 521764
+    },
+    "sshReceivedBytes": {
+      "samples": 100,
+      "p50": 432,
+      "p95": 2356,
+      "max": 2480,
+      "total": 70836
+    },
+    "historyRecords": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "historyBodyBytes": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "applicationBytesRead": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "writeCalls": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    }
+  },
+  "increment": {
+    "milliseconds": {
+      "samples": 30,
+      "p50": 400.301996999995,
+      "p95": 696.4817380000022,
+      "max": 731.2617279999977,
+      "total": 13785.12086399996
+    },
+    "sshSentBytes": {
+      "samples": 30,
+      "p50": 4964,
+      "p95": 6640,
+      "max": 6692,
+      "total": 159028
+    },
+    "sshReceivedBytes": {
+      "samples": 30,
+      "p50": 672,
+      "p95": 2596,
+      "max": 2632,
+      "total": 31652
+    },
+    "historyRecords": {
+      "samples": 30,
+      "p50": 1,
+      "p95": 1,
+      "max": 1,
+      "total": 30
+    },
+    "historyBodyBytes": {
+      "samples": 30,
+      "p50": 520,
+      "p95": 520,
+      "max": 520,
+      "total": 15600
+    },
+    "applicationBytesRead": {
+      "samples": 30,
+      "p50": 3648865,
+      "p95": 3656131,
+      "max": 3656650,
+      "total": 109473735
+    },
+    "applicationBytesWritten": {
+      "samples": 30,
+      "p50": 3649926,
+      "p95": 3657192,
+      "max": 3657711,
+      "total": 109505565
+    },
+    "writeCalls": {
+      "samples": 30,
+      "p50": 2,
+      "p95": 2,
+      "max": 2,
+      "total": 60
+    }
+  },
+  "recovery": {
+    "milliseconds": {
+      "samples": 30,
+      "p50": 1140.467810999995,
+      "p95": 1180.774820000006,
+      "max": 1217.680383999992,
+      "total": 34212.87787200004
+    },
+    "sshSentBytes": {
+      "samples": 30,
+      "p50": 3618,
+      "p95": 3618,
+      "max": 3618,
+      "total": 108368
+    },
+    "sshReceivedBytes": {
+      "samples": 30,
+      "p50": 10539,
+      "p95": 10539,
+      "max": 10539,
+      "total": 316030
+    },
+    "historyRecords": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "historyBodyBytes": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "applicationBytesRead": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    },
+    "writeCalls": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0,
+      "total": 0
+    }
+  },
+  "unchangedOldDataFilesRewritten": 0,
+  "appendOldDataFilesRewritten": 1,
+  "sshTotals": {
+    "sent": 838790,
+    "received": 3543649,
+    "connections": 31
+  },
+  "remotePidPreserved": true,
+  "failures": []
+}
