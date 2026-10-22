@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, lstat, readFile, writeFile, rename, unlink, readdir } from 'node:fs/promises'
+import { mkdir, lstat, readFile, open, rename, unlink, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export interface HistoryRecord { type: 'event'; event: { seq: number; type: string; [key: string]: unknown } }
@@ -61,6 +61,12 @@ export class RemoteHistoryCache {
   }
   token(): number { return this.revision }
   async meta(key: string): Promise<HistoryMeta | undefined> { await this.ready; const value = this.entries.get(key); return value ? { ...value } : undefined }
+  async present(key: string): Promise<boolean> {
+    await this.ready; await this.chain
+    if (this.issue) throw new Error(this.issue)
+    if (!isKey(key)) throw new Error('Invalid history cache identity')
+    return this.privateFile(join(this.root, key + '.json'))
+  }
   current(token: number): boolean { return token === this.revision }
   private queue<T>(fn: () => Promise<T>): Promise<T> {
     const next = this.chain.then(async () => { await this.ready; if (this.issue) throw new Error(this.issue); return fn() })
@@ -69,7 +75,11 @@ export class RemoteHistoryCache {
   private async atomic(path: string, value: unknown): Promise<void> {
     if (await this.privateFile(path)) { /* Refuse symlinks and publicly readable replacements. */ }
     const temporary = `${path}.${randomUUID()}.tmp`
-    try { await writeFile(temporary, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); await rename(temporary, path) }
+    try {
+      const file = await open(temporary, 'wx', 0o600)
+      try { await file.writeFile(JSON.stringify(value)); await file.sync() } finally { await file.close() }
+      await rename(temporary, path)
+    }
     finally { await unlink(temporary).catch(() => {}) }
   }
   private index(): Promise<void> { return this.atomic(join(this.root, 'index.json'), { version: 1, entries: [...this.entries.values()], snoozedUntil: this.snoozedUntil }) }
@@ -90,6 +100,16 @@ export class RemoteHistoryCache {
     if (!await this.privateFile(path)) return undefined
     const document = JSON.parse(await readFile(path, 'utf8')) as HistoryDocument
     if (!validMeta(document.meta) || document.meta.key !== key || !validHistory(document.records, document.meta.cursor)) throw new Error('Local history is damaged; original file was preserved')
+    // A crash can commit the data rename before its index update. Prefer the
+    // validated file and repair only its metadata, without discarding history.
+    if (JSON.stringify(meta) !== JSON.stringify(document.meta)) {
+      if (document.meta.cursor < meta.cursor) throw new Error('Local history index is ahead of its file; original file was preserved')
+      const token = this.token()
+      await this.queue(async () => {
+        if (!this.current(token) || this.entries.get(key) !== meta) return
+        this.entries.set(key, document.meta); await this.index()
+      })
+    }
     return document
   }
   async save(meta: Omit<HistoryMeta, 'bytes' | 'records' | 'firstSavedAt'>, records: HistoryRecord[], token: number): Promise<boolean> {

@@ -59,33 +59,110 @@ it('rejects path traversal, gaps, and symlinked roots', async () => {
   const unsafe = new RemoteHistoryCache(join(f.root, 'symlink'))
   expect((await unsafe.list()).warning).toBeTruthy(); expect(await readFile(target, 'utf8')).toBe('untouched')
 })
-it('syncs full history once, merges later suffixes, and never fetches unchanged or unopened histories', async () => {
-  const f = await fixture(); let updatedAt = 1
-  const all = f.rows(0, 5)
-  const gateway = { historySnapshot: vi.fn(async () => ({ header: { id: 'session' }, cursor: updatedAt === 1 ? 2 : 5,
-    records: updatedAt === 1 ? all.slice(2, 3) : all.slice(2), hasMore: true })), rpc: vi.fn(async () => ({ records: all.slice(0, 2), hasMore: false })) }
-  const source = vi.fn(async () => ({ gateway: gateway as unknown as RemoteGateway, check() {}, updatedAt, title: 'Saved' }))
+it('uses cursors instead of list timestamps, coalesces checks, and never downloads unopened histories', async () => {
+  const f = await fixture(), all = f.rows(0, 5); let head = 2
+  const delta = vi.fn(async (after: number) => ({ cursor: head, throughSeq: head, records: all.slice(after + 1, head + 1) }))
+  const source = vi.fn(async () => ({ gateway: {} as RemoteGateway, delta, check() {}, updatedAt: 1, title: 'Saved' }))
   const service = new RemoteHistoryService(f.cache, source)
-  await service.sync(f.item, 'never-opened', false, 10)
-  expect(source).not.toHaveBeenCalled()
-  await service.sync(f.item, 'session')
-  expect((await f.cache.read(f.key))?.records).toEqual(all.slice(0, 3))
-  expect(gateway.rpc).toHaveBeenCalledOnce()
-  await service.sync(f.item, 'session', false, 1); await service.sync(f.item, 'session')
-  expect(gateway.historySnapshot).toHaveBeenCalledOnce()
-  updatedAt = 2; await service.sync(f.item, 'session')
-  expect((await f.cache.read(f.key))?.records).toEqual(all)
-  expect(gateway.rpc).toHaveBeenCalledOnce()
+  await service.sync(f.item, 'never-opened', false, 10); expect(source).not.toHaveBeenCalled()
+  await service.sync(f.item, 'session'); expect((await f.cache.read(f.key))?.records).toEqual(all.slice(0, 3))
+  await service.sync(f.item, 'session', false, 1); expect(delta).toHaveBeenCalledOnce()
+  const diskReads = vi.spyOn(f.cache, 'read')
+  await service.sync(f.item, 'session'); expect(delta).toHaveBeenLastCalledWith(2, undefined)
+  expect(diskReads).not.toHaveBeenCalled()
+  const file = join(f.root, 'history', f.key + '.json'), before = await readFile(file, 'utf8')
+  await service.sync(f.item, 'session'); expect(await readFile(file, 'utf8')).toBe(before)
+  // Assistant/tool events can advance while the list timestamp stays at 1.
+  head = 5; await service.sync(f.item, 'session')
+  expect(delta).toHaveBeenLastCalledWith(2, undefined); expect((await f.cache.read(f.key))?.records).toEqual(all)
+  const restarted = new RemoteHistoryService(new RemoteHistoryCache(join(f.root, 'history')), source)
+  await restarted.sync(f.item, 'session'); expect(delta).toHaveBeenLastCalledWith(5, undefined)
+})
+it('checkpoints forward batches and resumes only missing events after interruption and process restart', async () => {
+  const f = await fixture(), all = f.rows(0, 1103); let fail = true
+  const delta = vi.fn(async (after: number, cut?: number) => {
+    if (fail && after === 499) throw new Error('connection lost')
+    const end = Math.min(after + 500, cut ?? 1103)
+    return { cursor: cut ?? 1103, throughSeq: end, records: all.slice(after + 1, end + 1) }
+  })
+  const source = async () => ({ gateway: {} as RemoteGateway, delta, check() {}, updatedAt: 1, title: 'Saved' })
+  const first = new RemoteHistoryService(f.cache, source); await first.sync(f.item, 'session')
+  expect((await f.cache.read(f.key))?.meta).toMatchObject({ complete: false, cursor: 499, records: 500 })
+  expect(Object.keys((await first.status()).failures)).toEqual([f.key])
+  fail = false; delta.mockClear()
+  const cache = new RemoteHistoryCache(join(f.root, 'history')), restarted = new RemoteHistoryService(cache, source)
+  await restarted.sync(f.item, 'session')
+  expect(delta.mock.calls).toEqual([[499, undefined], [999, 1103]])
+  expect((await cache.read(f.key))?.records).toEqual(all); expect((await cache.read(f.key))?.meta.complete).toBe(true)
+})
+it.each(['gap', 'rewind', 'empty', 'cut-change'])('preserves a complete disk copy on a %s response', async kind => {
+  const f = await fixture(); await f.cache.save(f.meta, f.rows(0, 2), f.cache.token())
+  const before = await readFile(join(f.root, 'history', f.key + '.json'), 'utf8')
+  const delta = vi.fn(async () => kind === 'rewind' ? { cursor: 1, throughSeq: 1, records: [] }
+    : kind === 'empty' ? { cursor: 5, throughSeq: 2, records: [] }
+    : kind === 'cut-change' ? { cursor: 4, throughSeq: 5, records: f.rows(3, 5) }
+    : { cursor: 5, throughSeq: 5, records: f.rows(4, 5) })
+  const service = new RemoteHistoryService(f.cache, async () => ({ gateway: {} as RemoteGateway, delta, check() {}, updatedAt: 1, title: 'Saved' }))
+  await service.sync(f.item, 'session'); expect(Object.keys((await service.status()).failures)).toEqual([f.key])
+  expect(await readFile(join(f.root, 'history', f.key + '.json'), 'utf8')).toBe(before); expect(delta).toHaveBeenCalledOnce()
+})
+it('resumes suffix checkpoints made by earlier releases without deleting or redownloading the saved suffix', async () => {
+  const f = await fixture(); await f.cache.save({ ...f.meta, cursor: 5, complete: false }, f.rows(3, 5), f.cache.token())
+  const gateway = { historySnapshot: vi.fn(async () => ({ header: { id: 'session' }, cursor: 5, records: f.rows(3, 5), hasMore: true })),
+    rpc: vi.fn(async () => ({ records: f.rows(0, 2), hasMore: false })) }
+  const delta = vi.fn(async (after: number) => ({ cursor: after, throughSeq: after, records: [] }))
+  const service = new RemoteHistoryService(f.cache, async () => ({ gateway: gateway as unknown as RemoteGateway, delta, check() {}, updatedAt: 1, title: 'Saved' }))
+  await service.sync(f.item, 'session'); expect((await f.cache.read(f.key))?.records).toEqual([...f.rows(0, 2), ...f.rows(3, 5)])
+  expect((await f.cache.read(f.key))?.meta.complete).toBe(true); expect(delta).toHaveBeenLastCalledWith(5, undefined); expect(gateway.historySnapshot).not.toHaveBeenCalled()
 })
 it('does not refill a cleared copy from an already dispatched background read', async () => {
   const f = await fixture(); let finish!: (value: unknown) => void
-  const gateway = { historySnapshot: vi.fn(() => new Promise(resolve => { finish = resolve })) }
-  const service = new RemoteHistoryService(f.cache, async () => ({ gateway: gateway as unknown as RemoteGateway, check() {}, title: 'Saved', updatedAt: 1 }))
+  const delta = vi.fn(() => new Promise<any>(resolve => { finish = resolve }))
+  const service = new RemoteHistoryService(f.cache, async () => ({ gateway: {} as RemoteGateway, delta, check() {}, title: 'Saved', updatedAt: 1 }))
   const syncing = service.sync(f.item, 'session')
   for (let n = 0; n < 100 && !finish; n++) await new Promise(resolve => setTimeout(resolve, 1))
   await service.clear([f.key])
-  finish({ header: { id: 'session' }, cursor: 2, records: f.rows(0, 2), hasMore: false }); await syncing
+  finish({ cursor: 2, throughSeq: 2, records: f.rows(0, 2) }); await syncing
   expect(await f.cache.read(f.key)).toBeUndefined()
   await service.sync(f.item, 'session', false, 2)
-  expect(gateway.historySnapshot).toHaveBeenCalledOnce()
+  expect(delta).toHaveBeenCalledOnce()
+})
+
+it('bounds concurrent history reads and stops queued reads after local clearing', async () => {
+  const f = await fixture(); const finishes: Array<() => void> = []; let active = 0, peak = 0
+  const delta = vi.fn(async () => {
+    active++; peak = Math.max(peak, active)
+    await new Promise<void>(resolve => finishes.push(resolve)); active--
+    return { cursor: 2, throughSeq: 2, records: f.rows(0, 2) }
+  })
+  const service = new RemoteHistoryService(f.cache, async () => ({ gateway: {} as RemoteGateway, delta, check() {}, updatedAt: 1, title: 'Saved' }))
+  const jobs = Array.from({ length: 6 }, (_, n) => service.sync(f.item, 'session-' + n))
+  await vi.waitFor(() => expect(finishes).toHaveLength(2))
+  await service.clear([historyKey(f.item.hostId, f.item.workspaceId, 'session-0')])
+  finishes.forEach(finish => finish()); await Promise.all(jobs)
+  expect(peak).toBe(2); expect(delta).toHaveBeenCalledTimes(2)
+  expect((await service.status()).entries).toHaveLength(0)
+})
+
+it('recovers a data commit ahead of the index and checks only after its actual disk cursor', async () => {
+  const f = await fixture(); await f.cache.save(f.meta, f.rows(0, 2), f.cache.token())
+  const index = join(f.root, 'history/index.json'), stale = await readFile(index, 'utf8')
+  await f.cache.save({ ...f.meta, cursor: 5 }, f.rows(0, 5), f.cache.token())
+  await writeFile(index, stale)
+  const cache = new RemoteHistoryCache(join(f.root, 'history'))
+  const all = f.rows(0, 5), delta = vi.fn(async (after: number) => ({ cursor: 5, throughSeq: 5, records: all.slice(after + 1) }))
+  const service = new RemoteHistoryService(cache, async () => ({ gateway: {} as RemoteGateway, delta, check() {}, title: f.meta.title, updatedAt: 1 }))
+  await service.sync(f.item, 'session')
+  expect(delta.mock.calls.map(x => x[0])).toEqual([2, 5])
+  expect((await cache.meta(f.key))?.cursor).toBe(5); expect((await cache.read(f.key))?.records).toEqual(all)
+  expect((await new RemoteHistoryCache(join(f.root, 'history')).meta(f.key))?.cursor).toBe(5)
+  expect((await service.status()).failures).toEqual({})
+})
+it('refills a missing data file rather than treating its stale index as a complete disk copy', async () => {
+  const f = await fixture(); await f.cache.save(f.meta, f.rows(0, 2), f.cache.token())
+  await unlink(join(f.root, 'history', f.key + '.json'))
+  const delta = vi.fn(async () => ({ cursor: 2, throughSeq: 2, records: f.rows(0, 2) }))
+  const service = new RemoteHistoryService(f.cache, async () => ({ gateway: {} as RemoteGateway, delta, check() {}, title: f.meta.title, updatedAt: 1 }))
+  await service.sync(f.item, 'session'); expect(delta).toHaveBeenCalledWith(-1, undefined)
+  expect((await f.cache.read(f.key))?.records).toEqual(f.rows(0, 2))
 })

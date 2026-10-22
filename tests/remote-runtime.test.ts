@@ -11,7 +11,9 @@ import { HostStore } from '../src/store.ts'
 import { SshEngine } from '../src/engine.ts'
 import { RemoteWorkspaces } from '../src/remote/manager.ts'
 import { RemoteActivityStore } from '../src/remote/activity-store.ts'
+import { RemoteHistoryCache } from '../src/remote/history-cache.ts'
 import { compatibleRemoteVersion } from '../src/remote/types.ts'
+import * as transport from '../src/remote/transport.ts'
 import { shellQuote } from '../src/remote/transport.ts'
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-remote-runtime-test-')))
@@ -37,12 +39,20 @@ beforeAll(async () => {
   writeFileSync(join(plugin, 'cordis.patch.yml'), '- insert:\n    - id: remote-fs-fixture\n      name: "@fixture/remote-fs"\n')
   writeFileSync(join(plugin, 'index.js'), `
 import { readFile, writeFile } from 'node:fs/promises';
-export const inject=['webServer','connection'];
+export const inject=['webServer','connection','sessions'];
 export function apply(ctx){ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/direct-fs',handler:async(req,res)=>{
  const denied=ctx.connection.requestRejection(req);if(denied){res.writeHead(denied);res.end();return}
  const path=${JSON.stringify(join(project, 'plugin.txt'))};
  if(req.method==='POST')await writeFile(path,'remote-plugin-write');
  res.writeHead(200,{'content-type':'text/plain'});res.end(await readFile(path,'utf8'));
+}}));
+ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/history',handler:async(req,res)=>{
+ const denied=ctx.connection.requestRejection(req);if(denied){res.writeHead(denied);res.end();return}
+ let raw='';for await(const bytes of req)raw+=bytes;const {id,count}=JSON.parse(raw);
+ if(!Number.isInteger(count)||count<1||count>1200)throw Error('Invalid fixture size');
+ const session=ctx.sessions.get(id);if(!session)throw Error('Fixture Session is not attached');
+ for(let n=0;n<count;n++)session.append('user/message',{role:'user',source:{kind:'user'},content:[{type:'text',text:'Generated history fixture '+n+' '.repeat(64)}],requestId:'fixture-'+n},{surfaceOp:'append'});
+ res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({added:count}));
 }}));}
 `)
   await run(dsh, ['plugin', '--profile', 'web', 'add', `link:${plugin}`], { env: { ...process.env, DSH_HOME: join(remoteRoot, 'data') }, timeout: 60000 })
@@ -193,7 +203,7 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect(readFileSync(onceMarker, 'utf8')).toBe('once')
   manager.setEnabled(false)
   engine.dropAlias('fixture')
-  for (let n = 0; n < 160 && !existsSync(completed); n++) await new Promise(resolve => setTimeout(resolve, 25))
+  for (let n = 0; n < 160 && (!existsSync(completed) || readFileSync(completed, 'utf8') !== 'completed'); n++) await new Promise(resolve => setTimeout(resolve, 25))
   expect(readFileSync(completed, 'utf8')).toBe('completed')
   terminalStream.close()
   expect(engine.listTunnels()).toHaveLength(0)
@@ -239,6 +249,72 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   expect(manager.activity()).toEqual([])
   expect(engine.listTunnels()).toHaveLength(0)
   expect(JSON.parse(readFileSync(join(remoteRoot, 'state/server.json'), 'utf8')).pid).toBe(receipt.pid)
+}, 120000)
+
+it('saves real remote history as restartable disk prefixes and transfers only new events over SSH', async () => {
+  const workspace = await connected(), runtime = (manager as any).runtimes.get(workspace.hostId)
+  const pid = runtime.gateway.receipt.pid, { sessionId } = await manager.createSession(workspace.id)
+  const opened = new URL((await manager.open(workspace.id, sessionId)).url)
+  const exchange = await fetch(opened, { redirect: 'manual' })
+  const cookie = exchange.headers.getSetCookie().map(x => x.split(';')[0]).join('; ')
+  const copies = (manager as any).historyCache
+  await vi.waitFor(async () => expect((await copies.status()).syncing).toHaveLength(0), { timeout: 10000 })
+  const seed = await fetch(opened.origin + '/api/fixture/history', { method: 'POST',
+    headers: { Cookie: cookie, Origin: opened.origin, 'content-type': 'application/json' }, body: JSON.stringify({ id: sessionId, count: 1100 }) })
+  expect(seed.status).toBe(200)
+  const reads: Array<{ after: number; count: number; bytes: number }> = []
+  let wireBytes = 0
+  const dispatch = transport.remoteScript
+  const wire = vi.spyOn(transport, 'remoteScript').mockImplementation((engine, alias, command, source, onLine, ...options) =>
+    dispatch(engine, alias, command, source, line => {
+      if (line.startsWith('DSH_HISTORY')) wireBytes += Buffer.byteLength(line) + 1
+      onLine(line)
+    }, ...options))
+  const source = copies.source
+  copies.source = async (...args: any[]) => {
+    const result = await source(...args), original = result.delta
+    result.delta = async (after: number, cut?: number) => {
+      const value = await original(after, cut)
+      reads.push({ after, count: value.records.length, bytes: Buffer.byteLength(JSON.stringify(value)) }); return value
+    }
+    return result
+  }
+  await copies.sync(workspace, sessionId)
+  const saved = (await manager.cachedHistory(workspace.id, sessionId))!
+  expect(saved, JSON.stringify((await copies.status()).failures)).toBeDefined()
+  expect(saved.meta.complete).toBe(true)
+  expect(saved.records.filter(x => x.event.type === 'user/message')).toHaveLength(1100)
+  expect(reads.every(x => x.count <= 500)).toBe(true)
+  expect(reads.reduce((n, x) => n + x.count, 0)).toBeGreaterThanOrEqual(1100)
+  const fullWireBytes = wireBytes, fullJsonBytes = reads.reduce((n, x) => n + x.bytes, 0)
+  expect(fullWireBytes).toBeLessThan(fullJsonBytes / 2)
+  const firstCursor = saved.meta.cursor
+  wireBytes = 0; reads.length = 0; await copies.sync(workspace, sessionId)
+  expect(reads).toEqual([{ after: firstCursor, count: 0, bytes: expect.any(Number) }])
+  const unchangedWireBytes = wireBytes; expect(unchangedWireBytes).toBeLessThan(256)
+  // Rename appends an event without a new user message/list activity timestamp.
+  await runtime.gateway.rpc('session/rename', { request: { sessionId, title: 'Incremental fixture' } })
+  wireBytes = 0; reads.length = 0; await copies.sync(workspace, sessionId)
+  const changed = (await manager.cachedHistory(workspace.id, sessionId))!
+  expect(changed.meta.cursor).toBeGreaterThan(firstCursor)
+  expect(reads.reduce((n, x) => n + x.count, 0)).toBe(changed.meta.cursor - firstCursor)
+  expect(changed.records.slice(0, saved.records.length)).toEqual(saved.records)
+  const deltaWireBytes = wireBytes
+  wire.mockRestore()
+  if (process.env.DSH_HISTORY_REPORT) writeFileSync(process.env.DSH_HISTORY_REPORT, JSON.stringify({
+    runtime: runtime.gateway.receipt.version, generatedMessages: 1100, fullWireBytes, fullJsonBytes, unchangedRecords: 0, unchangedWireBytes,
+    deltaRecords: changed.meta.cursor - firstCursor, deltaWireBytes, note: 'gzip/base64 history payload only; SSH framing and outgoing helper source excluded',
+  }, null, 2), {mode: 0o600})
+  const beforeRestart = JSON.parse(JSON.stringify(changed))
+  manager.dispose(); engine.dropAlias('fixture')
+  const offline = new RemoteHistoryCache(join(options.root, 'history'))
+  expect((await offline.read(changed.meta.key))?.records).toEqual(beforeRestart.records)
+  expect(engine.pool.size).toBe(0)
+  manager = new RemoteWorkspaces(engine, options)
+  const reconnected = await connected(), restarted = (manager as any).historyCache
+  await restarted.sync(reconnected, sessionId)
+  expect((await manager.cachedHistory(workspace.id, sessionId))?.records).toEqual(beforeRestart.records)
+  expect((manager as any).runtimes.get(workspace.hostId).gateway.receipt.pid).toBe(pid)
 }, 120000)
 
 it('retains dispatched preparation after a controller stop without replaying installation or starting DSH', async () => {

@@ -12,11 +12,12 @@ import { RemoteSessionCache } from './session-catalog.ts'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS, compatibleRemoteVersion } from './types.ts'
 import { RemoteHistoryCache, historyKey } from './history-cache.ts'
 import { RemoteHistoryService } from './history-service.ts'
+import { readHistoryDelta } from './history-reader.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
 interface HostCatalog { workspaces: Awaited<ReturnType<RemoteGateway['workspaceSnapshot']>>; sessions: { items: SessionSummary[] }; checkedAt: number }
-interface Runtime { gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
+interface Runtime { node: string; gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
 interface ManagerOptions {
   installer: string; bootstrap: string; root?: string; remoteRoot?: string; returnUrl: () => string
   legacy?: () => Array<{ alias: string; remotePath: string; title: string }>
@@ -55,6 +56,7 @@ export class RemoteWorkspaces {
         || catalog.workspaces.archivedSessionIds.includes(sessionId)) throw new Error('Session does not belong to this remote workspace')
       const summary = catalog.sessions.items.find(row => row.sessionId === sessionId)
       return { gateway: runtime.gateway, check, updatedAt: summary?.updatedAt ?? 0,
+        delta: (afterSeq, throughSeq) => readHistoryDelta(this.engine, item.alias, runtime.node, runtime.gateway.receipt, { sessionId, afterSeq, throughSeq }, runtime.updatedAt),
         title: typeof summary?.projections?.values?.title === 'string' ? summary.projections.values.title : '' }
     })
     const keyPath = join(root, 'recovery.key')
@@ -306,7 +308,7 @@ export class RemoteWorkspaces {
       const gateway = new RemoteGateway(tunnel.localPort, receipt, alias, this.options.returnUrl(), hostId, this.recoveryProof(hostId))
       try { await gateway.start() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       try { check() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
-      runtime = { gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0 }; this.runtimes.set(hostId, runtime)
+      runtime = { node: installed.node, gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0 }; this.runtimes.set(hostId, runtime)
       const owner = runtime
       gateway.onCatalogChange = () => {
         if (this.runtimes.get(hostId) !== owner) return
@@ -372,7 +374,7 @@ export class RemoteWorkspaces {
           .sort((a, b) => b.updatedAt - a.updatedAt)
         const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt }
         this.sessionCache.save(id, catalog)
-        for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt)
+        for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt, session.running)
         return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
       } catch { return { ...cached(), warning: 'Remote session status could not be checked. Showing the last saved list.' } }
     })()

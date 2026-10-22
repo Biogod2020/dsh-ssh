@@ -62,6 +62,12 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts
+      - name: Accept incremental disk history in the installed archive
+        run: |
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          test "${#archives[@]}" -eq 1
+          node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
       - name: Survive SSH disconnect in the installed archive
         run: |
           shopt -s nullglob

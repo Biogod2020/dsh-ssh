@@ -1,19 +1,29 @@
-import { RemoteHistoryCache, historyKey, validHistory, type HistoryRecord } from './history-cache.ts'
+import { RemoteHistoryCache, historyKey, validHistory, type HistoryRecord, type HistoryDocument } from './history-cache.ts'
 import type { RemoteGateway } from './gateway.ts'
 import type { RemoteWorkspace } from './types.ts'
+import type { HistoryDelta } from './history-reader.ts'
 
-interface Source { gateway: RemoteGateway; check(): void; title: string; updatedAt: number }
+interface Source { gateway: RemoteGateway; delta(afterSeq: number, throughSeq?: number): Promise<HistoryDelta>; check(): void; title: string; updatedAt: number }
 export class RemoteHistoryService {
   private jobs = new Map<string, { token: number; promise: Promise<void> }>()
+  private checked = new Map<string, number>()
+  private reading = 0
+  private waiting: Array<() => void> = []
+  private async read<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.reading >= 2) await new Promise<void>(resolve => this.waiting.push(resolve))
+    else this.reading++
+    try { return await fn() }
+    finally { const next = this.waiting.shift(); if (next) next(); else this.reading-- }
+  }
   private paused = new Set<string>()
   private failures = new Map<string, string>()
   constructor(readonly cache: RemoteHistoryCache, private source: (item: RemoteWorkspace, sessionId: string) => Promise<Source>) {}
   async status() { return { ...await this.cache.list(), syncing: [...this.jobs.keys()], failures: Object.fromEntries(this.failures) } }
   async clear(keys: string[]): Promise<void> {
-    for (const key of keys) { this.paused.add(key); this.failures.delete(key) }
+    for (const key of keys) { this.paused.add(key); this.failures.delete(key); this.checked.delete(key) }
     await this.cache.clear(keys)
   }
-  sync(item: RemoteWorkspace, sessionId: string, explicit = true, hintUpdatedAt?: number): Promise<void> {
+  sync(item: RemoteWorkspace, sessionId: string, explicit = true, hintUpdatedAt?: number, running = false): Promise<void> {
     if (!sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)) return Promise.resolve()
     const key = historyKey(item.hostId, item.workspaceId, sessionId)
     if (explicit) this.paused.delete(key)
@@ -24,43 +34,62 @@ export class RemoteHistoryService {
     const job = { token, promise: undefined as unknown as Promise<void> }
     job.promise = (async () => {
       const meta = await this.cache.meta(key)
-      if (!explicit && (!meta || meta.complete && hintUpdatedAt !== undefined && meta.remoteUpdatedAt >= hintUpdatedAt)) return
+      if (!explicit && (!meta || meta.complete && meta.remoteUpdatedAt >= (hintUpdatedAt ?? 0)
+        && Date.now() - (this.checked.get(key) ?? -Infinity) < (running ? 5000 : 30000))) return
       const source = await this.source(item, sessionId)
       const check = () => { source.check(); if (!this.cache.current(token)) throw new Error('Local history copy was cleared; background sync stopped') }
       check()
-      if (meta?.complete && meta.remoteUpdatedAt >= source.updatedAt) return
-      const cached = await this.cache.read(key)
-      const opening = await source.gateway.historySnapshot(sessionId)
-      check()
-      if (!validHistory(opening.records, opening.cursor)) throw new Error('Remote history is discontinuous; cached copy was preserved')
-      if (cached && opening.cursor < cached.meta.cursor) throw new Error('Remote history moved backwards; cached copy was preserved')
-      const records = new Map<number, HistoryRecord>()
-      const merge = (rows: HistoryRecord[]) => {
-        for (const record of rows) {
-          const previous = records.get(record.event.seq)
-          if (previous && JSON.stringify(previous) !== JSON.stringify(record)) throw new Error('Remote history changed; cached copy was preserved')
-          records.set(record.event.seq, record)
+      let opening: HistoryDelta | undefined
+      if (meta?.complete && await this.cache.present(key)) {
+        opening = await this.read(() => { check(); return source.delta(meta.cursor, undefined) })
+        check()
+        if (opening.cursor === meta.cursor && opening.throughSeq === meta.cursor && Array.isArray(opening.records) && !opening.records.length
+          && meta.title === (source.title || sessionId) && meta.remoteUpdatedAt === source.updatedAt) {
+          this.checked.set(key, Date.now()); this.failures.delete(key); return
         }
       }
-      if (cached) merge(cached.records)
-      merge(opening.records)
-      let before = opening.records[0]?.event.seq ?? 0, more = opening.hasMore
-      const metadata = () => ({ key, hostId: item.hostId, workspaceId: item.workspaceId, sessionId, alias: item.alias, remotePath: item.remotePath,
-        title: source.title || sessionId, savedAt: Date.now(), remoteUpdatedAt: source.updatedAt, cursor: opening.cursor, complete: !more })
-      let pages = 0
-      while (more && (!cached?.meta.complete || before > cached.meta.cursor + 1)) {
-        if (!cached && pages % 10 === 0) await this.cache.save(metadata(), [...records.values()].sort((a, b) => a.event.seq - b.event.seq), token)
-        check()
-        const page = await source.gateway.rpc<{ records: HistoryRecord[]; hasMore: boolean }>('session/page', {
-          request: { address: { kind: 'session', sessionId }, throughSeq: opening.cursor, beforeSeq: before, maxMessages: 500 },
-        })
-        check()
-        if (!Array.isArray(page.records) || !page.records.length || !validHistory(page.records, before - 1) || typeof page.hasMore !== 'boolean') throw new Error('Remote history page has a gap')
-        merge(page.records); before = page.records[0]!.event.seq; more = page.hasMore; pages++
+      let cached: HistoryDocument | undefined = await this.cache.read(key)
+      if (opening && cached?.meta.cursor !== meta?.cursor) opening = undefined
+      // Finish older suffix checkpoints without fetching their saved tail again.
+      if (cached && cached.records.length && cached.records[0]!.event.seq > 0) {
+        while (cached.records[0]!.event.seq > 0) {
+          const before: number = cached.records[0]!.event.seq, cursor: number = cached.meta.cursor
+          const page: { records: HistoryRecord[]; hasMore: boolean } = await this.read(() => { check(); return source.gateway.rpc<{ records: HistoryRecord[]; hasMore: boolean }>('session/page', {
+            request: { address: { kind: 'session', sessionId }, throughSeq: cursor, beforeSeq: before, maxMessages: 500 },
+          }) })
+          check()
+          if (!page.records?.length || !validHistory(page.records, before - 1)
+            || page.hasMore !== (page.records[0]!.event.seq > 0)) throw new Error('Remote history page has a gap; saved copy was preserved')
+          const records: HistoryRecord[] = [...page.records, ...cached.records]
+          await this.cache.save({ ...cached.meta, complete: !page.hasMore, savedAt: Date.now() }, records, token)
+          check(); cached = { meta: (await this.cache.meta(key))!, records }
+        }
       }
-      const joined = [...records.values()].sort((a, b) => a.event.seq - b.event.seq)
-      if (!validHistory(joined, opening.cursor) || (joined.length && joined[0]!.event.seq !== 0)) throw new Error('History is incomplete; previous local copy was preserved')
-      more = false; check(); await this.cache.save(metadata(), joined, token); this.failures.delete(key)
+      let after = cached?.meta.cursor ?? -1, head: number | undefined
+      for (;;) {
+        const delta = opening ?? await this.read(() => { check(); return source.delta(after, head) })
+        opening = undefined
+        check()
+        if (!Number.isSafeInteger(delta.cursor) || delta.cursor < after || head !== undefined && delta.cursor !== head
+          || !Number.isSafeInteger(delta.throughSeq) || delta.throughSeq < after || delta.throughSeq > delta.cursor
+          || !Array.isArray(delta.records) || (delta.records.length ? !validHistory(delta.records, delta.throughSeq)
+            || delta.records[0]!.event.seq !== after + 1 : delta.throughSeq !== after || delta.cursor !== after)) throw new Error('Remote history delta has a gap; saved copy was preserved')
+        head = delta.cursor
+        const records = [...(cached?.records ?? []), ...delta.records]
+        const complete = delta.throughSeq === head
+        // Unchanged validation sends no history and does not rewrite its file.
+        if (delta.records.length || !cached || !cached.meta.complete || cached.meta.title !== (source.title || sessionId)
+          || cached.meta.remoteUpdatedAt !== source.updatedAt) {
+          await this.cache.save({ key, hostId: item.hostId, workspaceId: item.workspaceId, sessionId, alias: item.alias, remotePath: item.remotePath,
+            title: source.title || sessionId, savedAt: Date.now(), remoteUpdatedAt: source.updatedAt, cursor: delta.throughSeq, complete }, records, token)
+          check()
+          cached = { meta: { ...((await this.cache.meta(key))!) }, records }
+        }
+        if (complete) break
+        if (delta.throughSeq === after) throw new Error('Remote history delta did not advance')
+        after = delta.throughSeq
+      }
+      this.checked.set(key, Date.now()); this.failures.delete(key)
     })().catch(error => {
       if (this.cache.current(token)) this.failures.set(key, error instanceof Error ? error.message : 'Local history sync failed')
     }).finally(() => { if (this.jobs.get(key) === job) this.jobs.delete(key) })

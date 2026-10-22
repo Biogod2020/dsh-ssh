@@ -8,7 +8,7 @@ export const shellQuote = (value: string): string => "'" + value.replaceAll("'",
 
 /** Exactly one dispatch. Private output stays here, never in generic exec logs or errors. */
 export async function remoteScript(engine: SshEngine, alias: string, command: string, source: string,
-  onLine: (line: string) => void, timeoutMs: number, expectedUpdatedAt?: number): Promise<void> {
+  onLine: (line: string) => void, timeoutMs: number, expectedUpdatedAt?: number, maxOutputBytes = 1024 * 1024): Promise<void> {
   return withClient(engine, alias, client => new Promise<void>((resolve, reject) => {
     let channel: ClientChannel | undefined, done = false, bytes = 0, buffer = '', reported = ''
     const decoder = new StringDecoder('utf8')
@@ -27,7 +27,7 @@ export async function remoteScript(engine: SshEngine, alias: string, command: st
       stream.on('data', (data: Buffer) => {
         if (done) return
         bytes += data.length
-        if (bytes > 1024 * 1024) { stream.close(); finish(new Error('Remote setup output exceeded its limit; outcome unknown')); return }
+        if (bytes > maxOutputBytes) { stream.close(); finish(new Error('Remote setup output exceeded its limit; outcome unknown')); return }
         buffer += decoder.write(data)
         for (let at; (at = buffer.indexOf('\n')) >= 0;) {
           const line = buffer.slice(0, at); buffer = buffer.slice(at + 1)
