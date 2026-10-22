@@ -28,7 +28,7 @@ const offload=Object.fromEntries(Object.entries(offloadKeys).map(([short,key])=>
   assert(!value[2].includes('[fixed]')||value[1]==='off','Cannot disable fixed loopback offload')
   return[short,{was:value[1],fixed:value[2].includes('[fixed]')}]
 }))
-let ownedRoot=false,offloadChanged=false,port,child,stats,setupFailure,exitCode
+let ownedRoot=false,offloadChanged=false,port,child,stats,setupFailure,executionFailure,validationFailure,exitCode,killDeadline,cleanupErrors=[]
 const addedRules=[]
 const clean=()=>{
   const errors=[]
@@ -40,7 +40,14 @@ const clean=()=>{
   }
   return errors
 }
-const stop=signal=>{child?.kill(signal);const errors=clean();if(errors.length)console.error('Kernel fixture cleanup failed');process.exitCode=1}
+const stop=signal=>{
+  executionFailure??=new Error('Kernel fixture interrupted: '+signal)
+  if(child&&child.exitCode===null){
+    child.kill(signal);clearTimeout(killDeadline)
+    killDeadline=setTimeout(()=>{if(child.exitCode===null)child.kill('SIGKILL')},5000);killDeadline.unref()
+  }
+  process.exitCode=1
+}
 process.once('SIGINT',()=>stop('SIGINT'));process.once('SIGTERM',()=>stop('SIGTERM'))
 try{
   child=fork(fileURLToPath(new URL('./network-history-benchmark.mjs',import.meta.url)),[dsh,modulePath,'0','1000',resolve(output),samples,recoveries],{
@@ -70,17 +77,20 @@ try{
       child.send({type:'ssh-link-ready',ok:true})
     }catch(error){setupFailure=error;child.send({type:'ssh-link-ready',ok:false})}
   })
-  exitCode=await new Promise((accept,reject)=>{child.once('error',reject);child.once('exit',(code,signal)=>signal?reject(new Error('Benchmark child terminated: '+signal)):accept(code))})
+  exitCode=await new Promise(accept=>{
+    child.on('error',error=>{executionFailure??=error;if(!child.pid||child.exitCode!==null||child.signalCode)accept(null);else stop('SIGTERM')})
+    child.once('exit',(code,signal)=>{clearTimeout(killDeadline);if(signal)executionFailure??=new Error('Benchmark child terminated: '+signal);accept(code)})
+  })
   if(ownedRoot)stats=qdiscs()
+}catch(error){executionFailure??=error
 }finally{
-  const errors=clean()
-  if(errors.length)throw new AggregateError(errors,'Kernel fixture cleanup did not finish')
+  clearTimeout(killDeadline);cleanupErrors=clean()
 }
 let report
 try{report=JSON.parse(await readFile(resolve(output),'utf8'))}
 catch(error){
-  if(!setupFailure&&exitCode===0)throw error
-  report={schema:1,complete:false,failures:[{phase:setupFailure?'kernel-setup':'child-benchmark',errorClass:(setupFailure??error).name}],childExitCode:exitCode}
+  if(!setupFailure&&!executionFailure&&exitCode===0)throw error
+  report={schema:1,complete:false,failures:[{phase:setupFailure?'kernel-setup':'child-benchmark',errorClass:(setupFailure??executionFailure??error).name}],childExitCode:exitCode}
 }
 const impaired=(stats??[]).filter(row=>['7a20:','7a30:'].includes(row.handle))
 report.scope='SSH controller and local store under Linux loopback kernel netem; no native renderer or model request'
@@ -90,12 +100,18 @@ report.conditions={injectedRttMs:200,mbitPerSecondPerDirection:2,packetLossPerce
   limitation:'Same-kernel loopback TCP; sender TCP Small Queues and kernel scheduling can differ from a physical WAN. Random loss is configured at 1%, not an exact observed percentage.'}
 report.kernel={qdiscs:stats,offloadBefore,offloadAfterRestoration:features(),originalQdiscRestored:qdiscs().every(row=>row.kind==='noqueue'),fixturePort:port,
   offloadScope:'Entire loopback interface on this exclusive disposable runner; other fixture flows have no injected latency/loss but share the disabled offload condition.'}
+if(setupFailure||executionFailure||cleanupErrors.length){report.complete=false;report.failures??=[];report.failures.push({phase:'kernel-wrapper',errorClass:(setupFailure??executionFailure??cleanupErrors[0]).name});report.kernel.cleanupErrorCount=cleanupErrors.length}
+if(!setupFailure&&!executionFailure&&!cleanupErrors.length)try{
+  assert.equal(exitCode,0,'Kernel-loss benchmark failed; inspect its incomplete report')
+  assert.equal(impaired.length,2)
+  assert(impaired.every(row=>row.packets>0),'Both directions must carry real packets')
+  assert(impaired.reduce((n,row)=>n+(row.drops??0),0)>0,'No actual kernel drops were observed')
+  assert(report.kernel.originalQdiscRestored,'Loopback qdisc was not restored')
+  for(const [short,value]of Object.entries(offload))assert(new RegExp('^'+offloadKeys[short]+': '+value.was,'m').test(report.kernel.offloadAfterRestoration),'Loopback offload was not restored')
+}catch(error){validationFailure=error;report.complete=false;report.failures??=[];report.failures.push({phase:'kernel-validation',errorClass:error.name})}
 await writeFile(resolve(output),JSON.stringify(report,null,2)+'\n',{mode:0o600})
+if(cleanupErrors.length)throw new AggregateError([setupFailure??executionFailure,...cleanupErrors].filter(Boolean),'Kernel fixture cleanup did not finish')
 if(setupFailure)throw setupFailure
-assert.equal(exitCode,0,'Kernel-loss benchmark failed; inspect its incomplete report')
-assert.equal(impaired.length,2)
-assert(impaired.every(row=>row.packets>0),'Both directions must carry real packets')
-assert(impaired.reduce((n,row)=>n+(row.drops??0),0)>0,'No actual kernel drops were observed')
-assert(report.kernel.originalQdiscRestored,'Loopback qdisc was not restored')
-for(const [short,value]of Object.entries(offload))assert(new RegExp('^'+offloadKeys[short]+': '+value.was,'m').test(report.kernel.offloadAfterRestoration),'Loopback offload was not restored')
+if(executionFailure)throw executionFailure
+if(validationFailure)throw validationFailure
 console.log(JSON.stringify({passed:true,kernelLossPercent:1,rttMs:200,configuredMbit:2,actualKernelDrops:impaired.reduce((n,row)=>n+(row.drops??0),0),recoveryP95Ms:report.recovery.milliseconds.p95}))
