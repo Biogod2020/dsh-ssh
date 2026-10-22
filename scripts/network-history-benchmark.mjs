@@ -90,6 +90,18 @@ function rewrites(before,after){return[...before].filter(([path,value])=>JSON.st
 try{
   sshd=await TestSshd.start({home:remote,path:process.env.PATH,env:environment})
   link=await ShapedTcpLink.start(sshd.port,rtt,mbit)
+  // A dedicated hosted-runner parent may install kernel loss on this one TCP
+  // flow before the first SSH handshake. This is never enabled by a bare env
+  // flag; IPC is required and the parent records/cleans its owned qdisc.
+  if(process.send){
+    assert.equal(rtt,0);assert.equal(mbit,1000)
+    await new Promise((accept,reject)=>{
+      const timeout=setTimeout(()=>{process.off('message',ready);reject(new Error('Kernel network setup did not complete'))},30000)
+      const ready=message=>{if(message?.type!=='ssh-link-ready')return;clearTimeout(timeout);process.off('message',ready);message.ok?accept():reject(new Error('Kernel network setup failed'))}
+      process.on('message',ready);process.send({type:'ssh-link-port',port:link.port})
+    })
+    process.disconnect()
+  }
   const pins=await fs.readFile(DEFAULT_KNOWN_HOSTS[0],'utf8'),pin=pins.split('\n').find(row=>row.startsWith('[127.0.0.1]:'+sshd.port+' '))
   assert(pin);await fs.appendFile(DEFAULT_KNOWN_HOSTS[0],pin.replace('[127.0.0.1]:'+sshd.port,'[127.0.0.1]:'+link.port)+'\n',{mode:0o600})
   const hosts=new HostStore(join(local,'hosts.json'))

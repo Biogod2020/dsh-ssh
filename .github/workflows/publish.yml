@@ -163,8 +163,64 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  kernel-loss-history:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.16.0'
+          package-manager-cache: false
+      - name: Install disposable Linux network and SSH test support
+        run: |
+          npm install --global pnpm@11.20.0 --ignore-scripts
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends openssh-server iproute2 ethtool iptables
+          sudo mkdir -p /run/sshd
+          pnpm install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/dsh-loss" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.2
+      - name: Measure real TCP packet loss without modifying user routes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/kernel-history"
+          node scripts/fetch-history-baseline.mjs "$RUNNER_TEMP/kernel-history/baseline.ts"
+          for store in baseline candidate; do
+            module="$RUNNER_TEMP/kernel-history/baseline.ts"
+            if [ "$store" = candidate ]; then module="$PWD/src/remote/history-store.ts"; fi
+            node scripts/kernel-loss-history-benchmark.mjs "$RUNNER_TEMP/dsh-loss/node_modules/.bin/dsh" "$module" "$RUNNER_TEMP/kernel-history/$store-200-loss1.json" 100 30
+          done
+      - name: Check loss, incremental IO and preservation
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFile } from 'node:fs/promises'
+          import { join } from 'node:path'
+          for(const store of ['baseline','candidate']){
+            const report=JSON.parse(await readFile(join(process.env.RUNNER_TEMP,'kernel-history',`${store}-200-loss1.json`),'utf8'))
+            assert(report.samplesSufficient)
+            assert.deepEqual(report.failures,[])
+            assert.equal(report.conditions.packetLossPercent,1)
+            assert.equal(report.unchanged.historyRecords.total,0)
+            assert.equal(report.unchanged.applicationBytesWritten.total,0)
+            assert.equal(report.unchangedOldDataFilesRewritten,0)
+            assert(report.remotePidPreserved)
+            if(store==='candidate')assert.equal(report.appendOldDataFilesRewritten,0)
+          }
+          NODE
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: kernel-loss-history-measurements
+          path: ${{ runner.temp }}/kernel-history/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
   publish:
-    needs: [verify, network-history]
+    needs: [verify, network-history, kernel-loss-history]
     if: github.repository == 'Biogod2020/dsh-ssh' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
