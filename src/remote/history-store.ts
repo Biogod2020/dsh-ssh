@@ -116,7 +116,12 @@ export class SegmentedHistoryCache implements HistoryStore {
       // already references. Preserve readable snapshots; reopen before writes.
       if(published)this.writeIssue='A history commit may have reached disk; reopen this storage before further writes. Saved files were preserved.'
       throw error
-    } finally { await unlink(temporary).catch(e => { if (e.code !== 'ENOENT') throw e }) }
+    } finally { await unlink(temporary).catch(e => {
+      if(e.code!=='ENOENT'){
+        if(published)this.writeIssue='A history commit may have reached disk; reopen this storage before further writes. Saved files were preserved.'
+        throw e
+      }
+    }) }
   }
   private async load(): Promise<void> {
     try {
