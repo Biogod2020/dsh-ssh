@@ -120,3 +120,15 @@ The [tagged release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs
 Both latest tags point to jay.34. The published CI archive is 1,178,187 bytes; SHA-256 `eea7ac0b5d0eed3ac0dea65c4fd1cbb5c61bf65b26f11ad2a81de88704d786f7`. Its official and actual `cdn.npmmirror.com` downloads match the tested SHA-512. Its 83 runtime source files match the release commit and the locally tested fix. The local installation uses the macOS acceptance build of the same version/source, with its own frozen archive hash `7bac8b5fb31f44bcef705e56dc23bb5bd1cb6d6a0190e6591657d13307ca9cd6`.
 
 The daily Desktop was fully exited before installation and restarted into its normal native interface. The corrected backend remains alive with no new crash report observed after restart. Original projects and session history remain visible; only SSH dependency metadata changed during installation. No production SSH host or model request was used for tests.
+
+## 2026-10-21 — documentation and real onboarding walkthrough
+
+The README now leads with the unified local/remote sidebar, separates Desktop GUI installation from Web-profile CLI commands, and provides a linear first-use path. Four unmodified native-window screenshots show only disposable demo projects. The [walkthrough](onboarding.md) includes the exact remote model-settings entry and [machine-readable acceptance](onboarding-acceptance.json) records archive and screenshot hashes.
+
+Actual macOS Desktop acceptance used the already published jay.34 CI archive with local and remote DSH 0.2.1-rc.2. Focusing the remote composer and pressing Command+Option+Comma opened the remote Settings; Command+Comma opened local Settings. Remote Models successfully created a custom Chat Completions provider, discovered its model, selected it and displayed an explicitly simulated reply. The local mock observed one chat-completions request. The provider was present only in the remote profile. Add workspace → SSH workspace also created a new project through the real GUI; local and remote drafts survived round trips.
+
+The model response is a fixture, not a real-model quality or speed benchmark. The default remote installation pin remains alpha.4; this UI walkthrough does not claim a new Windows or all-version GUI acceptance.
+
+Runtime source, package version and dependencies are unchanged. The full verification was rerun: 69 suites / 619 tests, typecheck, build and artifact checks passed. An initial full run missed the terminal-start marker deadline in one real-SSH test; without changing code or test conditions, its five-test suite passed independently and the subsequent full run passed all 619 tests. The initial failed result is not counted as a pass.
+
+The published jay.34 archive also passed a fresh isolated DSH 0.2.1-rc.2 runtime acceptance, including authenticated HTTP/WebSocket access, same-origin rejection, native settings, and enable/disable. Markdown references and all four screenshot hashes were checked before the documentation push.

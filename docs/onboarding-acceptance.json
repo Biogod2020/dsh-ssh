@@ -1,0 +1,81 @@
+{
+  "date": "2026-10-21",
+  "timezone": "America/Los_Angeles",
+  "plugin": "@biogod/dsh-ssh@0.3.24-jay.34",
+  "archiveSha256": "eea7ac0b5d0eed3ac0dea65c4fd1cbb5c61bf65b26f11ad2a81de88704d786f7",
+  "runtimeSourceCommit": "265aa0d597b739bd5e9b12013c91522664937551",
+  "platform": "macOS arm64",
+  "desktopVersion": "0.2.1-rc.2",
+  "remoteVersion": "0.2.1-rc.2",
+  "isolation": {
+    "separateHome": true,
+    "separateDshHome": true,
+    "separateBrowserProfile": true,
+    "generatedLoopbackSshIdentity": true,
+    "productionSshTargetsUsed": false,
+    "realModelCredentialsUsed": false
+  },
+  "observedUiChecks": [
+    "Remote first-start Add API Key entry is visible",
+    "Focus remote composer and Command+Option+Comma opens remote Settings",
+    "Remote Models > Add model provider > Custom model API",
+    "Fetch available models > Add selected > Create provider",
+    "Provider appears in remote model selector",
+    "A sent fixture message receives the explicitly simulated response",
+    "Local and remote draft round trip preserves remote draft",
+    "Add workspace > SSH workspace > search host > Connect and add creates getting-started project in native sidebar",
+    "Same Host guest origin retained across project switches",
+    "Local draft also remains unchanged after remote model setup and project creation"
+  ],
+  "modelRoute": {
+    "protocol": "OpenAI Chat Completions",
+    "simulated": true,
+    "requestCount": 1,
+    "path": "/v1/chat/completions",
+    "model": "demo-model",
+    "localProviderAbsent": true,
+    "remoteProviderPresent": true
+  },
+  "screenshots": [
+    {
+      "path": "images/add-ssh-workspace.png",
+      "sha256": "621d4199fd9d765057fcaac17e82363506ea353476f2cfb42713c11673a9207b",
+      "bytes": 108597
+    },
+    {
+      "path": "images/remote-first-api-key.png",
+      "sha256": "061b5c7f15d13672d7644b5ee918f634e9b8d6d2bf7fe0324ce1d229974b8beb",
+      "bytes": 68181
+    },
+    {
+      "path": "images/remote-model-provider.png",
+      "sha256": "55b628ca0f62abc21e651bc0541ca9f5aaa141eb9fe54729ce20d2eecfb7f7ee",
+      "bytes": 116489
+    },
+    {
+      "path": "images/unified-sidebar.png",
+      "sha256": "f88210535d906645c4d6193a63eff27f36164e76deeb39ea3728685cdc69d036",
+      "bytes": 85455
+    }
+  ],
+  "scopeNotes": [
+    "Screenshots are unmodified native application captures of disposable demo data",
+    "The simulated response is not a real-model quality, speed or billing benchmark",
+    "No runtime source, package version or npm publication is changed by this documentation update",
+    "Other platforms and remote versions were not rerun for this UI walkthrough"
+  ],
+  "verification": {
+    "fullSuite": {
+      "suites": 69,
+      "tests": 619,
+      "passed": true
+    },
+    "typecheck": true,
+    "build": true,
+    "artifact": true,
+    "exactArchiveIsolatedRuntime": true,
+    "documentationLinks": true,
+    "screenshotsVisuallyInspected": 4,
+    "initialFailure": "First full run missed the terminal-start marker deadline in remote-runtime.test.ts. The unchanged 5-test suite passed independently; a subsequent unchanged full run passed all 619 tests."
+  }
+}
