@@ -4,7 +4,7 @@
 
 ## 2026-10-22 — jay.35: 本机磁盘历史与会话切换
 
-- 源码完整验收通过 73 个测试文件、645 项测试，以及 typecheck、build、产物检查；发行归档与三个 DSH 版本、npm/镜像的最终结果在流水线完成后补录。
+- [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39747401517) 的 verify、publish、verify-installation 全部成功。73 个测试文件、645 项测试，以及 typecheck、build、产物检查通过；最终归档通过三个 DSH 版本与 npm/镜像按包名安装验收。
 - 已访问的远端会话历史写入本机私有磁盘目录，无自动过期规则。可按主机、项目、会话筛选清除，达到空间、数量或保留时间阈值时提示检查，可推迟提醒。清除不会改动远端会话，旧的后台读取不会把已清除副本重新写回。
 - DSH `0.2.1-rc.2` 与生成密钥的真实 SSH 验证：1,100 条测试消息、1,104 条事件，补取两页历史后完整落盘。控制进程重启后无需 SSH 即可读取；选择清除保留其他副本与远端历史游标，明确打开可重新同步。
 - 真实隔离桌面验证应用重启后从缓存管理入口阅读磁盘副本；关闭测试 SSH 服务后，统一侧栏中的会话仍在原聊天区域显示本机历史。图片、附件二进制仍由远端提供。
@@ -12,6 +12,14 @@
 - 同一主机下十个项目连续两轮读取列表，真实 loopback SSH 的远端读取由 40 次降为 2 次；缓存过期后重新读取。该结果是请求数量，不作为公网连接延迟或吞吐基准。
 - 修复连接通道替换时过早关闭旧通道导致取消响应丢失的问题；已派发请求完成或到达限定等待时间后才释放旧通道。真正断线仍报告结果不确定，命令、聊天、传输及取消请求均不自动重放。
 - 测试使用独立 HOME、生成的 SSH 身份和生成消息，未读取用户模型凭据或使用生产 SSH 主机。
+
+### jay.35 publication and installation verified
+
+- The matching `v0.3.24-jay.35` tag points to release commit `0a00a9b3abbc47677438cf4779b318b3ac7b92c1`. The existing GitHub Actions trusted publisher published the tested archive directly through npm OIDC and signed provenance. Both npm and the mainland mirror advertise jay.35 as latest.
+- The CI archive is 1,214,288 bytes; SHA-256 `21befec6f1e0dd20cb4cf8b0eda5ba06c3e26aad7b544d52e14f11b2ff2b89d0`. Its official download and actual `cdn.npmmirror.com` download match the tested SHA-512. Independent macOS downloads also matched this SHA-256, and all 86 packaged runtime source files match the release checkout. The [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.35) includes this exact CI archive and checksum.
+- The exact archive passed isolated installation on DSH `0.2.0-rc.2`, `0.2.1-alpha.4` and `0.2.1-rc.2`. Package-name installation passed from npm into alpha.4 and from the mirror into both rc.2 versions. Each acceptance covered authenticated HTTP/WebSocket access, same-origin rejection, existing disk-history persistence, selective cleanup, reminder snoozing, native settings and enable/disable.
+- macOS independently installed the published package by name from npm into the shipped DSH `0.2.1-rc.2` runtime and passed the same checks. The retained alpha.4 real-SSH suite also passed all five tests. Installed-archive SSH fault injection confirmed that the DSH host and an independent tunnel survive stale forwarding failures, without reconnecting or replaying an operation.
+- This publication did not reinstall or restart the daily Desktop profile. Its existing configuration, sessions and plugin installation were preserved.
 
 ## 0.3.24-jay.26：认证与密码保存
 

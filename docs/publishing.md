@@ -42,10 +42,18 @@ npm exec --yes --package=npm@11.15.0 -- npm trust github @biogod/dsh-ssh --repo=
 
 ## 上一发行状态（2026-10-21）
 
-当前 npm 与国内镜像的 latest 均为 `0.3.24-jay.34`。对应 [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39698581172) 的三个任务全部通过；完整测试为 69 个文件、619 项。最终归档在 DSH `0.2.0-rc.2`、`0.2.1-alpha.4` 和 `0.2.1-rc.2` 中通过安装验收，两个源按包名安装也通过。macOS 另外完成官方源 → 0.2.1-rc.2、镜像 → alpha.4 的隔离安装。
+该次发行后，npm 与国内镜像的 latest 均为 `0.3.24-jay.34`。对应 [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39698581172) 的三个任务全部通过；完整测试为 69 个文件、619 项。最终归档在 DSH `0.2.0-rc.2`、`0.2.1-alpha.4` 和 `0.2.1-rc.2` 中通过安装验收，两个源按包名安装也通过。macOS 另外完成官方源 → 0.2.1-rc.2、镜像 → alpha.4 的隔离安装。
 
 npm 可能在接受并签名后继续处理新版本，暂时不向公开索引提供该版本。镜像同步因此在官方归档可读且完整性正确后发起，元数据读取使用 `t` 与 `cache=0` 刷新参数；仍必须下载实际 CDN 文件并校验 SHA-512，不以同步成功回执替代文件核对。
 
 日常发版继续推送匹配版本标签，由已有 OIDC 权限发布；不重复绑定信任关系，不执行 stage 审批，也不重新提交已经被 npm 接收的发行。
 
 本次发行额外要求安装包通过真实 SSH 断线故障注入：失效转发只失败本连接，宿主与独立隧道仍正常，不建立新 SSH 或重放请求。
+
+## 当前发行状态（2026-10-22）
+
+`0.3.24-jay.35` 已由 [匹配版本标签的流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39747401517) 通过现有 OIDC 权限直接发布，verify、publish、verify-installation 全部成功，无逐版 2FA 或 stage 审批。npm 与国内镜像的 latest 均为该版本，并提供签名 provenance。
+
+73 个测试文件、645 项测试，以及 typecheck、build 和产物检查通过。最终归档在 DSH `0.2.0-rc.2`、`0.2.1-alpha.4`、`0.2.1-rc.2` 中验收通过；官方源 → alpha.4、镜像 → 两个 rc.2 的按包名安装也通过，覆盖已有磁盘历史、选择清理和提醒。macOS 另完成官方源 → `0.2.1-rc.2` 的隔离安装。
+
+发布包为 1,214,288 字节，SHA-256 `21befec6f1e0dd20cb4cf8b0eda5ba06c3e26aad7b544d52e14f11b2ff2b89d0`。官方源与实际镜像 CDN 文件的 SHA-512 均与 CI 测试归档一致；[GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.35) 附带同一归档和 SHA-256 文件。本次发布未改动日常 Desktop 安装、配置或会话。
