@@ -35,3 +35,5 @@
 实际请求 `gemini-3.8-flash-high`，服务返回 `gemini-3.8-flash-n`，响应 `uZTaaoywPIyEuMYPnLnjoAw`。采纳补查 control 非租约字段、残留锁和子进程退出期限；若退出无法确认则失败，不把超时直接当成功。未采纳“官方下载已经重定向”及“抽取的实际依赖缺失”的无证据判断；固定哈希下载和实际旧运行时均独立通过。缓存散列不符继续拒绝，不悄悄替换未知文件。
 
 本轮布局候选的 `release:local` 通过 86 文件 / 777 项、typecheck、build、产物和可移植归档检查。此前 [`1c07161` 完整 CI](https://github.com/Biogod2020/dsh-ssh/actions/runs/39863480425)的三个门槛均通过，包含三个运行时安装、普通网络矩阵和独立 1% 内核丢包；其[原始测量](benchmarks/2026-10-22/ci-1c07161/README.md)单独归档，不能算作后续布局和新 CI 步骤已执行。
+
+后续 `e452f8f` 的[新 CI](https://github.com/Biogod2020/dsh-ssh/actions/runs/39869301310)已实际执行回退步骤，[Linux 原始结果](benchmarks/2026-10-22/packaged-downgrade-linux-e452f8f.json)通过。测试归档 SHA-256 `5c0eecd727ab72d01dfdbfb567e598f36f4a19e98dd61cb5537b4b6eb93fa474`，93 个打包源文件逐一匹配该提交；verify 与普通网络门槛已成功，内核组另待终态核对。新持续运行观测器不在这次提交中，不将前一 CI 的绿色结果转移给它。
