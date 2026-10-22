@@ -18,6 +18,12 @@ Local regression covers interrupted batches across process restart, no-change di
 - The CI archive is 1,223,681 bytes, SHA-256 `0aa53cabb1714fbdee68946efa7394b9efabc079c1017de07ce0a5646c26b1ec`. The [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.39), official npm and actual `cdn.npmmirror.com` download match that artifact. All 87 packaged runtime source files match the tag.
 - macOS independently installed `@biogod/dsh-ssh@0.3.24-jay.39` by name from npm into the shipped DSH 0.2.1-rc.2 runtime. Its backend/client bundles match the CI archive; disk persistence, selective cleanup/reminders, native settings and authenticated HTTP/WebSocket checks passed in an isolated home.
 
+### jay.39 daily installation verified
+
+Daily Desktop was fully exited and installed from npm with the exact dependency `0.3.24-jay.39`. Its backend/client bundles match the CI archive. Installation preserved 5,958 original data/configuration files and seven files from the other installed plugins; only package.json, pnpm-lock.yaml and the package manager's existing exact-version freshness exception changed. The policy edit was checked to add only jay.39.
+
+Native delivery restored the original running remote conversation, first showing its saved disk history and then its native chat. Selecting the original local conversation and returning reused the same gateway origin without another opening placeholder. The existing remote daemon retained its PID; no prompt, terminal input, cancellation or remote restart was dispatched. The previous 1,431 saved events were preserved byte-for-byte as a prefix, and 436 missing events were added, yielding a complete 1,867-event disk copy (5,382,529 bytes; UI 5.1 MB). These are delivery checks, not a WAN latency benchmark.
+
 ## 2026-10-22 — jay.37: compressed cold loads over slow links
 
 Native daily-profile verification after jay.36 exposed a separate initial-page load failure while the SSH carrier remained established. The gateway stripped Accept-Encoding from every request, forcing static scripts to travel uncompressed. Read-only remote sampling returned the same bootstrap script as 40,330 identity bytes versus 13,072 gzip bytes; this measures those bytes, not a general throughput benchmark.
