@@ -1,6 +1,6 @@
 # 200 ms / 2 Mbit/s / 1% 丢包验收
 
-状态：测试夹具已实现，实际 CI 结果待核对。不能把已有用户态延迟/限速报告当作丢包结果。
+状态：独立 Linux CI 的真实丢包测量已通过，[原始结果](kernel-loss/README.md)已核对。不能把用户态延迟/限速报告当作丢包结果。
 
 `scripts/kernel-loss-history-benchmark.mjs` 只允许临时 GitHub-hosted Linux runner。它启动同一真实 SSH/DSH 基准，等候测试代理报告生成的监听端口，在首次 SSH 握手前只对这个 TCP 流设置内核 netem；其他 DSH HTTP、代理到 sshd 的链路与 runner 流量不进入这两条延迟队列。脚本拒绝替换已有 loopback qdisc，自建规则在结束时移除并核对恢复。
 
@@ -12,4 +12,4 @@
 
 应用字节计数仍是 TCP socket 交付的 SSH 密文载荷，排除 IP/TCP 头部和内核重传；netem 包/丢弃数另列，不与应用字节混为物理线速。它仍是同一内核的 loopback TCP，受 TCP Small Queues 和内核调度影响，不能等同物理 WAN 或原生界面点击延迟。
 
-方法依据：[netem 的损失模型、限速与 TCP Small Queues 限制](https://man7.org/linux/man-pages/man8/tc-netem.8.html)、[PRIO 分类与默认映射](https://man7.org/linux/man-pages/man8/tc-prio.8.html)、[Linux 分段与接收卸载](https://www.kernel.org/doc/html/latest/networking/segmentation-offloads.html)。结果由 `kernel-loss-history-measurements` CI artifact 保存，核对后再归档。
+方法依据：[netem 的损失模型、限速与 TCP Small Queues 限制](https://man7.org/linux/man-pages/man8/tc-netem.8.html)、[PRIO 分类与默认映射](https://man7.org/linux/man-pages/man8/tc-prio.8.html)、[Linux 分段与接收卸载](https://www.kernel.org/doc/html/latest/networking/segmentation-offloads.html)。结果由 `kernel-loss-history-measurements` CI artifact 保存，已核对并归档。
