@@ -127,9 +127,12 @@ export class RemoteGateway {
     const session = value ? this.sessions.get(value) : undefined
     return session && session.expires > Date.now() ? session : undefined
   }
-  private headers(req?: IncomingMessage): Record<string, string | string[] | undefined> {
+  private headers(req?: IncomingMessage, identity = false): Record<string, string | string[] | undefined> {
     const headers: Record<string, string | string[] | undefined> = { ...req?.headers, host: new URL(this.upstreamOrigin).host, origin: this.upstreamOrigin, cookie: this.upstreamCookie }
-    delete headers.authorization; delete headers['proxy-authorization']; delete headers['accept-encoding']
+    delete headers.authorization; delete headers['proxy-authorization']
+    // Only the rewritten HTML needs identity bytes. Static assets and RPC
+    // bodies pass through unchanged, including their compression headers.
+    if (identity) delete headers['accept-encoding']
     delete headers['forwarded']; delete headers['x-forwarded-host']; delete headers['x-forwarded-for']
     return headers
   }
@@ -236,7 +239,7 @@ export class RemoteGateway {
     if (changesCatalog) this.onCatalogChange()
     try {
       await new Promise<void>((resolve, reject) => {
-        const upstream = request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: this.headers(req) }, incoming => {
+        const upstream = request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: this.headers(req, url.pathname === '/' && req.method === 'GET') }, incoming => {
           const headers = { ...incoming.headers }; delete headers['set-cookie']
           headers['referrer-policy'] = 'no-referrer'
           if (headers.location?.startsWith(upstreamOrigin)) headers.location = headers.location.slice(upstreamOrigin.length) || '/'

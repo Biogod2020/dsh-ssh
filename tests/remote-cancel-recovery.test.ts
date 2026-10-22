@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { createServer as httpServer } from 'node:http'
+import { createServer as httpServer, get as httpGet } from 'node:http'
+import { gzipSync } from 'node:zlib'
 import { connect, createServer as tcpServer, type Socket } from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -25,8 +26,15 @@ async function fixture(healthMisses = 2) {
   let dispatched = 0, releaseCancel: ((redirect?: boolean) => void) | undefined
   let healthDelay = 0, healthReads = 0, terminalFrames = 0, workspaceWrites = 0, upgradeDelay = 0
   let releaseBaseline: (() => void) | undefined
+  let rootEncoding: string | undefined
+  const asset = Buffer.from('window.generatedFixture = true;\n'.repeat(1000)), compressed = gzipSync(asset)
   const remote = httpServer((req, res) => {
     if (req.url?.startsWith('/?token=')) { res.writeHead(303, { 'Set-Cookie': 'fixture=only; Path=/' }); res.end(); return }
+    if (req.url === '/fixture.js') {
+      const zipped = req.headers['accept-encoding']?.includes('gzip')
+      const bytes = zipped ? compressed : asset
+      res.writeHead(200, { 'content-type': 'text/javascript', 'content-length': bytes.length, ...(zipped ? { 'content-encoding': 'gzip' } : {}) }); res.end(bytes); return
+    }
     if (req.url === '/api/session/cancel') {
       let raw = ''
       req.on('data', chunk => { raw += chunk })
@@ -48,7 +56,7 @@ async function fixture(healthMisses = 2) {
         res.end(JSON.stringify({ rpcId: JSON.parse(raw).rpcId, result: { ok: true, value: { workspace: { workspaceId: 'fixture-project', path: root, title: 'fixture', sessionIds: [] } } } }))
       }); return
     }
-    if (req.url === '/') healthReads++
+    if (req.url === '/') { healthReads++; rootEncoding = req.headers['accept-encoding'] }
     const send = () => { if (!res.destroyed) { res.writeHead(200); res.end('ready') } }
     if (healthDelay && req.url === '/') setTimeout(send, healthDelay).unref(); else send()
   })
@@ -111,6 +119,7 @@ async function fixture(healthMisses = 2) {
     ws.on('error', () => {}); return ws
   }
   return { gateway, manager, engine, first, stop, requestCancel, stream, runtime, carrier, root,
+    cookie, asset, compressed, get rootEncoding() { return rootEncoding },
     setHealthDelay(ms: number) { healthDelay = ms }, setUpgradeDelay(ms: number) { upgradeDelay = ms },
     get healthReads() { return healthReads }, get terminalFrames() { return terminalFrames }, get workspaceWrites() { return workspaceWrites },
     get baselineWaiting() { return !!releaseBaseline }, releaseBaseline: () => releaseBaseline?.(),
@@ -332,4 +341,20 @@ it('does not probe or destroy a retained runtime when explicitly adding a projec
   expect(f.workspaceWrites).toBe(1); expect(health).not.toHaveBeenCalled()
   expect(f.stop).not.toHaveBeenCalled(); await echo(ws, 'project-switch-preserved')
   ws.close(); await once(ws, 'close')
+})
+
+it('preserves compressed asset bytes and headers while requesting identity HTML for rewriting', async () => {
+  const f = await fixture(0)
+  const raw = (path: string) => new Promise<{ headers: Record<string, unknown>; bytes: Buffer }>((resolve, reject) => {
+    httpGet(f.gateway.origin + path, { headers: { Cookie: f.cookie, Origin: f.gateway.origin, 'Accept-Encoding': 'gzip' } }, res => {
+      const chunks: Buffer[] = []; res.on('data', chunk => chunks.push(chunk)); res.on('error', reject)
+      res.on('end', () => resolve({ headers: res.headers, bytes: Buffer.concat(chunks) }))
+    }).on('error', reject)
+  })
+  const asset = await raw('/fixture.js')
+  expect(asset.headers['content-encoding']).toBe('gzip')
+  expect(Number(asset.headers['content-length'])).toBe(f.compressed.length)
+  expect(asset.bytes).toEqual(f.compressed)
+  await raw('/')
+  expect(f.rootEncoding).toBeUndefined()
 })

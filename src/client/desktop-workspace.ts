@@ -202,19 +202,19 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
             const failure = event as Event & { isMainFrame?: boolean; errorCode?: number }
             if (failure.isMainFrame && failure.errorCode !== -3) finish(new Error(tt('remote.desktopLoadFailed')))
           }
-          const deadline = setTimeout(() => finish(new Error(tt('remote.desktopLoadFailed'))), 30000)
+          const deadline = setTimeout(() => finish(new Error(tt('remote.desktopPageTimedOut'))), 120000)
           view.cancel = abort
           signal?.addEventListener('abort', abort, { once: true })
           guest.addEventListener('dom-ready', ready); guest.addEventListener('did-fail-load', failed)
           guest.setAttribute('src', `about:blank#${view.lease}`); host.append(guest)
         })
-        const deadline = Date.now() + 45000
+        const deadline = Date.now() + 120000
         while (true) {
           signal?.throwIfAborted()
           if (disposed || !views.has(key)) throw new Error(tt('remote.desktopLoadFailed'))
           const ready = await guest.executeJavaScript<boolean>('Boolean(window.__dshSshView && document.querySelector("#root [class*=centerCol]"))')
           if (ready) break
-          if (Date.now() > deadline) throw new Error(tt('remote.desktopLoadFailed'))
+          if (Date.now() > deadline) throw new Error(tt('remote.desktopClientTimedOut'))
           await new Promise(resolve => setTimeout(resolve, 100))
         }
         view.ready = true; show(view)

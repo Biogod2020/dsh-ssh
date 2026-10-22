@@ -7,7 +7,7 @@ import { remotePresentation } from '../src/client/remote-presentation.ts'
 
 const workspace: RemoteWorkspace = { id: 'fixture', hostId: 'a'.repeat(24), alias: 'fixture', remotePath: '/work', title: 'work', workspaceId: 'remote-work' }
 let dispose: (() => void) | undefined
-afterEach(() => { dispose?.(); dispose = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren() })
+afterEach(() => { dispose?.(); dispose = undefined; vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.replaceChildren() })
 function fixture() {
   document.documentElement.lang = 'en'
   const local = document.createElement('button'); local.textContent = 'Local draft'; document.body.append(local); local.focus()
@@ -139,6 +139,30 @@ it('reports a failed guest load without echoing credential-bearing URLs and rele
 
 it('leaves web deployments on their existing presentation when no Desktop guest API is available', () => {
   expect(mountDesktopWorkspaces()).toBeUndefined()
+})
+
+it('keeps one cold page load alive past the old 30 second deadline without redispatching navigation', async () => {
+  vi.useFakeTimers()
+  const f = fixture(), view = await f.start()
+  let loaded!: () => void
+  view.guest.loadURL.mockImplementationOnce(() => new Promise<void>(resolve => { loaded = resolve }))
+  view.guest.dispatchEvent(new Event('dom-ready'))
+  await vi.advanceTimersByTimeAsync(45000)
+  expect(view.guest.isConnected).toBe(true); expect(f.bridge.release).not.toHaveBeenCalled()
+  loaded(); await view.promise
+  expect(view.guest.loadURL).toHaveBeenCalledOnce(); expect(f.fetch).toHaveBeenCalledOnce()
+})
+
+it('waits for a cold client boot beyond the old 45 second deadline in the same guest', async () => {
+  vi.useFakeTimers()
+  const f = fixture(), view = await f.start()
+  view.guest.executeJavaScript.mockResolvedValue(false)
+  view.guest.dispatchEvent(new Event('dom-ready'))
+  await vi.advanceTimersByTimeAsync(60000)
+  expect(view.guest.isConnected).toBe(true); expect(f.bridge.release).not.toHaveBeenCalled()
+  view.guest.executeJavaScript.mockResolvedValue(true)
+  await vi.advanceTimersByTimeAsync(100); await view.promise
+  expect(view.guest.loadURL).toHaveBeenCalledOnce(); expect(f.fetch).toHaveBeenCalledOnce()
 })
 
 it('shows a saved disk history in the same panel without SSH, and a late preview cannot replace current navigation', async () => {

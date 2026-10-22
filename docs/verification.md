@@ -2,6 +2,16 @@
 
 验收日期：2026-10-15（America/Los_Angeles）。
 
+## 2026-10-22 — jay.37: compressed cold loads over slow links
+
+Native daily-profile verification after jay.36 exposed a separate initial-page load failure while the SSH carrier remained established. The gateway stripped Accept-Encoding from every request, forcing static scripts to travel uncompressed. Read-only remote sampling returned the same bootstrap script as 40,330 identity bytes versus 13,072 gzip bytes; this measures those bytes, not a general throughput benchmark.
+
+Only the rewritten entry HTML now requests identity content. Other responses retain the original compressed bytes and matching headers. The native guest gives the initial page and remote-client bootstrap two minutes each, preserving cancellation, lease cleanup and no-replay semantics. Separate translated timeout messages distinguish page transport from client readiness. Focused tests exercise exact gzip-byte/header passthrough, identity HTML, one page navigation beyond the former 30-second deadline, and the same guest beyond the former 45-second client deadline. Final archive and native acceptance results are recorded after completion.
+
+Local verification passed all 73 suites / 658 tests, typecheck, build and archive checks; the private checkout passed the same 658 tests and typecheck. The exact archive passed isolated DSH `0.2.1-rc.2` acceptance. Daily Desktop installed that archive, preserved 5,957 original data/configuration files with only two SSH dependency metadata changes, and fully restarted after installation. Its installed backend/client bundles match the tested archive.
+
+Native delivery verification reopened the original macbook conversation on its existing remote DSH `0.2.0-rc.2`; the conversation rendered in the same window and displayed its existing running task. Selecting the original local conversation and returning to the remote reused the same gateway origin and rendered conversation, without another opening placeholder. No message, terminal input, model setting or remote restart was sent for this verification. This is a concrete native-UI acceptance, not an extended outage or latency benchmark.
+
 ## 2026-10-22 — jay.36: preserve terminals through transient latency
 
 The jay.34 and jay.35 gateway treated one two-second health timeout as a failed carrier. Replacing that carrier then closed every old socket, including an otherwise healthy terminal WebSocket; jay.35's HTTP request grace period did not cover upgraded streams. A local TCP/WebSocket fixture reproduced an abnormal close after a single 2.3-second health delay, with the remote service still healthy.
@@ -15,6 +25,8 @@ Focused regressions cover the original 2.3-second delay, coalesced reads, consec
 Local verification passed 73 suites / 655 tests, typecheck, build and archive checks. The exact archive passed isolated DSH `0.2.1-rc.2` acceptance and installed-archive SSH-disconnect fault injection. The private development checkout passed the same 655 tests and typecheck; its runtime sources match the public checkout apart from the existing package identity in `src/index.ts`.
 
 Initial full runs exposed two fixture teardown races: cache-directory initialization completed after a receipt test started removing its root, and a real login shell saved `.zsh_history` during terminal-fixture cleanup. Teardown now waits for initialization and permits bounded asynchronous directory-removal retries. The affected 24 tests passed with these changes; failed initial runs are retained and are not counted as passing release checks.
+
+The jay.36 [tagged workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/39769901055) completed verify, OIDC publish and verify-installation successfully, including all three reviewed runtimes and npm/mirror package-name installation. Daily Desktop installed the locally verified archive, restarted into the native interface, and preserved 5,957 original data/configuration files; only its two SSH dependency metadata files changed. Restoring the real remote conversation then exposed the cold-load issue described above; that UI step is not counted as a jay.36 end-to-end pass.
 
 ## 2026-10-22 — jay.35: 本机磁盘历史与会话切换
 
