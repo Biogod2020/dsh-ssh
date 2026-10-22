@@ -4,16 +4,23 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      verification_scope:
+        description: Verification scope for development (tags always run all gates)
+        type: choice
+        default: all
+        options: [all, kernel-only]
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-release-${{ github.ref }}
+  group: npm-release-${{ github.ref }}-${{ inputs.verification_scope || 'all' }}
   cancel-in-progress: false
 
 jobs:
   verify:
+    if: github.ref_type == 'tag' || inputs.verification_scope != 'kernel-only'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -101,6 +108,7 @@ jobs:
           retention-days: 7
 
   network-history:
+    if: github.ref_type == 'tag' || inputs.verification_scope != 'kernel-only'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

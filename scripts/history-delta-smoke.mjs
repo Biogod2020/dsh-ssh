@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
+import { Script, createContext } from 'node:vm'
 import { TestSshd } from '../tests/helpers/sshd.ts'
 import { DEFAULT_KNOWN_HOSTS } from '../src/engine/known-hosts.ts'
 import { shellQuote } from '../src/remote/transport.ts'
@@ -80,12 +81,42 @@ async function stop() {
   })
 }
 async function until(fn) { for(let n=0;n<600;n++){ const value=await fn(); if(value)return value; await delay(50) } throw Error('history acceptance timeout; private diagnostics: '+root) }
+async function draftView(api,workspace,sessionId){
+  const url=new URL((await api('remote/open',{id:workspace.id,sessionId})).url)
+  url.searchParams.set('dsh-remote-view','desktop')
+  const auth=await fetch(url,{redirect:'manual'})
+  assert.equal(auth.status,303)
+  const headers={Cookie:auth.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),Origin:url.origin,'content-type':'application/json'}
+  const request=async(body,status=200)=>{
+    const response=await fetch(url.origin+'/__dsh_remote/draft?sessionId='+encodeURIComponent(sessionId),{
+      headers,...(body?{method:'PUT',body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(5000)})
+    assert.equal(response.status,status,'installed local draft route');return response.json()
+  }
+  const script=await fetch(url.origin+'/__dsh_remote/draft-client.js',{headers,signal:AbortSignal.timeout(5000)})
+  assert.equal(script.status,200)
+  const modules=[]
+  // Execute the exact bundle-served module registration, including the
+  // serialized state machine arguments. This catches bundler-only closures;
+  // real React/input integration remains a separate native desktop gate.
+  new Script(await script.text()).runInContext(createContext({window:{__ModuleLoader__:{load(value){modules.push(value)}}}}),{timeout:1000})
+  assert.equal(modules.length,1);assert.equal(modules[0].id,'@jay-local/dsh-ssh-drafts')
+  return{origin:url.origin,request,async seedContains(text){
+    const response=await fetch(url.origin,{headers,signal:AbortSignal.timeout(10000)})
+    assert.equal(response.status,200)
+    const html=await response.text();assert(html.includes(text));assert(html.indexOf(text)<html.indexOf('</head>'),'saved draft must precede native editor boot')
+  }}
+}
 try {
   let api = await start()
   await api('hosts',{alias:'fixture',host:'127.0.0.1',port:sshd.port,user:process.env.USER,auth:{kind:'key',keyPath:sshd.clientKey}},201)
   const preparation = (await api('remote/connect',{alias:'fixture',remotePath:project},202)).operation
   const workspace = await until(async()=>{const {operation}=await api('remote/operation?id='+preparation.id);assert.notEqual(operation.phase,'failed',operation.message);return operation.phase==='ready'&&operation.workspace})
   const {sessionId} = await api('remote/session/create',{id:workspace.id})
+  let draft=await draftView(api,workspace,sessionId)
+  const draftText='Generated archive draft retained across controller origins'
+  const draftSnapshot=(await draft.request({text:draftText,expectedRevision:null,operationId:randomUUID(),hadReferences:false,hadAttachments:false})).draft
+  await draft.seedContains(draftText)
+  const draftOrigins=new Set([draft.origin])
   const open = new URL((await api('remote/open',{id:workspace.id,sessionId})).url)
   const auth = await fetch(open,{redirect:'manual'}), headers={Cookie:auth.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),Origin:open.origin,'content-type':'application/json'}
   const seeded = await fetch(open.origin+'/api/fixture/history',{method:'POST',headers,body:JSON.stringify({id:sessionId,count:1100})})
@@ -119,7 +150,7 @@ try {
     assert.deepEqual(offline.records,changed.records)
     assert.deepEqual((await api('connections')).connections,[{alias:'fixture',state:'disconnected'}], 'disk reads after restart must not open SSH')
     outages.push({requestedMilliseconds:milliseconds,actualMilliseconds,offlineDiskRead:true,remotePidPreserved:true})
-    if (milliseconds!==outageDurations.at(-1)) {
+    {
       // A restarted controller has no carrier. Explicitly reattach to the
       // generated existing service; installer discovery/bootstrap must reuse
       // its PID. No message, command, cancel or transfer is retried.
@@ -127,13 +158,20 @@ try {
       const reattached=await until(async()=>{const {operation}=await api('remote/operation?id='+reconnect.id);assert.notEqual(operation.phase,'failed',operation.message);return operation.phase==='ready'&&operation.workspace})
       assert.equal(reattached.id,workspace.id)
       assert.equal(JSON.parse(await readFile(join(remoteRoot,'state/server.json'),'utf8')).pid,remotePid)
+      draft=await draftView(api,workspace,sessionId);draftOrigins.add(draft.origin)
+      assert.deepEqual((await draft.request()).draft,draftSnapshot)
+      await draft.seedContains(draftText)
     }
   }
+  const clearedDraft=(await draft.request({text:'',expectedRevision:draftSnapshot.revision,operationId:randomUUID(),hadReferences:false,hadAttachments:false})).draft
+  await draft.request({text:draftText,expectedRevision:draftSnapshot.revision,operationId:randomUUID(),hadReferences:false,hadAttachments:false},409)
+  assert.deepEqual((await draft.request()).draft,clearedDraft)
   await api('remote/history/clear',{keys:[offline.meta.key]})
   assert.equal((await api('remote/history/read?id='+workspace.id+'&sessionId='+sessionId)).copy,undefined)
   assert.equal(JSON.parse(await readFile(join(remoteRoot,'state/server.json'),'utf8')).pid,remotePid)
   const result={passed:true,runtime:(await run(dsh,['--version'])).stdout.trim(),generatedMessages:1100,records:first.records.length,newEvents:changed.meta.cursor-first.meta.cursor,
-    installedBundle:true,diskReadAfterRestartWithoutSsh:true,controllerOutages:outages,selectiveClear:true,remotePidPreserved:true,modelRequests:0}
+    installedBundle:true,diskReadAfterRestartWithoutSsh:true,controllerOutages:outages,selectiveClear:true,remotePidPreserved:true,modelRequests:0,
+    localDraftAcrossControllerRestart:true,draftGatewayOriginChanged:draftOrigins.size>1,draftClearedWithoutRevival:true,serializedDraftClient:true,nativeEditorVerified:false}
   await writeFile(join(root,'result.json'),JSON.stringify(result,null,2),{mode:0o600})
   if(process.env.DSH_HISTORY_ARCHIVE_REPORT)await writeFile(process.env.DSH_HISTORY_ARCHIVE_REPORT,JSON.stringify(result,null,2),{mode:0o600})
   console.log(JSON.stringify(result));console.log('Private acceptance diagnostics: '+root)

@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "runtime": "0.2.1-rc.2",
+  "generatedMessages": 1100,
+  "records": 1104,
+  "newEvents": 1,
+  "installedBundle": true,
+  "diskReadAfterRestartWithoutSsh": true,
+  "controllerOutages": [
+    {
+      "requestedMilliseconds": 0,
+      "actualMilliseconds": 1.4682499999998981,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    }
+  ],
+  "selectiveClear": true,
+  "remotePidPreserved": true,
+  "modelRequests": 0,
+  "localDraftAcrossControllerRestart": true,
+  "draftGatewayOriginChanged": true,
+  "draftClearedWithoutRevival": true,
+  "serializedDraftClient": true,
+  "nativeEditorVerified": false
+}

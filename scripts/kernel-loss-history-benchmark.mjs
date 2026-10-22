@@ -3,7 +3,7 @@
  * Never use this helper on a user's machine or a self-hosted runner. */
 import assert from 'node:assert/strict'
 import { fork, execFileSync } from 'node:child_process'
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, lstat } from 'node:fs/promises'
 import { resolve, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -12,6 +12,8 @@ assert.equal(process.env.GITHUB_ACTIONS,'true','Only a disposable GitHub-hosted 
 assert.equal(process.env.RUNNER_ENVIRONMENT,'github-hosted','Self-hosted runners are not allowed')
 const [dsh,modulePath,output,samples='100',recoveries='30']=process.argv.slice(2)
 assert(dsh&&isAbsolute(dsh)&&modulePath&&output,'usage: kernel-loss-history-benchmark.mjs ABSOLUTE_DSH CACHE_MODULE OUTPUT_JSON [SAMPLES=100] [RECOVERIES=30]')
+try{await lstat(resolve(output));throw new Error('Refusing to replace an existing measurement report')}
+catch(error){if(error.code!=='ENOENT')throw error}
 const command=(program,args)=>execFileSync(program,args,{encoding:'utf8',timeout:15000,stdio:['ignore','pipe','pipe']})
 const tc=(...args)=>command('sudo',['-n','tc',...args])
 const rules=(...args)=>command('sudo',['-n','iptables','-w','5',...args])
@@ -33,7 +35,7 @@ const clean=()=>{
   if(ownedRoot)try{tc('qdisc','del','dev','lo','root','handle','7a10:');ownedRoot=false}catch(error){errors.push(error)}
   for(const rule of addedRules.splice(0).reverse())try{rules('-t','mangle','-D','OUTPUT',...rule)}catch(error){errors.push(error)}
   if(offloadChanged){
-    for(const [short,value]of Object.entries(offload))if(!value.fixed)try{command('sudo',['-n','ethtool','--offload','lo',short,value.was])}catch(error){errors.push(error)}
+    for(const short of ['gso','tso','gro']){const value=offload[short];if(!value.fixed)try{command('sudo',['-n','ethtool','--offload','lo',short,value.was])}catch(error){errors.push(error)}}
     offloadChanged=false
   }
   return errors
@@ -74,14 +76,20 @@ try{
   const errors=clean()
   if(errors.length)throw new AggregateError(errors,'Kernel fixture cleanup did not finish')
 }
-const report=JSON.parse(await readFile(resolve(output),'utf8'))
+let report
+try{report=JSON.parse(await readFile(resolve(output),'utf8'))}
+catch(error){
+  if(!setupFailure&&exitCode===0)throw error
+  report={schema:1,complete:false,failures:[{phase:setupFailure?'kernel-setup':'child-benchmark',errorClass:(setupFailure??error).name}],childExitCode:exitCode}
+}
 const impaired=(stats??[]).filter(row=>['7a20:','7a30:'].includes(row.handle))
 report.scope='SSH controller and local store under Linux loopback kernel netem; no native renderer or model request'
 report.conditions={injectedRttMs:200,mbitPerSecondPerDirection:2,packetLossPercent:1,lossModel:'independent random per direction',
   injector:'Linux kernel netem on matched loopback SSH flow',tcpMssBytes:1460,segmentationAndReceiveOffloads:false,
   tcpPayloadBytesIncludeSshEncryption:true,excludeIpTcpHeaders:true,excludeRetransmittedBytes:true,
   limitation:'Same-kernel loopback TCP; sender TCP Small Queues and kernel scheduling can differ from a physical WAN. Random loss is configured at 1%, not an exact observed percentage.'}
-report.kernel={qdiscs:stats,offloadBefore,offloadAfterRestoration:features(),originalQdiscRestored:qdiscs().every(row=>row.kind==='noqueue'),fixturePort:port}
+report.kernel={qdiscs:stats,offloadBefore,offloadAfterRestoration:features(),originalQdiscRestored:qdiscs().every(row=>row.kind==='noqueue'),fixturePort:port,
+  offloadScope:'Entire loopback interface on this exclusive disposable runner; other fixture flows have no injected latency/loss but share the disabled offload condition.'}
 await writeFile(resolve(output),JSON.stringify(report,null,2)+'\n',{mode:0o600})
 if(setupFailure)throw setupFailure
 assert.equal(exitCode,0,'Kernel-loss benchmark failed; inspect its incomplete report')
