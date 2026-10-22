@@ -1,6 +1,7 @@
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync, readFileSync, mkdirSync } from 'node:fs'
+import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
@@ -160,7 +161,11 @@ async function realFixture(interactive = false) {
   }
   return { root, home, ssh, host, store, terminals, open, origin, key, async close() {
     terminals.dispose(); for (const ws of sockets) ws.terminate(); engine.dispose()
-    await new Promise<void>(resolve => server.close(() => resolve())); await ssh.stop(); rmSync(root, { recursive: true, force: true })
+    await new Promise<void>(resolve => server.close(() => resolve())); await ssh.stop()
+    // A real login shell may still save .zsh_history as the SSH peer exits.
+    // Async bounded retries allow that final write to finish; cleanup still
+    // fails if the fixture cannot release its directory.
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   } }
 }
 

@@ -9,8 +9,12 @@ import type { RemoteOperation } from '../src/remote/types.ts'
 
 const roots: string[] = []
 const managers: RemoteWorkspaces[] = []
-afterEach(() => {
-  managers.splice(0).forEach(x => x.dispose()); vi.restoreAllMocks()
+afterEach(async () => {
+  const owned = managers.splice(0)
+  owned.forEach(x => x.dispose()); vi.restoreAllMocks()
+  // Initialization may still create the cache directory even when this
+  // receipt-only fixture never reads history. Settle it before removing root.
+  await Promise.all(owned.map(x => x.historyCopies()))
   roots.splice(0).forEach(x => rmSync(x, { recursive: true, force: true }))
 })
 function fixture() {

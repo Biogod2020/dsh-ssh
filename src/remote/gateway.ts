@@ -21,6 +21,10 @@ export class RemoteGateway {
   private upstreamCookie = ''
   private requests = new Map<number, Set<Promise<void>>>()
   private drainWaiters = new Set<() => void>()
+  private streams = new Map<number, Set<() => void>>()
+  private retired = new Map<number, { stop(): void; drained: boolean }>()
+  private healthRead?: { port: number; controller: AbortController; promise: Promise<boolean> }
+  private disposed = false
   origin = ''
   onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
@@ -52,6 +56,33 @@ export class RemoteGateway {
     const cookie = response.headers.getSetCookie().map(line => line.split(';')[0]).join('; ')
     if (!cookie) throw new Error('Remote DSH did not issue an authenticated session')
     this.localPort = port; this.upstreamCookie = cookie
+  }
+  /** Bound retained carriers without evicting live terminals to make room. */
+  canReplaceTunnel(): boolean { return this.retired.size < 2 || !this.streams.get(this.localPort)?.size }
+  private releaseRetired(port: number): void {
+    const old = this.retired.get(port)
+    if (!old || !old.drained || this.streams.get(port)?.size) return
+    this.retired.delete(port); old.stop()
+  }
+  /** HTTP writes have a bounded grace period; live upgraded streams own their
+   * original carrier until they close. Nothing is migrated or replayed. */
+  async retireTunnel(port: number, stop: () => void): Promise<void> {
+    if (this.disposed) { stop(); return }
+    const old = { stop, drained: false }
+    this.retired.set(port, old)
+    await this.drainRequests(port)
+    if (this.retired.get(port) !== old) return
+    old.drained = true; this.releaseRetired(port)
+  }
+  private retainStream(port: number): () => void {
+    let entries = this.streams.get(port)
+    if (!entries) this.streams.set(port, entries = new Set())
+    const release = () => {
+      if (!entries.delete(release)) return
+      if (!entries.size) this.streams.delete(port)
+      this.releaseRetired(port)
+    }
+    entries.add(release); return release
   }
   private retainRequest(port: number): () => void {
     let resolve!: () => void
@@ -119,11 +150,20 @@ export class RemoteGateway {
       return body.result.value as T
     } finally { if (changesCatalog) this.onCatalogChange(); release() }
   }
-  async healthy(): Promise<boolean> {
-    try {
-      const response = await fetch(`http://127.0.0.1:${this.localPort}/`, { headers: { Host: new URL(this.upstreamOrigin).host, Cookie: this.upstreamCookie }, signal: AbortSignal.timeout(2000), redirect: 'manual' })
-      await response.body?.cancel(); return response.status === 200
-    } catch { return false }
+  healthy(): Promise<boolean> {
+    if (this.disposed) return Promise.resolve(false)
+    const port = this.localPort
+    if (this.healthRead?.port === port) return this.healthRead.promise
+    const controller = new AbortController()
+    const read = { port, controller, promise: undefined as unknown as Promise<boolean> }
+    read.promise = (async () => {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/`, { headers: { Host: `127.0.0.1:${port}`, Cookie: this.upstreamCookie }, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), redirect: 'manual' })
+        await response.body?.cancel(); return response.status === 200
+      } catch { return false }
+      finally { if (this.healthRead === read) this.healthRead = undefined }
+    })()
+    this.healthRead = read; return read.promise
   }
   /** Read one baseline and release the observer; never activate a Session. */
   async workspaceSnapshot(): Promise<{ items: Array<{ workspaceId: string; sessionIds: string[] }>; archivedSessionIds: string[] }> {
@@ -138,9 +178,10 @@ export class RemoteGateway {
   }
   private baseline<T>(endpoint: string, args: object, read: (frame: any) => T | undefined): Promise<T> {
     return new Promise((resolve, reject) => {
-      const streamId = randomUUID()
-      const socket = new WebSocket(`ws://127.0.0.1:${this.localPort}/api/remote.mux`, {
-        headers: { Host: new URL(this.upstreamOrigin).host, Origin: this.upstreamOrigin, Cookie: this.upstreamCookie },
+      const streamId = randomUUID(), port = this.localPort, release = this.retainStream(port)
+      const origin = `http://127.0.0.1:${port}`
+      const socket = new WebSocket(`ws://127.0.0.1:${port}/api/remote.mux`, {
+        headers: { Host: new URL(origin).host, Origin: origin, Cookie: this.upstreamCookie },
         handshakeTimeout: 5000, maxPayload: 8 * 1024 * 1024,
       })
       let settled = false
@@ -164,8 +205,8 @@ export class RemoteGateway {
             `Remote ${endpoint} is unavailable${typeof frame.error?.code === 'string' ? ' (' + frame.error.code.slice(0, 80) + ')' : ''}`, frame.error?.code))
         } catch { finish(new Error('Remote workspace catalog is incompatible')) }
       })
-      socket.once('error', () => finish(new Error('Remote workspace catalog is unavailable')))
-      socket.once('close', () => finish(new Error('Remote workspace catalog disconnected')))
+      socket.once('error', () => { release(); finish(new Error('Remote workspace catalog is unavailable')) })
+      socket.once('close', () => { release(); finish(new Error('Remote workspace catalog disconnected')) })
     })
   }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -224,23 +265,30 @@ export class RemoteGateway {
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.authenticated(req)) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return }
-    const upstream = request({ hostname: '127.0.0.1', port: this.localPort, path: req.url, headers: this.headers(req) })
+    const port = this.localPort, release = this.retainStream(port)
+    const upstream = request({ hostname: '127.0.0.1', port, path: req.url, headers: this.headers(req) })
+    socket.once('error', () => socket.destroy())
+    socket.once('close', () => { upstream.destroy(); release() })
     upstream.on('upgrade', (response, remote, remoteHead) => {
+      const close = () => { socket.destroy(); remote.destroy(); release() }
+      socket.once('error', close); remote.once('error', close); socket.once('close', close); remote.once('close', close)
+      if (socket.destroyed) { close(); return }
       const lines = Object.entries(response.headers).filter(([name]) => name !== 'set-cookie').flatMap(([name, values]) => (Array.isArray(values) ? values : [values]).map(value => `${name}: ${value}`))
       socket.write(`HTTP/1.1 101 Switching Protocols\r\n${lines.join('\r\n')}\r\n\r\n`)
       if (remoteHead.length) socket.write(remoteHead)
       if (head.length) remote.write(head)
-      const close = () => { socket.destroy(); remote.destroy() }
-      socket.once('error', close); remote.once('error', close); socket.once('close', close); remote.once('close', close)
       remote.pipe(socket).pipe(remote)
     })
-    upstream.on('response', response => { response.resume(); socket.end(`HTTP/1.1 ${response.statusCode ?? 502} Upstream unavailable\r\nConnection: close\r\n\r\n`) })
-    upstream.on('error', () => socket.destroy())
-    socket.once('close', () => upstream.destroy()); upstream.end()
+    upstream.on('response', response => { response.resume(); release(); socket.end(`HTTP/1.1 ${response.statusCode ?? 502} Upstream unavailable\r\nConnection: close\r\n\r\n`) })
+    upstream.on('error', () => { socket.destroy(); release() })
+    upstream.end()
   }
   dispose(): void {
+    this.disposed = true; this.healthRead?.controller.abort()
     this.server.close(); for (const socket of this.sockets) socket.destroy()
     for (const finish of [...this.drainWaiters]) finish()
+    for (const old of this.retired.values()) old.stop()
+    this.retired.clear(); this.streams.clear()
     this.sockets.clear(); this.sessions.clear(); this.tickets.clear(); this.upstreamCookie = ''
   }
 }

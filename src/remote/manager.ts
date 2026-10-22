@@ -16,7 +16,7 @@ import { RemoteHistoryService } from './history-service.ts'
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
 interface HostCatalog { workspaces: Awaited<ReturnType<RemoteGateway['workspaceSnapshot']>>; sessions: { items: SessionSummary[] }; checkedAt: number }
-interface Runtime { gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; repairing?: boolean; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
+interface Runtime { gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
 interface ManagerOptions {
   installer: string; bootstrap: string; root?: string; remoteRoot?: string; returnUrl: () => string
   legacy?: () => Array<{ alias: string; remotePath: string; title: string }>
@@ -170,22 +170,34 @@ export class RemoteWorkspaces {
       let replacement: string | undefined
       try {
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
-        if (await runtime.gateway.healthy()) { runtime.failures = 0; return }
+        const healthy = await runtime.gateway.healthy()
+        if (this.disposed || !this.enabled || this.runtimes.get(runtime.hostId) !== runtime) return
+        if (healthy) { runtime.failures = 0; runtime.healthMisses = 0; return }
+        runtime.healthMisses = (runtime.healthMisses ?? 0) + 1
+        const broken = this.carrierBroken(runtime)
+        // A slow HTTP response is not proof that a live terminal or SSH
+        // transport failed. Only consecutive failed recovery rounds count.
+        if (!broken && runtime.healthMisses < 3) return
+        if (!broken && !runtime.gateway.canReplaceTunnel()) return
         runtime.catalog = undefined
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
         const tunnel = await this.engine.startWorkspaceTunnel(runtime.alias, runtime.gateway.receipt.port, runtime.updatedAt)
         replacement = tunnel.id
+        if (this.disposed || !this.enabled || this.runtimes.get(runtime.hostId) !== runtime) return
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
         const previousPort = runtime.gateway.localPort
         await runtime.gateway.replaceTunnel(tunnel.localPort)
         if (this.disposed || !this.enabled || !this.ownerMatches(runtime.alias, runtime.hostId, runtime.updatedAt) || this.runtimes.get(runtime.hostId) !== runtime) return
         const previousTunnel = runtime.tunnelId
-        runtime.tunnelId = tunnel.id; replacement = undefined; runtime.failures = 0
-        try { await runtime.gateway.drainRequests(previousPort) }
-        finally { this.engine.stopWorkspaceTunnel(previousTunnel) }
+        runtime.tunnelId = tunnel.id; replacement = undefined; runtime.failures = 0; runtime.healthMisses = 0
+        await runtime.gateway.retireTunnel(previousPort, () => { this.engine.stopWorkspaceTunnel(previousTunnel) })
       } catch { runtime.retryAt = Date.now() + Math.min(30000, 1000 * 2 ** ++runtime.failures) }
       finally { if (replacement) this.engine.stopWorkspaceTunnel(replacement); runtime.repairing = false }
     }))
+  }
+  private carrierBroken(runtime: Runtime): boolean {
+    const tunnel = this.engine.tunnels?.get(runtime.tunnelId)
+    return tunnel ? tunnel.record.broken : this.engine.tunnels !== undefined || this.engine.pool?.get(runtime.alias)?.broken === true
   }
   connect(alias: string, remotePath: string, expectedHostId?: string): RemoteOperation {
     if (this.disposed || !this.enabled) throw new Error('Remote workspace manager is stopped')
@@ -257,9 +269,13 @@ export class RemoteWorkspaces {
     const check = () => { this.assertActive(epoch); this.assertOwner(alias, hostId, updatedAt) }
     check()
     let runtime = this.runtimes.get(hostId)
-    if (runtime && (runtime.updatedAt !== updatedAt || !await runtime.gateway.healthy())) {
+    if (runtime && runtime.updatedAt !== updatedAt) {
       runtime.gateway.dispose(); this.engine.stopWorkspaceTunnel(runtime.tunnelId); this.runtimes.delete(hostId); runtime = undefined
     }
+    // Navigation must not destroy a retained guest on one slow health read.
+    // Existing runtimes use their actual RPC; a proven broken carrier may
+    // reconnect first, without replaying a workspace operation or setup.
+    if (runtime && this.carrierBroken(runtime)) await this.repairConnections()
     check()
     if (!runtime) {
       let installed: Installed | undefined

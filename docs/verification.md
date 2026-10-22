@@ -2,6 +2,20 @@
 
 验收日期：2026-10-15（America/Los_Angeles）。
 
+## 2026-10-22 — jay.36: preserve terminals through transient latency
+
+The jay.34 and jay.35 gateway treated one two-second health timeout as a failed carrier. Replacing that carrier then closed every old socket, including an otherwise healthy terminal WebSocket; jay.35's HTTP request grace period did not cover upgraded streams. A local TCP/WebSocket fixture reproduced an abnormal close after a single 2.3-second health delay, with the remote service still healthy.
+
+Health probes now allow five seconds and share one in-flight read per carrier. Automatic repair requires three consecutive failed recovery rounds unless the recorded SSH carrier is already broken or absent. Carrier replacement retains both pending WebSocket handshakes and open streams, including internal catalog/history observers; old carriers are released after their HTTP grace period and the final stream closes. At most two old carriers with active streams are retained, without evicting a live terminal to rotate again. Plugin shutdown releases all owned carriers.
+
+Adding a project to an existing Host uses its actual workspace RPC instead of discarding the remote runtime on a failed health probe. A failed RPC remains a reported failure; no setup, write, command, terminal input or cancellation is automatically replayed. The remote daemon is not restarted by background carrier repair.
+
+Focused regressions cover the original 2.3-second delay, coalesced reads, consecutive failure/reset behavior, same-WebSocket continuity after replacement, pending upgrades, catalog observers, retained-carrier limits, real disconnection with one input dispatch, shutdown and project reuse. The real generated-key SSH/DSH test also compares the PTY shell PID before and after replacement and checks a once-only command marker. Full archive, runtime and publication results are recorded after acceptance.
+
+Local verification passed 73 suites / 655 tests, typecheck, build and archive checks. The exact archive passed isolated DSH `0.2.1-rc.2` acceptance and installed-archive SSH-disconnect fault injection. The private development checkout passed the same 655 tests and typecheck; its runtime sources match the public checkout apart from the existing package identity in `src/index.ts`.
+
+Initial full runs exposed two fixture teardown races: cache-directory initialization completed after a receipt test started removing its root, and a real login shell saved `.zsh_history` during terminal-fixture cleanup. Teardown now waits for initialization and permits bounded asynchronous directory-removal retries. The affected 24 tests passed with these changes; failed initial runs are retained and are not counted as passing release checks.
+
 ## 2026-10-22 — jay.35: 本机磁盘历史与会话切换
 
 - [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39747401517) 的 verify、publish、verify-installation 全部成功。73 个测试文件、645 项测试，以及 typecheck、build、产物检查通过；最终归档通过三个 DSH 版本与 npm/镜像按包名安装验收。

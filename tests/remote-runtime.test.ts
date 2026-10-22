@@ -169,12 +169,28 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
     duplex = false
     terminalStream = await attach('terminal/follow')
   }
+  const originalShell = join(project, 'original-shell.txt'), repairedShell = join(project, 'repaired-shell.txt')
+  const onceMarker = join(project, 'terminal-dispatched-once.txt')
+  const beforeRepair = `printf '%s\\n' "$$" > ${shellQuote(originalShell)}\n`
+  if (duplex) terminalStream.send(JSON.stringify({ type: 'item', streamId: 'terminal-continuity', value: { type: 'write', sequence: 1, data: beforeRepair } }))
+  else await rpc('terminal/write', { agentId: sessionId, id: terminalId, attachmentId, data: beforeRepair })
+  for (let n = 0; n < 160 && !existsSync(originalShell); n++) await new Promise(resolve => setTimeout(resolve, 25))
+  expect(existsSync(originalShell)).toBe(true)
+  const runtime = (manager as any).runtimes.get(first.hostId), previousTunnel = runtime.tunnelId
+  runtime.healthMisses = 2 // Force a confirmed HTTP-health repair while SSH and the PTY remain healthy.
+  const health = vi.spyOn(runtime.gateway, 'healthy').mockResolvedValueOnce(false)
+  try { await manager.repairConnections() } finally { health.mockRestore() }
+  expect(runtime.tunnelId).not.toBe(previousTunnel)
+  expect(engine.tunnels.has(previousTunnel)).toBe(true)
+  expect(terminalStream.readyState).toBe(WebSocket.OPEN)
   const started = join(project, 'detached-started.txt'), completed = join(project, 'detached-completed.txt')
-  const data = `printf started > ${shellQuote(started)}; sleep 1; printf completed > ${shellQuote(completed)}\n`
-  if (duplex) terminalStream.send(JSON.stringify({ type: 'item', streamId: 'terminal-continuity', value: { type: 'write', sequence: 1, data } }))
+  const data = `printf '%s\\n' "$$" > ${shellQuote(repairedShell)}; printf once >> ${shellQuote(onceMarker)}; printf started > ${shellQuote(started)}; sleep 1; printf completed > ${shellQuote(completed)}\n`
+  if (duplex) terminalStream.send(JSON.stringify({ type: 'item', streamId: 'terminal-continuity', value: { type: 'write', sequence: 2, data } }))
   else await rpc('terminal/write', { agentId: sessionId, id: terminalId, attachmentId, data })
   for (let n = 0; n < 80 && !existsSync(started); n++) await new Promise(resolve => setTimeout(resolve, 25))
   expect(existsSync(started)).toBe(true); expect(existsSync(completed)).toBe(false)
+  expect(readFileSync(repairedShell, 'utf8')).toBe(readFileSync(originalShell, 'utf8'))
+  expect(readFileSync(onceMarker, 'utf8')).toBe('once')
   manager.setEnabled(false)
   engine.dropAlias('fixture')
   for (let n = 0; n < 160 && !existsSync(completed); n++) await new Promise(resolve => setTimeout(resolve, 25))
