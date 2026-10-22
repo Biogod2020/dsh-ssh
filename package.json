@@ -107,6 +107,7 @@
     "lib/**/*.d.ts",
     "lib/**/*.d.ts.map",
     "src",
+    "scripts/export-history-v1.mjs",
     "cordis.patch.yml",
     "README.md",
     "NOTICE"

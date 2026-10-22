@@ -1,0 +1,116 @@
+{
+  "schema": 1,
+  "store": "SegmentedHistoryCache",
+  "node": "v24.16.0",
+  "platform": "linux",
+  "arch": "x64",
+  "memoryBytes": 16766406656,
+  "events": 10000,
+  "initialBytes": 10407115,
+  "methodology": "generated mixed text; fixed 100-record window; GC before each untimed sample; filesystem cache not flushed; application IO includes metadata, not physical SSD bytes",
+  "warm": {
+    "milliseconds": {
+      "samples": 100,
+      "p50": 2.7251469999999927,
+      "p95": 2.8955349999999953,
+      "max": 3.341906999999992
+    },
+    "applicationBytesRead": {
+      "samples": 100,
+      "p50": 520251,
+      "p95": 520251,
+      "max": 520251
+    },
+    "applicationBytesWritten": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "writeCalls": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "append": {
+    "milliseconds": {
+      "samples": 30,
+      "p50": 3.489803999999822,
+      "p95": 4.036632999999938,
+      "max": 4.46572500000002
+    },
+    "applicationBytesRead": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 30,
+      "p50": 1007,
+      "p95": 1008,
+      "max": 1008
+    },
+    "writeCalls": {
+      "samples": 30,
+      "p50": 3,
+      "p95": 3,
+      "max": 3
+    }
+  },
+  "unchanged": {
+    "milliseconds": {
+      "samples": 100,
+      "p50": 0.17868299999986448,
+      "p95": 0.6103289999998651,
+      "max": 0.6710129999999026
+    },
+    "applicationBytesRead": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "applicationBytesWritten": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "writeCalls": {
+      "samples": 100,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "restart": {
+    "milliseconds": {
+      "samples": 30,
+      "p50": 11.963991999999962,
+      "p95": 13.369575000000168,
+      "max": 13.558488000000125
+    },
+    "applicationBytesRead": {
+      "samples": 30,
+      "p50": 536904,
+      "p95": 536904,
+      "max": 536963
+    },
+    "applicationBytesWritten": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    },
+    "writeCalls": {
+      "samples": 30,
+      "p50": 0,
+      "p95": 0,
+      "max": 0
+    }
+  },
+  "failures": 0
+}

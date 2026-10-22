@@ -124,6 +124,7 @@ it('does not refill a cleared copy from an already dispatched background read', 
   await service.clear([f.key])
   finish({ cursor: 2, throughSeq: 2, records: f.rows(0, 2) }); await syncing
   expect(await f.cache.read(f.key)).toBeUndefined()
+  expect((await service.status()).failures).toEqual({})
   await service.sync(f.item, 'session', false, 2)
   expect(delta).toHaveBeenCalledOnce()
 })
@@ -136,7 +137,7 @@ it('bounds concurrent history reads and stops queued reads after local clearing'
     return { cursor: 2, throughSeq: 2, records: f.rows(0, 2) }
   })
   const service = new RemoteHistoryService(f.cache, async () => ({ gateway: {} as RemoteGateway, delta, check() {}, updatedAt: 1, title: 'Saved' }))
-  const jobs = Array.from({ length: 6 }, (_, n) => service.sync(f.item, 'session-' + n))
+  const jobs = Array.from({ length: 6 }, (_, n) => service.sync({ ...f.item, hostId:n%2?'other-host':f.item.hostId }, 'session-' + n))
   await vi.waitFor(() => expect(finishes).toHaveLength(2))
   await service.clear([historyKey(f.item.hostId, f.item.workspaceId, 'session-0')])
   finishes.forEach(finish => finish()); await Promise.all(jobs)

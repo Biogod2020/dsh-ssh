@@ -2,25 +2,19 @@ import { historyKey, validHistory, type HistoryRecord, type HistoryDocument, typ
 import type { RemoteGateway } from './gateway.ts'
 import type { RemoteWorkspace } from './types.ts'
 import type { HistoryDelta } from './history-reader.ts'
+import { HistoryReadScheduler, type HistoryReadLane } from './history-read-scheduler.ts'
 
 interface Source { gateway: RemoteGateway; delta(afterSeq: number, throughSeq?: number): Promise<HistoryDelta>; check(): void; title: string; updatedAt: number }
 export class RemoteHistoryService {
-  private jobs = new Map<string, { token: HistoryToken; promise: Promise<void> }>()
+  private jobs = new Map<string, { token: HistoryToken; lane:HistoryReadLane; promise: Promise<void> }>()
   private checked = new Map<string, number>()
-  private reading = 0
-  private waiting: Array<() => void> = []
-  private async read<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.reading >= 2) await new Promise<void>(resolve => this.waiting.push(resolve))
-    else this.reading++
-    try { return await fn() }
-    finally { const next = this.waiting.shift(); if (next) next(); else this.reading-- }
-  }
+  private scheduler=new HistoryReadScheduler()
   private paused = new Set<string>()
   private failures = new Map<string, string>()
   constructor(readonly cache: HistoryStore, private source: (item: RemoteWorkspace, sessionId: string) => Promise<Source>) {}
   async status() { return { ...await this.cache.list(), syncing: [...this.jobs.keys()], failures: Object.fromEntries(this.failures) } }
   async clear(keys: string[]): Promise<void> {
-    for (const key of keys) { this.paused.add(key); this.failures.delete(key); this.checked.delete(key) }
+    for (const key of keys) { this.paused.add(key); this.failures.delete(key); this.checked.delete(key);this.scheduler.cancel(key) }
     await this.cache.clear(keys)
   }
   async sync(item: RemoteWorkspace, sessionId: string, explicit = true, hintUpdatedAt?: number, running = false): Promise<void> {
@@ -32,9 +26,11 @@ export class RemoteHistoryService {
     }
     else if (this.paused.has(key)) return Promise.resolve()
     const existing = this.jobs.get(key)
-    if (existing && this.cache.current(existing.token)) return existing.promise
+    if (existing && this.cache.current(existing.token)) {if(explicit)existing.lane.foreground=true;return existing.promise}
     const token = this.cache.token(key)
-    const job = { token, promise: undefined as unknown as Promise<void> }
+    const lane={key,hostId:item.hostId,foreground:explicit}
+    const job = { token, lane, promise: undefined as unknown as Promise<void> }
+    const read=<T>(fn:()=>Promise<T>)=>this.scheduler.run(lane,fn)
     job.promise = (async () => {
       const meta = await this.cache.meta(key)
       if (!explicit && (!meta || meta.complete && meta.remoteUpdatedAt >= (hintUpdatedAt ?? 0)
@@ -43,12 +39,12 @@ export class RemoteHistoryService {
       const check = () => { source.check(); if (!this.cache.current(token)) throw new Error('Local history copy was cleared; background sync stopped') }
       check()
       if (this.cache.append && this.cache.prepend && this.cache.prepare) {
-        await this.segmented(item,sessionId,key,token,source,check)
+        await this.segmented(item,sessionId,key,token,source,check,read)
         this.checked.set(key,Date.now()); this.failures.delete(key); return
       }
       let opening: HistoryDelta | undefined
       if (meta?.complete && await this.cache.present(key)) {
-        opening = await this.read(() => { check(); return source.delta(meta.cursor, undefined) })
+        opening = await read(() => { check(); return source.delta(meta.cursor, undefined) })
         check()
         if (opening.cursor === meta.cursor && opening.throughSeq === meta.cursor && Array.isArray(opening.records) && !opening.records.length
           && meta.title === (source.title || sessionId) && meta.remoteUpdatedAt === source.updatedAt) {
@@ -61,7 +57,7 @@ export class RemoteHistoryService {
       if (cached && cached.records.length && cached.records[0]!.event.seq > 0) {
         while (cached.records[0]!.event.seq > 0) {
           const before: number = cached.records[0]!.event.seq, cursor: number = cached.meta.cursor
-          const page: { records: HistoryRecord[]; hasMore: boolean } = await this.read(() => { check(); return source.gateway.rpc<{ records: HistoryRecord[]; hasMore: boolean }>('session/page', {
+          const page: { records: HistoryRecord[]; hasMore: boolean } = await read(() => { check(); return source.gateway.rpc<{ records: HistoryRecord[]; hasMore: boolean }>('session/page', {
             request: { address: { kind: 'session', sessionId }, throughSeq: cursor, beforeSeq: before, maxMessages: 500 },
           }) })
           check()
@@ -74,7 +70,7 @@ export class RemoteHistoryService {
       }
       let after = cached?.meta.cursor ?? -1, head: number | undefined
       for (;;) {
-        const delta = opening ?? await this.read(() => { check(); return source.delta(after, head) })
+        const delta = opening ?? await read(() => { check(); return source.delta(after, head) })
         opening = undefined
         check()
         if (!Number.isSafeInteger(delta.cursor) || delta.cursor < after || head !== undefined && delta.cursor !== head
@@ -98,15 +94,15 @@ export class RemoteHistoryService {
       }
       this.checked.set(key, Date.now()); this.failures.delete(key)
     })().catch(error => {
-      if (this.cache.current(token)) this.failures.set(key, error instanceof Error ? error.message : 'Local history sync failed')
+      if (!this.paused.has(key)&&this.cache.current(token)) this.failures.set(key, error instanceof Error ? error.message : 'Local history sync failed')
     }).finally(() => { if (this.jobs.get(key) === job) this.jobs.delete(key) })
     this.jobs.set(key, job); return job.promise
   }
-  private async segmented(item: RemoteWorkspace, sessionId: string, key: string, token: HistoryToken, source: Source, check: () => void): Promise<void> {
+  private async segmented(item: RemoteWorkspace, sessionId: string, key: string, token: HistoryToken, source: Source, check: () => void,read:<T>(fn:()=>Promise<T>)=>Promise<T>): Promise<void> {
     const prepared=await this.cache.prepare!(key,token); check()
     let meta=prepared?.meta, first=prepared?.firstSeq??0
     while (meta && first>0) {
-      const page=await this.read(()=>{check();return source.gateway.rpc<{records:HistoryRecord[];hasMore:boolean}>('session/page',{
+      const page=await read(()=>{check();return source.gateway.rpc<{records:HistoryRecord[];hasMore:boolean}>('session/page',{
         request:{address:{kind:'session',sessionId},throughSeq:meta!.cursor,beforeSeq:first,maxMessages:500},
       })}); check()
       if (!page.records?.length || !validHistory(page.records,first-1) || page.hasMore!==(page.records[0]!.event.seq>0)) throw new Error('Remote history prefix has a gap; saved records were preserved')
@@ -115,7 +111,7 @@ export class RemoteHistoryService {
     }
     let after=meta?.cursor??-1, head:number|undefined
     for (;;) {
-      const delta=await this.read(()=>{check();return source.delta(after,head)}); check()
+      const delta=await read(()=>{check();return source.delta(after,head)}); check()
       if (!Number.isSafeInteger(delta.cursor) || delta.cursor<after || head!==undefined && delta.cursor!==head
         || !Number.isSafeInteger(delta.throughSeq) || delta.throughSeq<after || delta.throughSeq>delta.cursor || !Array.isArray(delta.records)
         || (delta.records.length ? !validHistory(delta.records,delta.throughSeq) || delta.records[0]!.event.seq!==after+1

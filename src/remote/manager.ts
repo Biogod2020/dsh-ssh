@@ -46,6 +46,7 @@ export class RemoteWorkspaces {
   private enabled = true
   private epoch = 0
   private recovery: ReturnType<typeof setInterval>
+  private refreshingHistory=false
   constructor(readonly engine: SshEngine, private options: ManagerOptions) {
     const root = options.root ?? join(dshHome(), 'remote-workspaces')
     mkdirSync(root, { recursive: true, mode: 0o700 }); this.path = join(root, 'workspaces.json')
@@ -94,7 +95,9 @@ export class RemoteWorkspaces {
     } catch {
       this.journalIssue = 'Remote preparation history is unavailable. No new setup will be dispatched; inspect the private local state.'
     }
-    this.recovery = setInterval(() => { void this.repairConnections() }, 5000)
+    this.recovery = setInterval(() => {
+      void this.repairConnections().then(()=>this.refreshSavedHistories()).catch(()=>{})
+    }, 5000)
     this.recovery.unref?.()
   }
   private hostId(alias: string): string {
@@ -117,6 +120,24 @@ export class RemoteWorkspaces {
     const item = this.workspaces.get(id)
     if (!item) throw new Error('Unknown remote workspace')
     void this.historyCache.sync(item, sessionId)
+  }
+  /** Keep opted-in disk copies current even with no sidebar mounted. The saved
+   * registry is never an instruction to connect a Host or activate a Session. */
+  private async refreshSavedHistories():Promise<void>{
+    if(this.disposed||!this.enabled||this.refreshingHistory)return
+    this.refreshingHistory=true
+    try{
+      const {entries}=await this.historyCache.cache.list()
+      for(const meta of entries){
+        if(this.disposed||!this.enabled)return
+        const item=[...this.workspaces.values()].find(item=>item.hostId===meta.hostId&&item.workspaceId===meta.workspaceId)
+        if(!item)continue
+        const runtime=this.runtimes.get(item.hostId)
+        if(!runtime||this.carrierBroken(runtime)||!this.ownerMatches(item.alias,item.hostId,runtime.updatedAt))continue
+        const summary=this.sessionCache.get(item.id,item.workspaceId).sessions.find(row=>row.sessionId===meta.sessionId)
+        void this.historyCache.sync(item,meta.sessionId,false,summary?.updatedAt,summary?.running)
+      }
+    }finally{this.refreshingHistory=false}
   }
   clearHistory(keys: string[]) { return this.historyCache.clear(keys) }
   snoozeHistory() { return this.historyCache.cache.snooze() }

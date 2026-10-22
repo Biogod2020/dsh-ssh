@@ -76,3 +76,18 @@ it('uses the actual open RPC for reachability, validates membership, and never r
   await expect(f.manager.createSession(f.first)).rejects.toThrow('lost acknowledgement')
   expect(f.gateway.rpc.mock.calls.map(x => x[0])).toEqual(['workspace/create', 'workspace/create', 'session/create'])
 })
+
+it('schedules only saved histories on existing carriers without relying on a mounted sidebar',async()=>{
+  const f=fixture(),cache=(f.manager as any).historyCache
+  vi.spyOn(cache.cache,'list').mockResolvedValue({entries:[
+    {hostId:f.hostId,workspaceId:'first',sessionId:'one'},
+    {hostId:'offline-host',workspaceId:'offline',sessionId:'old'},
+  ]})
+  const sync=vi.spyOn(cache,'sync').mockResolvedValue(undefined)
+  await (f.manager as any).refreshSavedHistories()
+  expect(sync).toHaveBeenCalledOnce();expect(sync.mock.calls[0]!.slice(1,3)).toEqual(['one',false])
+  expect(f.gateway.rpc).not.toHaveBeenCalled();expect(f.gateway.workspaceSnapshot).not.toHaveBeenCalled()
+  ;(f.manager as any).runtimes.clear();await (f.manager as any).refreshSavedHistories()
+  expect(sync).toHaveBeenCalledOnce()
+  f.manager.setEnabled(false);await (f.manager as any).refreshSavedHistories();expect(sync).toHaveBeenCalledOnce()
+})
