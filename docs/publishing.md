@@ -65,3 +65,9 @@ npm 可能在接受并签名后继续处理新版本，暂时不向公开索引�
 两个源的 latest 均为 jay.37。公开包为 1,218,370 字节，SHA-256 `4b782e2d078d7461c7bdc301f7241d9343a024fc80aca9146d2d2979112bf788`；[GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.37) 的归档、官方源及真实镜像 CDN 内容均与 CI 产物一致。macOS 另完成从 npm 按包名安装到 DSH 0.2.1-rc.2 的隔离验收。本机日常 Desktop 也已更新为正式 npm 版本，前后端与 CI 字节相同，其他插件、模型配置和会话保留。
 
 npm 在签名接收后延迟公开新版本，期间其[官方状态页](https://status.npmjs.org/)报告 publish/install/view 性能异常。本次保留实际下载与安装检查，等待源可用后通过，没有重复发布同一版本或放宽验收。
+
+## 2026-10-22 — jay.39 增量历史发行
+
+[发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39780902969) 的 verify、OIDC publish、verify-installation 全部通过。74 个文件、672 项测试、三个 DSH 版本的最终归档、编译后插件的真实 SSH 增量同步、断线注入及官方源/镜像源按包名安装均通过。官方源、实际镜像 CDN 与 GitHub Release 的文件均与 CI 归档一致：1,223,681 字节，SHA-256 `0aa53cabb1714fbdee68946efa7394b9efabc079c1017de07ce0a5646c26b1ec`。macOS 另完成官方源 → DSH 0.2.1-rc.2 的隔离安装并核对前后端字节。
+
+jay.38 的首次 CI 因旧终端连续性测试的定时器竞态失败，未执行 npm 发布。保留该标签和失败日志，以新的不可变 jay.39 标签修正测试并完成所有门槛；没有移动旧标签、放宽断言或重放发布。
