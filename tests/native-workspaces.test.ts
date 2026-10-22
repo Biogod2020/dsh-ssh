@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { expect, it } from 'vitest'
+import { expect, it,vi } from 'vitest'
+// This file tests the data projection; the browser supplies this platform UI.
+vi.mock('@deepseek-ai/dsh-client-ui-primitives',()=>({MenuItemButton:()=>null}))
 import { combineNavigation } from '../src/client/native-workspaces.tsx'
 import { remoteSessionKey, remoteWorkspaceKey, resolveRemoteNavigation } from '../src/client/remote-navigation.ts'
 

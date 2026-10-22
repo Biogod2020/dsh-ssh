@@ -5,7 +5,7 @@
 export const zh = {
   'cache.manage': '本机历史缓存',
   'remote.modelSettings': '此主机的模型设置',
-  'remote.settingsUnavailable': '请先打开此主机会话。该远端客户端如不支持此入口，可在远端聊天中使用设置快捷键。',
+  'remote.settingsUnavailable': '暂时无法打开此主机的模型设置。请先打开它的一条会话再试；若仍不可用，可在远端聊天中使用设置快捷键。',
   'cache.user': '你',
   'cache.assistant': '助手',
   'cache.tool': '工具',
@@ -524,7 +524,7 @@ export const zh = {
 export const en: Record<keyof typeof zh, string> = {
   'cache.manage': 'Local history cache',
   'remote.modelSettings': 'Model settings on this host',
-  'remote.settingsUnavailable': 'Open a conversation on this host first. If its client does not support this entry, use the settings shortcut in the remote chat.',
+  'remote.settingsUnavailable': 'Could not open model settings on this host. Open one of its conversations and try again. If needed, use the settings shortcut inside the remote chat.',
   'cache.user': 'You',
   'cache.assistant': 'Assistant',
   'cache.tool': 'Tool',

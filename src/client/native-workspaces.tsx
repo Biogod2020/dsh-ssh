@@ -1,11 +1,11 @@
-import { createElement, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react'
+import { createElement, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
+import { MenuItemButton } from '@deepseek-ai/dsh-client-ui-primitives'
 import { projectEntry } from './slot-projection.tsx'
 import { isRemoteNavigationKey, remoteNavigation, remoteSessionKey, remoteWorkspaceKey, resolveRemoteNavigation, type RemoteNavigationSnapshot } from './remote-navigation.ts'
 import { remoteSelection, remotePresentation, subscribeRemoteSelection, type RemoteSelection } from './remote-presentation.ts'
 import { tt } from './panel/helpers.ts'
-import css from './panel/panel.module.css'
 
 // Presentation-only projections. Neither Controller nor the local Host receives
 // these identities. Every action must be routed before leaving this component.
@@ -15,6 +15,40 @@ type Workspace = { workspaceId: string; path: string; title: string; sessionIds:
 type Workspaces = { items: readonly Workspace[]; [key: string]: unknown }
 type Hook = <T>(selector: (state: any) => T, equal?: (a: T, b: T) => boolean) => T
 type Props = Record<string, any>
+type MenuOwner = readonly [boolean, (open: boolean) => void]
+
+/** Request state belongs to this menu opening, not to the whole sidebar. */
+function RemoteSessionMenu({ sessionId, remote, menu, navigate }: {
+  sessionId: string; remote: RemoteNavigationSnapshot; menu?: MenuOwner; navigate(key: string): boolean
+}) {
+  const [settings, setSettings] = useState<{ busy?: boolean; error?: boolean }>({})
+  const settingsAttempt = useRef(0)
+  const open = menu?.[0] ?? true
+  useEffect(() => {
+    ++settingsAttempt.current; setSettings({})
+    return () => { ++settingsAttempt.current }
+  }, [open, sessionId])
+  return <>
+    <MenuItemButton onSelect={() => { menu?.[1](false); navigate(sessionId) }}>{tt('remote.openConversation')}</MenuItemButton>
+    <MenuItemButton disabled={settings.busy} onSelect={() => {
+      const attempt = ++settingsAttempt.current
+      const target = resolveRemoteNavigation(sessionId, remote)
+      if (!target) { setSettings({ error: true }); return }
+      const presentation = remotePresentation()
+      setSettings({ busy: true })
+      void Promise.resolve().then(() => presentation?.settings?.(target.workspace)).then(ok => {
+        if (attempt !== settingsAttempt.current) return
+        setSettings({ error: !ok }); if (ok) menu?.[1](false)
+      }).catch(() => { if (attempt === settingsAttempt.current) setSettings({ error: true }) })
+    }}>{tt('remote.modelSettings')}</MenuItemButton>
+    {settings.error && <span role="alert">{tt('remote.settingsUnavailable')}</span>}
+    <MenuItemButton onSelect={() => {
+      menu?.[1](false)
+      const target = resolveRemoteNavigation(sessionId, remote)
+      if (target) remotePresentation()?.close?.(target.workspace)
+    }}>{tt('remote.closeView')}</MenuItemButton>
+  </>
+}
 
 export function combineNavigation(list: List, workspaces: Workspaces, remote: RemoteNavigationSnapshot, selected?: RemoteSelection) {
   const byId = { ...list.byId }, ids = [...list.ids], items = workspaces.items.map(item => item.path.replaceAll('\\', '/').includes('/ssh-workspaces/')
@@ -45,9 +79,7 @@ export function combineNavigation(list: List, workspaces: Workspaces, remote: Re
   return { list: { ...list, ids, byId }, workspaces: { ...workspaces, items } }
 }
 
-function NativeWorkspaces({ original, ...props }: Props & { original: ComponentType<Props> }) {
-  const [settings,setSettings]=useState<{id?:string;busy?:boolean;error?:boolean}>({})
-  const settingsAttempt=useRef(0)
+export function NativeWorkspaces({ original, ...props }: Props & { original: ComponentType<Props> }) {
   const localList = props.useSessions((state: List) => state)
   const localWorkspaces = props.useWorkspaces((state: Workspaces) => state)
   const remote = useSyncExternalStore(remoteNavigation.subscribe, remoteNavigation.getSnapshot)
@@ -76,26 +108,8 @@ function NativeWorkspaces({ original, ...props }: Props & { original: ComponentT
   const renderSlot = (name: string, owner: Props, ...rest: any[]) => {
     if (isRemoteNavigationKey(owner?.sessionId)) {
       if (name === 'sidebar.session.row.hover') return <span>{tt('remote.remoteSession')}</span>
-      if (name === 'sidebar.workspaces.session.menu.item') return <>
-        <button type="button" role="menuitem" className={css.remoteNavigationMenuItem} onClick={() => {
-          rest[0]?.hookContext?.[1]?.(false); navigate(owner.sessionId)
-        }}>{tt('remote.openConversation')}</button>
-        <button type="button" role="menuitem" className={css.remoteNavigationMenuItem} disabled={settings.id===owner.sessionId&&settings.busy} onClick={()=>{
-          const id=owner.sessionId, target=resolveRemoteNavigation(id,remote)
-          if(!target)return
-          const attempt=++settingsAttempt.current
-          setSettings({id,busy:true})
-          void Promise.resolve(remotePresentation()?.settings?.(target.workspace)).then(ok=>{
-            if(attempt===settingsAttempt.current)setSettings({id,error:!ok})
-          }).catch(()=>{if(attempt===settingsAttempt.current)setSettings({id,error:true})})
-        }}>{tt('remote.modelSettings')}</button>
-        {settings.id===owner.sessionId&&settings.error&&<span role="alert">{tt('remote.settingsUnavailable')}</span>}
-        <button type="button" role="menuitem" className={css.remoteNavigationMenuItem} onClick={() => {
-          rest[0]?.hookContext?.[1]?.(false)
-          const target = resolveRemoteNavigation(owner.sessionId, remote)
-          if (target) remotePresentation()?.close?.(target.workspace)
-        }}>{tt('remote.closeView')}</button>
-      </>
+      if (name === 'sidebar.workspaces.session.menu.item') return <RemoteSessionMenu
+        sessionId={owner.sessionId} remote={remote} menu={rest[0]?.hookContext} navigate={navigate} />
       return null // Native row actions address the local Host; never pass a remote id.
     }
     return props.renderSlot(name, owner, ...rest)
