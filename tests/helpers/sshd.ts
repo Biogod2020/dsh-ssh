@@ -50,7 +50,7 @@ export class TestSshd {
   }
 
   /** Start sshd on a random high port. */
-  static async start(options: { home?: string; path?: string } = {}): Promise<TestSshd> {
+  static async start(options: { home?: string; path?: string; env?:NodeJS.ProcessEnv } = {}): Promise<TestSshd> {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-sshd-'))
     const root = join(dir, 'remote')
     mkdirSync(join(dir, 'etc'), { recursive: true })
@@ -91,6 +91,7 @@ export class TestSshd {
     let child: ChildProcess
     try {
       child = spawn('/usr/sbin/sshd', ['-D', '-e', '-f', join(dir, 'sshd_config')], {
+        env:options.env,
         stdio: ['ignore', 'ignore', logFd],
       })
     } finally { closeSync(logFd) }

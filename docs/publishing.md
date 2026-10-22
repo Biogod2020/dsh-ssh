@@ -2,7 +2,7 @@
 
 工作流为 `.github/workflows/publish.yml`。普通分支手动运行只做验收；推送与 package.json 版本完全一致的 `v<version>` 标签才会发布。
 
-流程先运行 typecheck、完整测试、构建、归档检查，以及 DSH alpha.4 / rc.2 的隔离安装。发布任务下载同一次构建的归档，校验 SHA-256 后使用 npm OIDC 发布，不重新打包，也不保存 npm 写入 Token。
+流程先运行 typecheck、完整测试、构建、归档检查，以及 DSH alpha.4 / 两个 rc.2 的隔离安装。另一个 `network-history` 任务使用生成的主机和私有 Home，验证固定延迟/带宽下的真实 SSH 历史同步与恢复；正式采样分别为 100 次读取/校验、30 次追加与恢复，核对零正文重复传回、零旧段重写、远端进程保留和正常网络下的后端恢复目标。它不替代原生界面验收，也不把 TCP 字节丢弃当作丢包模拟。两个验证任务都通过后，发布任务下载同一次构建的归档，校验 SHA-256 后使用 npm OIDC 发布，不重新打包，也不保存 npm 写入 Token。
 
 发布后自动请求国内镜像同步，核对 npm 和镜像实际下载文件的 SHA-512，再从两个源按包名安装进隔离 DSH 验收。镜像迟迟未同步或安装失败时，流水线报告失败，不能视为完整发行成功。发布任务之外的检查任务均没有 npm OIDC 发布权限。
 
@@ -35,7 +35,7 @@ npm exec --yes --package=npm@11.15.0 -- npm trust github @biogod/dsh-ssh --repo=
 
 已完成账号首次绑定，并由版本标签 `v0.3.24-jay.28` 验证自动发布成功：[完整流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/38877659704)。三个任务 `verify`、`publish`、`verify-installation` 全部成功；npm 与国内镜像 CDN 的 SHA-512 一致，两个 DSH 版本按包名安装验收通过。macOS 上也从官方源及镜像完成了隔离安装。
 
-正常发版直接使用上述工作流，不再执行 `npm trust`、`npm stage publish` 或 `npm stage approve`，也不再要求维护者逐版完成 2FA。增改账号或信任关系仍遵循 npm 本身的身份验证要求。发布前更新 `package.json` 与 README 中的版本，提交后推送对应 `v<version>` 标签，并核对三个任务的最终结果；手动运行 main 分支只做验收。
+正常发版直接使用上述工作流，不再执行 `npm trust`、`npm stage publish` 或 `npm stage approve`，也不再要求维护者逐版完成 2FA。增改账号或信任关系仍遵循 npm 本身的身份验证要求。发布前更新 `package.json` 与 README 中的版本，提交后推送对应 `v<version>` 标签，并核对 verify、network-history、publish、verify-installation 的最终结果；手动运行分支只做验收。
 
 旧的 .27 暂存版本保留，不再复用这个版本号。首次自动发行是 .28，SSH 实现与当时本机已验收的 .27 相同；本机 Desktop 的 .27 验收包并不表示已安装 .28。
 
@@ -73,3 +73,7 @@ npm 在签名接收后延迟公开新版本，期间其[官方状态页](https:/
 jay.38 的首次 CI 因旧终端连续性测试的定时器竞态失败，未执行 npm 发布。保留该标签和失败日志，以新的不可变 jay.39 标签修正测试并完成所有门槛；没有移动旧标签、放宽断言或重放发布。
 
 本机日常 Desktop 已通过 npm 官方源安装精确版本 `.39`，安装的前后端与 CI 归档字节一致。5,958 个原有数据/配置文件和其他插件保留；恢复原远端运行中会话并验证本地/远端切换，远端服务未重启。磁盘历史原有 1,431 条事件全部保留，并补齐 436 条新增事件。
+
+## 开发候选的性能基线读取
+
+新测量固定读取 jay.39 的不可变提交与 Git blob，通过 GitHub API 下载并校验对象哈希。读取有明确超时，不在性能步骤执行无期限的额外 Git fetch。原始测量 JSON 由工作流保存；失败或超时的任务不算全量验收通过。

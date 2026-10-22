@@ -75,10 +75,11 @@ jobs:
           test "${#archives[@]}" -eq 1
           node --experimental-transform-types scripts/tunnel-disconnect-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
       - name: Measure immutable history storage against the frozen jay.39 baseline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           mkdir -p "$RUNNER_TEMP/history-benchmarks"
-          git fetch --no-tags origin tag v0.3.24-jay.39
-          git show v0.3.24-jay.39:src/remote/history-cache.ts > "$RUNNER_TEMP/history-benchmarks/baseline.ts"
+          node scripts/fetch-history-baseline.mjs "$RUNNER_TEMP/history-benchmarks/baseline.ts"
           for events in 10000 100000; do
             node --expose-gc --experimental-transform-types scripts/history-store-benchmark.mjs "$RUNNER_TEMP/history-benchmarks/baseline.ts" "$events" 100 > "$RUNNER_TEMP/history-benchmarks/baseline-$events.json"
             node --expose-gc --experimental-transform-types scripts/history-store-benchmark.mjs "$PWD/src/remote/history-store.ts" "$events" 100 > "$RUNNER_TEMP/history-benchmarks/candidate-$events.json"
@@ -99,8 +100,71 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  network-history:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24.16.0'
+          package-manager-cache: false
+      - name: Install pinned tools and disposable SSH support
+        run: |
+          npm install --global pnpm@11.20.0 --ignore-scripts
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends openssh-server
+          sudo mkdir -p /run/sshd
+          pnpm install --frozen-lockfile --ignore-scripts
+          npm install --prefix "$RUNNER_TEMP/dsh-network" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.2
+      - name: Validate the byte-preserving network injector
+        run: pnpm exec vitest run tests/shaped-tcp.test.ts
+      - name: Measure real SSH history and recovery under fixed network conditions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/network-history"
+          node scripts/fetch-history-baseline.mjs "$RUNNER_TEMP/network-history/baseline.ts"
+          for condition in '0 1000' '80 20' '200 2'; do
+            read -r rtt mbit <<< "$condition"
+            for store in baseline candidate; do
+              module="$RUNNER_TEMP/network-history/baseline.ts"
+              if [ "$store" = candidate ]; then module="$PWD/src/remote/history-store.ts"; fi
+              node --experimental-transform-types scripts/network-history-benchmark.mjs "$RUNNER_TEMP/dsh-network/node_modules/.bin/dsh" "$module" "$rtt" "$mbit" "$RUNNER_TEMP/network-history/$store-$rtt.json" 100 30
+            done
+          done
+      - name: Check measurements and the normal-network backend recovery target
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFile } from 'node:fs/promises'
+          import { join } from 'node:path'
+          for(const rtt of [0,80,200])for(const store of ['baseline','candidate']){
+            const report=JSON.parse(await readFile(join(process.env.RUNNER_TEMP,'network-history',`${store}-${rtt}.json`),'utf8'))
+            assert(report.samplesSufficient)
+            assert.deepEqual(report.failures,[])
+            assert.equal(report.unchanged.historyRecords.total,0)
+            assert.equal(report.unchanged.applicationBytesWritten.total,0)
+            assert.equal(report.unchangedOldDataFilesRewritten,0)
+            assert(report.remotePidPreserved)
+            if(store==='candidate'){
+              assert.equal(report.appendOldDataFilesRewritten,0)
+              if(rtt<=80)assert(report.recovery.milliseconds.p95<=5000,'Backend recovery exceeded the frozen five-second target; native UI acceptance remains separate')
+            }
+          }
+          NODE
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: ssh-network-history-measurements
+          path: ${{ runner.temp }}/network-history/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
   publish:
-    needs: verify
+    needs: [verify, network-history]
     if: github.repository == 'Biogod2020/dsh-ssh' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
