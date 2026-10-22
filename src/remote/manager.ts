@@ -146,9 +146,13 @@ export class RemoteWorkspaces {
         const tunnel = await this.engine.startWorkspaceTunnel(runtime.alias, runtime.gateway.receipt.port, runtime.updatedAt)
         replacement = tunnel.id
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
+        const previousPort = runtime.gateway.localPort
         await runtime.gateway.replaceTunnel(tunnel.localPort)
         if (this.disposed || !this.enabled || !this.ownerMatches(runtime.alias, runtime.hostId, runtime.updatedAt) || this.runtimes.get(runtime.hostId) !== runtime) return
-        this.engine.stopWorkspaceTunnel(runtime.tunnelId); runtime.tunnelId = tunnel.id; replacement = undefined; runtime.failures = 0
+        const previousTunnel = runtime.tunnelId
+        runtime.tunnelId = tunnel.id; replacement = undefined; runtime.failures = 0
+        try { await runtime.gateway.drainRequests(previousPort) }
+        finally { this.engine.stopWorkspaceTunnel(previousTunnel) }
       } catch { runtime.retryAt = Date.now() + Math.min(30000, 1000 * 2 ** ++runtime.failures) }
       finally { if (replacement) this.engine.stopWorkspaceTunnel(replacement); runtime.repairing = false }
     }))

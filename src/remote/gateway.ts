@@ -15,6 +15,8 @@ export class RemoteGateway {
   private tickets = new Map<string, { expires: number; sessionId?: string }>()
   private sessions = new Map<string, { expires: number; sessionId?: string; embedded?: boolean }>()
   private upstreamCookie = ''
+  private requests = new Map<number, Set<Promise<void>>>()
+  private drainWaiters = new Set<() => void>()
   origin = ''
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
   constructor(public localPort: number, readonly receipt: RemoteReceipt, readonly alias: string, readonly returnUrl: string,
@@ -46,6 +48,31 @@ export class RemoteGateway {
     if (!cookie) throw new Error('Remote DSH did not issue an authenticated session')
     this.localPort = port; this.upstreamCookie = cookie
   }
+  private retainRequest(port: number): () => void {
+    let resolve!: () => void
+    const settled = new Promise<void>(done => { resolve = done })
+    let pending = this.requests.get(port)
+    if (!pending) this.requests.set(port, pending = new Set())
+    pending.add(settled)
+    return () => {
+      if (!pending.delete(settled)) return
+      if (!pending.size) this.requests.delete(port)
+      resolve()
+    }
+  }
+  /** After switching the carrier, let already-dispatched HTTP operations finish
+   * before retiring its old tunnel. A dead carrier still fails normally; no
+   * request is retried. Disposal and a deadline bound the wait. */
+  async drainRequests(port: number, timeoutMs = 30000): Promise<void> {
+    const pending = [...(this.requests.get(port) ?? [])]
+    if (!pending.length) return
+    await new Promise<void>(resolve => {
+      const finish = () => { clearTimeout(timer); this.drainWaiters.delete(finish); resolve() }
+      const timer = setTimeout(finish, timeoutMs)
+      this.drainWaiters.add(finish)
+      void Promise.all(pending).then(finish)
+    })
+  }
   /** Only the authenticated local controller issues short-lived, single-use launch tickets. */
   launch(sessionId?: string): string {
     this.prune()
@@ -71,16 +98,19 @@ export class RemoteGateway {
     return headers
   }
   async rpc<T>(method: string, args: object): Promise<T> {
-    const rpcId = randomUUID()
-    const response = await fetch(`http://127.0.0.1:${this.localPort}/api/${method}`, {
-      method: 'POST', headers: { Host: new URL(this.upstreamOrigin).host, Origin: this.upstreamOrigin, Cookie: this.upstreamCookie, 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(30000),
-    })
-    if (!response.ok) throw new Error(`Remote DSH ${method} returned HTTP ${response.status}; not replayed`)
-    const body = await response.json() as { rpcId?: string; result?: { ok: boolean; value?: T; error?: { message?: string; code?: string } } }
-    if (body.rpcId !== rpcId || !body.result) throw new Error('Remote DSH returned an incompatible RPC response')
-    if (!body.result.ok) throw new RemoteFailureError(body.result.error?.message ?? `Remote ${method} failed`, body.result.error?.code)
-    return body.result.value as T
+    const port = this.localPort, release = this.retainRequest(port)
+    try {
+      const rpcId = randomUUID()
+      const response = await fetch(`http://127.0.0.1:${port}/api/${method}`, {
+        method: 'POST', headers: { Host: new URL(this.upstreamOrigin).host, Origin: this.upstreamOrigin, Cookie: this.upstreamCookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(30000),
+      })
+      if (!response.ok) throw new Error(`Remote DSH ${method} returned HTTP ${response.status}; not replayed`)
+      const body = await response.json() as { rpcId?: string; result?: { ok: boolean; value?: T; error?: { message?: string; code?: string } } }
+      if (body.rpcId !== rpcId || !body.result) throw new Error('Remote DSH returned an incompatible RPC response')
+      if (!body.result.ok) throw new RemoteFailureError(body.result.error?.message ?? `Remote ${method} failed`, body.result.error?.code)
+      return body.result.value as T
+    } finally { release() }
   }
   async healthy(): Promise<boolean> {
     try {
@@ -141,32 +171,36 @@ export class RemoteGateway {
     if (url.pathname === '/__dsh_remote/status') {
       res.writeHead(200, { 'content-type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify({ ready: await this.healthy() })); return
     }
-    await new Promise<void>((resolve, reject) => {
-      const upstream = request({ hostname: '127.0.0.1', port: this.localPort, path: req.url, method: req.method, headers: this.headers(req) }, incoming => {
-        const headers = { ...incoming.headers }; delete headers['set-cookie']
-        headers['referrer-policy'] = 'no-referrer'
-        if (headers.location?.startsWith(this.upstreamOrigin)) headers.location = headers.location.slice(this.upstreamOrigin.length) || '/'
-        const html = url.pathname === '/' && req.method === 'GET' && incoming.statusCode === 200 && String(headers['content-type']).includes('text/html')
-        if (!html) { res.writeHead(incoming.statusCode ?? 502, headers); incoming.pipe(res); incoming.once('end', resolve); incoming.once('error', reject); return }
-        const chunks: Buffer[] = []; let size = 0
-        incoming.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 8 * 1024 * 1024) incoming.destroy(new Error('Remote HTML exceeded limit')); else chunks.push(chunk) })
-        incoming.once('error', reject)
-        incoming.once('end', () => {
-          delete headers['content-length']; delete headers['content-encoding']; delete headers.etag
-          headers['cache-control'] = 'no-store'
-          // Consume navigation once; later reloads preserve the remote client's current session.
-          const selected = session.sessionId; delete session.sessionId
-          const body = remotePage(Buffer.concat(chunks).toString('utf8'), {
-            alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded,
+    const port = this.localPort, release = this.retainRequest(port)
+    const upstreamOrigin = `http://127.0.0.1:${port}`
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const upstream = request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: this.headers(req) }, incoming => {
+          const headers = { ...incoming.headers }; delete headers['set-cookie']
+          headers['referrer-policy'] = 'no-referrer'
+          if (headers.location?.startsWith(upstreamOrigin)) headers.location = headers.location.slice(upstreamOrigin.length) || '/'
+          const html = url.pathname === '/' && req.method === 'GET' && incoming.statusCode === 200 && String(headers['content-type']).includes('text/html')
+          if (!html) { res.writeHead(incoming.statusCode ?? 502, headers); incoming.pipe(res); incoming.once('end', resolve); incoming.once('error', reject); return }
+          const chunks: Buffer[] = []; let size = 0
+          incoming.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 8 * 1024 * 1024) incoming.destroy(new Error('Remote HTML exceeded limit')); else chunks.push(chunk) })
+          incoming.once('error', reject)
+          incoming.once('end', () => {
+            delete headers['content-length']; delete headers['content-encoding']; delete headers.etag
+            headers['cache-control'] = 'no-store'
+            // Consume navigation once; later reloads preserve the remote client's current session.
+            const selected = session.sessionId; delete session.sessionId
+            const body = remotePage(Buffer.concat(chunks).toString('utf8'), {
+              alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded,
+            })
+            res.writeHead(incoming.statusCode ?? 200, headers); res.end(body); resolve()
           })
-          res.writeHead(incoming.statusCode ?? 200, headers); res.end(body); resolve()
         })
+        upstream.once('error', reject)
+        req.once('aborted', () => { upstream.destroy(); resolve() })
+        res.once('close', () => { upstream.destroy(); resolve() })
+        req.pipe(upstream)
       })
-      upstream.once('error', reject)
-      req.once('aborted', () => upstream.destroy())
-      res.once('close', () => upstream.destroy())
-      req.pipe(upstream)
-    })
+    } finally { release() }
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (!this.authenticated(req)) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return }
@@ -186,6 +220,7 @@ export class RemoteGateway {
   }
   dispose(): void {
     this.server.close(); for (const socket of this.sockets) socket.destroy()
+    for (const finish of [...this.drainWaiters]) finish()
     this.sockets.clear(); this.sessions.clear(); this.tickets.clear(); this.upstreamCookie = ''
   }
 }
