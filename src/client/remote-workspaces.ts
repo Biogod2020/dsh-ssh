@@ -33,21 +33,26 @@ async function json<T>(path: string, body?: object, options: RequestOptions = {}
     return value
   } finally { clearTimeout(deadline); options.signal?.removeEventListener('abort', abort) }
 }
-function wait(signal?: AbortSignal): Promise<void> {
+function wait(signal?: AbortSignal, ms = 1000): Promise<void> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted()
     const abort = () => { clearTimeout(timer); reject(signal!.reason) }
-    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, 1000)
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', abort); resolve() }, ms)
     signal?.addEventListener('abort', abort, { once: true })
   })
 }
 async function waitForOperation(operation: RemoteOperation, progress: Progress, options: RequestOptions = {}): Promise<RemoteWorkspace> {
+  const started = Date.now()
+  let previous: string | undefined
   for (;;) {
     options.signal?.throwIfAborted()
-    progress(remoteProgress(operation), operation)
+    const revision = JSON.stringify([operation.phase, operation.message, operation.updatedAt])
+    if (revision !== previous) { progress(remoteProgress(operation), operation); previous = revision }
     if (operation.phase === 'failed') throw new RemoteRequestError(operation.message, operation.errorCode)
     if (operation.phase === 'ready' && operation.workspace) return operation.workspace
-    await wait(options.signal)
+    // Fast reattachments should not wait a full polling interval. Long
+    // installations still settle at one read per second, never redispatching.
+    await wait(options.signal, Date.now() - started < 5000 ? 100 : 1000)
     ;({ operation } = await json<{ operation: RemoteOperation }>('operation?id=' + encodeURIComponent(operation.id), undefined, options))
   }
 }
@@ -247,10 +252,10 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     }
   }
   historyButton.onclick = () => { showHistory = !showHistory; render(); historyButton.focus() }
-  function finish(epoch: number, focusId?: string, recoveryRetry = false): void {
+  function finish(epoch: number, focusId?: string, recoveryRetry = false, refreshNeeded = true): void {
     if (epoch !== watchEpoch) return
     if (disposed) return
-    busy = false; watch = undefined; render(); refresh()
+    busy = false; watch = undefined; render(); if (refreshNeeded) refresh()
     const focus = document.activeElement
     if (focus === document.body || (focus && section.contains(focus))) {
       if (recoveryRetry && recoveryFailed) retry.focus()
@@ -280,17 +285,19 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   }
   async function run(item: RemoteWorkspace, sessionId?: string, create = false): Promise<void> {
     const attempt = begin()
+    let refreshNeeded = false
     busy = true; activeItem = item.id; operation = undefined; failure = false; status = tt('remote.phase.connecting'); render()
     try {
       const ready = hosts.find(x => x.hostId === item.hostId)?.phase === 'ready' && !stale
+      refreshNeeded = !ready || create || !sessionId
       const workspace = ready ? item : await connectRemoteWorkspace(item.alias, item.remotePath, attempt.progress, { ...attempt.options, expectedHostId: item.hostId })
       if (create) ({ sessionId } = await json<{ sessionId: string }>('session/create', { id: workspace.id }, attempt.options))
       await openRemoteWorkspace(workspace, sessionId, attempt.options)
       if (attempt.epoch === watchEpoch && !operation) status = ''
       if (attempt.epoch === watchEpoch && remoteNavigation.getSnapshot().native) { status = ''; operation = undefined }
     }
-    catch (error) { report(error, attempt.epoch) }
-    finally { finish(attempt.epoch, item.id) }
+    catch (error) { refreshNeeded = true; report(error, attempt.epoch) }
+    finally { finish(attempt.epoch, item.id, false, refreshNeeded) }
   }
   async function observe(item: RemoteOperation): Promise<void> {
     if (busy || offline || disposed) return

@@ -6,6 +6,8 @@ import type { RemoteSessionCatalog } from './types.ts'
 export class RemoteSessionCache {
   private entries: Record<string, RemoteSessionCatalog> = {}
   private issue?: string
+  private persistedAt = 0
+  get warning(): string | undefined { return this.issue }
   constructor(private path: string) {
     try {
       let info: ReturnType<typeof lstatSync>
@@ -26,11 +28,16 @@ export class RemoteSessionCache {
   }
   save(id: string, entry: RemoteSessionCatalog): void {
     if (this.issue) return
+    const previous = this.entries[id]
+    // Polling updates freshness in memory. Unchanged navigation metadata does
+    // not need a complete atomic file rewrite for every project every 5 s.
+    if (previous?.workspaceId === entry.workspaceId && JSON.stringify(previous.sessions) === JSON.stringify(entry.sessions)
+      && Date.now() - this.persistedAt < 60000) { this.entries[id] = entry; return }
     const entries = { ...this.entries, [id]: entry }
     const temporary = `${this.path}.${randomUUID()}.tmp`
     try {
       writeFileSync(temporary, JSON.stringify({ version: 1, entries }), { flag: 'wx', mode: 0o600 })
-      renameSync(temporary, this.path); this.entries = entries
+      renameSync(temporary, this.path); this.entries = entries; this.persistedAt = Date.now()
     } catch {
       try { unlinkSync(temporary) } catch {}
       this.issue = 'The remote session list could not be saved. Remote sessions are unchanged.'

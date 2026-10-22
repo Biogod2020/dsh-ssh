@@ -79,9 +79,29 @@ it('isolates Hosts and selects another Session through native navigation without
   await session.promise
   await openRemoteWorkspace(workspace, 'different-session')
   expect(first.guest.hidden).toBe(false); expect(second.guest.hidden).toBe(true)
-  expect(first.guest.executeJavaScript).toHaveBeenCalledWith('window.__dshSshView.open("different-session")')
+  expect(first.guest.executeJavaScript).toHaveBeenCalledWith('Boolean(window.__dshSshView?.select?.("remote-work","different-session"))')
+  expect(f.fetch).toHaveBeenCalledTimes(2)
   expect(f.guests).toHaveLength(2)
   expect(f.guests.every(guest => guest.loadURL.mock.calls.length === 1)).toBe(true)
+})
+
+it('falls back to authenticated backend validation when the retained catalog cannot select a Session', async () => {
+  const f = fixture(), first = await f.start()
+  first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
+  first.guest.executeJavaScript.mockResolvedValueOnce(false)
+  await openRemoteWorkspace(workspace, 'not-yet-observed')
+  expect(f.fetch).toHaveBeenCalledTimes(2)
+  expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('window.__dshSshView.open("not-yet-observed")')
+  expect(first.guest.loadURL).toHaveBeenCalledOnce()
+})
+
+it('switches projects on the same retained Host without another launch request or document load', async () => {
+  const f = fixture(), first = await f.start()
+  first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
+  await openRemoteWorkspace({ ...workspace, id: 'other-project', workspaceId: 'other-remote-work', remotePath: '/other' }, 'other-session')
+  expect(f.fetch).toHaveBeenCalledOnce()
+  expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('Boolean(window.__dshSshView?.select?.("other-remote-work","other-session"))')
+  expect(f.guests).toHaveLength(1); expect(first.guest.loadURL).toHaveBeenCalledOnce()
 })
 
 it('cancels a pending view without leaking its lease, replaying setup, or disclosing the launch ticket', async () => {

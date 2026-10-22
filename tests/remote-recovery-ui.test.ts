@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
-import { mountRemoteWorkspaces } from '../src/client/remote-workspaces.ts'
+import { connectRemoteWorkspace, mountRemoteWorkspaces } from '../src/client/remote-workspaces.ts'
 import { registerRemotePresentation } from '../src/client/remote-presentation.ts'
 
 afterEach(() => {
@@ -52,12 +52,38 @@ it('switches an already connected remote conversation without setup or a leftove
   const dispose = mountRemoteWorkspaces()
   try {
     await vi.advanceTimersByTimeAsync(0)
+    const reads = fetchMock.mock.calls.length
     document.querySelector<HTMLButtonElement>('[data-remote-session-id="original"]')!.click()
     await vi.advanceTimersByTimeAsync(0)
     expect(resume).toHaveBeenCalledExactlyOnceWith(workspace, 'original')
+    expect(fetchMock).toHaveBeenCalledTimes(reads)
     expect(fetchMock.mock.calls.every(([url]) => !String(url).endsWith('/connect') && !String(url).endsWith('/open'))).toBe(true)
     expect(document.querySelector('[data-dsh-remote-workspaces] [aria-live="polite"]')?.textContent).not.toContain('Connecting')
   } finally { dispose(); unregister() }
+})
+
+it('observes a short reattachment promptly and slows long-setup polling without repeating connect', async () => {
+  vi.useFakeTimers(); vi.setSystemTime(0)
+  let finished = false
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => response({ operation: { id: 'setup', alias: 'fixture',
+    phase: finished ? 'ready' : 'checking', message: 'Checking', ...(finished ? { workspace } : {}) } }))
+  vi.stubGlobal('fetch', fetchMock)
+  const progress = vi.fn()
+  const connecting = connectRemoteWorkspace('fixture', '/remote/project', progress)
+  await vi.advanceTimersByTimeAsync(250)
+  finished = true
+  await vi.advanceTimersByTimeAsync(50)
+  expect(await connecting).toEqual(workspace)
+  expect(progress).toHaveBeenCalledTimes(2)
+  expect(Date.now()).toBe(300)
+  finished = false; fetchMock.mockClear()
+  const slow = connectRemoteWorkspace('fixture', '/remote/project', vi.fn())
+  await vi.advanceTimersByTimeAsync(6000)
+  const before = fetchMock.mock.calls.length
+  await vi.advanceTimersByTimeAsync(3000)
+  expect(fetchMock.mock.calls.length - before).toBe(3)
+  finished = true; await vi.advanceTimersByTimeAsync(1000); await slow
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/connect'))).toHaveLength(1)
 })
 
 it('retains row identity and focus across health changes; failed reads become unknown rather than disconnected', async () => {

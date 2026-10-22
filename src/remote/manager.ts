@@ -12,7 +12,9 @@ import { RemoteSessionCache } from './session-catalog.ts'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS, compatibleRemoteVersion } from './types.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
-interface Runtime { gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; repairing?: boolean }
+interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
+interface HostCatalog { workspaces: Awaited<ReturnType<RemoteGateway['workspaceSnapshot']>>; sessions: { items: SessionSummary[] }; checkedAt: number }
+interface Runtime { gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; repairing?: boolean; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
 interface ManagerOptions {
   installer: string; bootstrap: string; root?: string; remoteRoot?: string; returnUrl: () => string
   legacy?: () => Array<{ alias: string; remotePath: string; title: string }>
@@ -130,6 +132,7 @@ export class RemoteWorkspaces {
       if (preparing) return { hostId, phase: preparing.phase }
       const runtime = this.runtimes.get(hostId)
       const healthy = runtime && await runtime.gateway.healthy()
+      if (runtime && !healthy) runtime.catalog = undefined
       return { hostId, phase: healthy && runtime && this.ownerMatches(runtime.alias, hostId, runtime.updatedAt) && this.runtimes.get(hostId) === runtime ? 'ready' : 'disconnected' }
     }))
   }
@@ -142,6 +145,7 @@ export class RemoteWorkspaces {
       try {
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
         if (await runtime.gateway.healthy()) { runtime.failures = 0; return }
+        runtime.catalog = undefined
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
         const tunnel = await this.engine.startWorkspaceTunnel(runtime.alias, runtime.gateway.receipt.port, runtime.updatedAt)
         replacement = tunnel.id
@@ -268,7 +272,10 @@ export class RemoteWorkspaces {
     if (remotePath === '~') remotePath = runtime.gateway.receipt.userHome
     else if (remotePath.startsWith('~/')) remotePath = posix.join(runtime.gateway.receipt.userHome, remotePath.slice(2))
     if (!remotePath.startsWith('/')) throw new Error('Choose an absolute remote directory or ~/path')
-    const value = await runtime.gateway.rpc<{ workspace: { workspaceId: string; path: string; title: string; sessionIds: string[] } }>('workspace/create', { request: { path: remotePath } })
+    runtime.catalog = undefined
+    let value: { workspace: { workspaceId: string; path: string; title: string; sessionIds: string[] } }
+    try { value = await runtime.gateway.rpc('workspace/create', { request: { path: remotePath } }) }
+    finally { runtime.catalog = undefined }
     const workspace = value.workspace
     check()
     if (!workspace?.workspaceId || !workspace.path?.startsWith('/')) throw new Error('Remote workspace API returned an incompatible identity')
@@ -280,20 +287,34 @@ export class RemoteWorkspaces {
     return item
   }
   /** Metadata reads use an existing carrier only; opening the sidebar never starts SSH. */
+  private hostCatalog(runtime: Runtime): Promise<HostCatalog> {
+    if (runtime.catalog && runtime.catalog.expiresAt > Date.now()) return runtime.catalog.read
+    // All projects on a Host share the same remote workspace/session lists.
+    // Coalesce concurrent reads and short bursts; retain no Session content.
+    const entry: NonNullable<Runtime['catalog']> = { expiresAt: Infinity, read: Promise.all([
+      runtime.gateway.workspaceSnapshot(), runtime.gateway.rpc<HostCatalog['sessions']>('session/list', { _request: {} }),
+    ])
+      .then(([workspaces, sessions]) => {
+        if (!Array.isArray(workspaces.items) || !Array.isArray(workspaces.archivedSessionIds) || !Array.isArray(sessions.items)) throw new Error('Remote catalog is incompatible')
+        const checkedAt = Date.now(); entry.expiresAt = checkedAt + 2000
+        return { workspaces, sessions, checkedAt }
+      }).catch(error => { if (runtime.catalog === entry) runtime.catalog = undefined; throw error }) }
+    runtime.catalog = entry
+    return entry.read
+  }
   async sessions(id: string): Promise<RemoteSessionCatalog> {
     const item = this.workspaces.get(id)
     if (!item) throw new Error('Unknown remote workspace')
     const cached = () => this.sessionCache.get(id, item.workspaceId)
     const runtime = this.runtimes.get(item.hostId), epoch = this.epoch
-    if (!runtime || this.disposed || !this.enabled || this.hostId(item.alias) !== item.hostId) return cached()
+    if (!runtime || this.disposed || !this.enabled || !this.ownerMatches(item.alias, item.hostId, runtime.updatedAt)) return cached()
     const pending = this.catalogReads.get(id)
     if (pending) return pending
     const read = (async () => {
       try {
-        const [workspaces, result] = await Promise.all([runtime.gateway.workspaceSnapshot(),
-          runtime.gateway.rpc<{ items: Array<{ sessionId: string; updatedAt: number; running: boolean; blank: boolean;
-            origin?: string; projections?: { values?: { title?: unknown } } }> }>('session/list', { _request: {} })])
+        const { workspaces, sessions: result, checkedAt } = await this.hostCatalog(runtime)
         this.assertActive(epoch); this.assertOwner(item.alias, item.hostId, runtime.updatedAt)
+        if (this.runtimes.get(item.hostId) !== runtime) throw new Error('Remote connection changed')
         const workspace = workspaces.items.find(x => x.workspaceId === item.workspaceId)
         if (!workspace || !Array.isArray(workspace.sessionIds) || !Array.isArray(result.items)) throw new Error('Remote workspace catalog is incompatible')
         const members = new Set(workspace.sessionIds), archived = new Set(workspaces.archivedSessionIds)
@@ -301,9 +322,9 @@ export class RemoteWorkspaces {
           .map(x => ({ sessionId: x.sessionId, title: typeof x.projections?.values?.title === 'string' ? x.projections.values.title.slice(0, 1024) : '',
             running: x.running === true, blank: x.blank === true, updatedAt: Number.isFinite(x.updatedAt) ? x.updatedAt : 0 }))
           .sort((a, b) => b.updatedAt - a.updatedAt)
-        const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt: Date.now() }
+        const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt }
         this.sessionCache.save(id, catalog)
-        return { ...catalog, ...(cached().warning ? { warning: cached().warning } : {}) }
+        return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
       } catch { return { ...cached(), warning: 'Remote session status could not be checked. Showing the last saved list.' } }
     })()
     this.catalogReads.set(id, read)
@@ -311,8 +332,11 @@ export class RemoteWorkspaces {
   }
   async createSession(id: string): Promise<{ sessionId: string }> {
     const { item, runtime, check } = await this.connectedWorkspace(id)
-    const result = await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })
-    check(); return result
+    runtime.catalog = undefined
+    try {
+      const result = await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })
+      check(); return result
+    } finally { runtime.catalog = undefined }
   }
   private async connectedWorkspace(id: string) {
     const epoch = this.epoch
@@ -321,7 +345,9 @@ export class RemoteWorkspaces {
     if (!item) throw new Error('Unknown remote workspace')
     if (this.hostId(item.alias) !== item.hostId) throw new Error('SSH host settings changed; reconnect and add this workspace again')
     const runtime = this.runtimes.get(item.hostId)
-    if (!runtime || !await runtime.gateway.healthy()) throw new Error('Remote DSH is disconnected. Connect the workspace first.')
+    if (!runtime) throw new Error('Remote DSH is disconnected. Connect the workspace first.')
+    // The actual RPC verifies reachability. A separate health request adds a
+    // serial remote round trip without making a subsequent write safer.
     const check = () => { this.assertActive(epoch); this.assertOwner(item.alias, item.hostId, runtime.updatedAt) }
     check()
     return { item, runtime, check }
@@ -333,7 +359,11 @@ export class RemoteWorkspaces {
     if (preferredSessionId !== undefined && (!preferredSessionId || preferredSessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(preferredSessionId))) throw new Error('Invalid remote session identity')
     if (preferredSessionId && !value.workspace.sessionIds.includes(preferredSessionId)) throw new Error('Session does not belong to this remote workspace')
     let sessionId = preferredSessionId ?? value.workspace.sessionIds.at(-1)
-    if (!sessionId) sessionId = (await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })).sessionId
+    if (!sessionId) {
+      runtime.catalog = undefined
+      try { sessionId = (await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })).sessionId }
+      finally { runtime.catalog = undefined }
+    }
     check()
     return { url: runtime.gateway.launch(sessionId), sessionId }
   }
