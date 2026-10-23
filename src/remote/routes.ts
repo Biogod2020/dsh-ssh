@@ -109,7 +109,10 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/open') {
         const body = await readJsonBody(req) as { id?: unknown; sessionId?: unknown }
         if (typeof body?.id !== 'string' || (body.sessionId !== undefined && typeof body.sessionId !== 'string')) throw new Error('workspace id or session identity is invalid')
-        writeJson(res, 200, await manager.open(body.id, body.sessionId)); return
+        // Keep browser navigation same-site without relaxing the gateway's
+        // Origin fence. Only the already authenticated request Host selects it.
+        const localhost = new URL('http://' + req.headers.host).hostname === 'localhost'
+        writeJson(res, 200, localhost ? await manager.open(body.id, body.sessionId, 'localhost') : await manager.open(body.id, body.sessionId)); return
       }
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/dismiss') {
         const body = await readJsonBody(req) as { id?: unknown }

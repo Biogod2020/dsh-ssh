@@ -80,6 +80,19 @@
 
 只需要终端或文件传输时，直接使用 SSH 面板的 **Terminal / Transfer / Tunnels / Cluster**，无需先创建完整远端工作区或配置远端模型。
 
+### 使用 dsh web
+
+也可在 DSH `0.2.1-rc.2` 的 Web profile 安装并启动：
+
+```sh
+dsh plugin --profile web add @biogod/dsh-ssh@0.3.24-jay.40
+dsh web --no-open
+```
+
+通过终端打印的登录链接进入。Web 模式从统一侧栏在同一标签页打开远端，点击页顶 **Local workspaces / 本机工作区** 返回本地；桌面版则保留外层统一侧栏。使用 `localhost` 打开本地页面时，远端入口也会沿用该主机名。远端模型配置走 **Account → Settings → Models → Add model provider**。
+
+本轮已在真正的 `dsh web` 中实测消息/代码复制、本地与远端草稿切换、重启后的磁盘历史读取，以及新网关端口上的草稿恢复。[真实截图与验收范围](docs/benchmarks/2026-10-23/dshweb-core/README.md)。
+
 ## 本机历史缓存
 
 本次候选改用分段事件文件：打开长历史时只读需要的窗口，新增内容只写新段和小型清单，避免每次读取或重写整个会话。会话列表先读本机，同一主机的项目变化共用订阅；远端行提供置顶、重命名、归档/恢复与远端模型入口，消息和代码复制保留多行与中文。正式发布状态以 npm 和发行页为准。
@@ -164,13 +177,7 @@ Key 和 SSH Agent 可填写回退密码：先尝试所选密钥或 Agent，再�
 
 **Add workspace → SSH workspace → 认证 / 回退密码** 可修改认证，再手动点击 **Connect and add**。修改认证不会重放上次操作。测试连接不会代填验证码；终端可显示额外交互认证提示。
 
-### Web profile 的命令行安装
-
-以下命令用于 **Web profile**。桌面 profile 由 Electron 应用管理，请使用前面的插件界面安装。
-
-```sh
-dsh plugin --profile web add @biogod/dsh-ssh@0.3.24-jay.40
-```
+### 预构建发行包
 
 发布包含构建产物及 ssh2 的必需纯 JavaScript 依赖，无需编译原生模块或放开构建脚本；仍需下载其余运行依赖。国内镜像提供 npm 包，不镜像 GitHub 仓库或 Release。默认分支不包含 `lib/`，[Releases](https://github.com/Biogod2020/dsh-ssh/releases) 提供通过流水线验收的预构建 `.tgz`。
 

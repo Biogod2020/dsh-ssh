@@ -521,7 +521,7 @@ export class RemoteWorkspaces {
     check()
     return { item, runtime, check }
   }
-  async open(id: string, preferredSessionId?: string): Promise<{ url: string; sessionId: string }> {
+  async open(id: string, preferredSessionId?: string, hostname?: 'localhost'): Promise<{ url: string; sessionId: string }> {
     const { item, runtime, check } = await this.connectedWorkspace(id)
     const value = await runtime.gateway.rpc<{ workspace: { sessionIds: string[] } }>('workspace/create', { request: { path: item.remotePath } })
     check()
@@ -535,7 +535,7 @@ export class RemoteWorkspaces {
     }
     check()
     this.syncHistory(id, sessionId)
-    return { url: runtime.gateway.launch(sessionId), sessionId }
+    return { url: runtime.gateway.launch(sessionId, hostname), sessionId }
   }
   setEnabled(enabled: boolean): void {
     if (enabled === this.enabled) return

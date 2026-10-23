@@ -32,7 +32,7 @@ export function registerRemotePresentation(presentation: RemotePresentation): ()
 /** A launch ticket is valid only on the selected loopback gateway. */
 export function gatewayUrl(value: string): URL {
   const url = new URL(value)
-  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !url.port || url.username || url.password
+  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) || !url.port || url.username || url.password
     || url.pathname !== '/' || !url.searchParams.get('dsh-remote-ticket')) throw new Error('Invalid remote workspace gateway')
   return url
 }

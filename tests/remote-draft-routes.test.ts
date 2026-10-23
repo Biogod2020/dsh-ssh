@@ -54,6 +54,23 @@ it('authenticates local draft access and binds identical session ids to the gate
   expect((await (await next.read()).json()).draft).toEqual(draft)
   expect(f.forwarded()).toBe(0)
 })
+it('keeps localhost launches same-site and binds tickets and cookies to that exact origin', async () => {
+  const f = await fixture(true), a = await f.create('a'.repeat(24))
+  const launch = new URL(a.gateway.launch('same', 'localhost'))
+  const wrong = new URL(launch); wrong.hostname = '127.0.0.1'
+  expect((await fetch(wrong, { redirect: 'manual' })).status).toBe(401)
+  const auth = await fetch(launch, { redirect: 'manual' })
+  expect(auth.status).toBe(303)
+  expect((await fetch(launch, { redirect: 'manual' })).status).toBe(401)
+  const headers = { Cookie: auth.headers.getSetCookie().map(value => value.split(';')[0]).join('; '), Origin: launch.origin }
+  const path = '/__dsh_remote/draft?sessionId=same'
+  expect((await fetch(launch.origin + path, { headers })).status).toBe(200)
+  expect((await fetch(launch.origin + path, { headers: { ...headers, Origin: a.gateway.origin } })).status).toBe(401)
+  expect((await fetch(launch.origin + path, { headers: { ...headers, 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(401)
+  expect((await fetch(a.gateway.origin + path, { headers: { ...headers, Origin: a.gateway.origin } })).status).toBe(401)
+  expect((await a.read()).status).toBe(200)
+  expect(await (await fetch(launch.origin, { headers })).text()).toContain('href="http://localhost:1/"')
+})
 it('serves observation only for an authenticated embedded owner and composes its transport before native boot',async()=>{
   const f=await fixture(true),embedded=await f.create('a'.repeat(24),true),standalone=await f.create('a'.repeat(24))
   const path='/__dsh_remote/operation-client.js'

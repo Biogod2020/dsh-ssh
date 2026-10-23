@@ -25,8 +25,8 @@ const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|
 export class RemoteGateway {
   private server: Server
   private sockets = new Set<Socket>()
-  private tickets = new Map<string, { expires: number; sessionId?: string }>()
-  private sessions = new Map<string, { expires: number; sessionId?: string; embedded?: boolean }>()
+  private tickets = new Map<string, { expires: number; sessionId?: string; origin: string }>()
+  private sessions = new Map<string, { expires: number; sessionId?: string; embedded?: boolean; origin: string }>()
   private upstreamCookie = ''
   private requests = new Map<number, Set<Promise<void>>>()
   private drainWaiters = new Set<() => void>()
@@ -128,22 +128,31 @@ export class RemoteGateway {
     })
   }
   /** Only the authenticated local controller issues short-lived, single-use launch tickets. */
-  launch(sessionId?: string): string {
+  launch(sessionId?: string, hostname: '127.0.0.1' | 'localhost' = '127.0.0.1'): string {
     this.prune()
+    if (hostname !== '127.0.0.1' && hostname !== 'localhost') throw new Error('Invalid gateway hostname')
+    const target = new URL(this.origin); target.hostname = hostname
     const ticket = randomBytes(32).toString('base64url')
-    this.tickets.set(ticket, { expires: Date.now() + 60000, sessionId })
-    return `${this.origin}/?dsh-remote-ticket=${ticket}`
+    this.tickets.set(ticket, { expires: Date.now() + 60000, sessionId, origin: target.origin })
+    return `${target.origin}/?dsh-remote-ticket=${ticket}`
   }
   private prune(): void {
     for (const map of [this.tickets, this.sessions]) for (const [key, item] of map) if (item.expires < Date.now()) map.delete(key)
   }
   private cookieName(): string { return `dsh-remote-${new URL(this.origin).port}` }
+  private requestOrigin(req: IncomingMessage): string | undefined {
+    const target = new URL(this.origin)
+    if (req.headers.host === target.host) return target.origin
+    target.hostname = 'localhost'
+    return req.headers.host === target.host ? target.origin : undefined
+  }
   private authenticated(req: IncomingMessage): { sessionId?: string; embedded?: boolean } | undefined {
-    if (req.headers.host !== new URL(this.origin).host || (req.headers.origin && req.headers.origin !== this.origin)
+    const origin = this.requestOrigin(req)
+    if (!origin || (req.headers.origin && req.headers.origin !== origin)
       || req.headers['sec-fetch-site'] === 'cross-site') return undefined
     const value = req.headers.cookie?.split(';').map(x => x.trim()).find(x => x.startsWith(this.cookieName() + '='))?.split('=')[1]
     const session = value ? this.sessions.get(value) : undefined
-    return session && session.expires > Date.now() ? session : undefined
+    return session && session.origin === origin && session.expires > Date.now() ? session : undefined
   }
   private headers(req?: IncomingMessage, identity = false): Record<string, string | string[] | undefined> {
     const headers: Record<string, string | string[] | undefined> = { ...req?.headers, host: new URL(this.upstreamOrigin).host, origin: this.upstreamOrigin, cookie: this.upstreamCookie }
@@ -295,15 +304,17 @@ export class RemoteGateway {
     })
   }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (!this.origin || req.headers.host !== new URL(this.origin).host) { res.writeHead(403); res.end(); return }
-    const url = new URL(req.url ?? '/', this.origin)
+    const origin = this.origin && this.requestOrigin(req)
+    if (!origin) { res.writeHead(403); res.end(); return }
+    const url = new URL(req.url ?? '/', origin)
     const ticket = url.searchParams.get('dsh-remote-ticket')
     if (ticket && req.method === 'GET' && url.pathname === '/') {
       this.prune()
-      const entry = this.tickets.get(ticket); this.tickets.delete(ticket)
-      if (!entry) { res.writeHead(401); res.end('Remote launch link expired. Reopen the workspace.'); return }
+      const entry = this.tickets.get(ticket)
+      if (!entry || entry.origin !== origin) { res.writeHead(401); res.end('Remote launch link expired. Reopen the workspace.'); return }
+      this.tickets.delete(ticket)
       const key = randomBytes(32).toString('base64url')
-      this.sessions.set(key, { expires: Date.now() + 86400000, sessionId: entry.sessionId, embedded: url.searchParams.get('dsh-remote-view') === 'desktop' })
+      this.sessions.set(key, { expires: Date.now() + 86400000, sessionId: entry.sessionId, embedded: url.searchParams.get('dsh-remote-view') === 'desktop', origin })
       res.writeHead(303, { Location: '/', 'Set-Cookie': `${this.cookieName()}=${key}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`, 'Referrer-Policy': 'no-referrer', 'Cache-Control': 'no-store' }); res.end(); return
     }
     const session = this.authenticated(req)
@@ -392,8 +403,10 @@ export class RemoteGateway {
             // Consume navigation once; later reloads preserve the remote client's current session.
             const selected = initialSessionId
             if (session.sessionId === selected) delete session.sessionId
+            const returnUrl = new URL(this.returnUrl)
+            if (returnUrl.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(returnUrl.hostname)) returnUrl.hostname = new URL(origin).hostname
             const body = remotePage(Buffer.concat(chunks).toString('utf8'), {
-              alias: this.alias, returnUrl: this.returnUrl, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded, draftSeed,
+              alias: this.alias, returnUrl: returnUrl.href, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded, draftSeed,
             })
             res.writeHead(incoming.statusCode ?? 200, headers); res.end(body); resolve()
             } catch (error) { reject(error) }
