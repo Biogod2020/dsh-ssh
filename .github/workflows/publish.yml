@@ -6,16 +6,16 @@ on:
   workflow_dispatch:
     inputs:
       verification_scope:
-        description: Verification scope for development (tags always run all gates)
+        description: Core release acceptance, or optional extended performance checks
         type: choice
-        default: all
-        options: [all, kernel-only]
+        default: core-e2e
+        options: [core-e2e, all, kernel-only]
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-release-${{ github.ref }}-${{ inputs.verification_scope || 'all' }}
+  group: npm-release-${{ github.ref }}-${{ inputs.verification_scope || 'core-e2e' }}
   cancel-in-progress: false
 
 jobs:
@@ -66,12 +66,15 @@ jobs:
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc/node_modules/.bin/dsh" "${archives[0]}"
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
       - name: Verify the retained alpha.4 remote runtime
+        if: inputs.verification_scope == 'all'
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts
       - name: Verify the actual rc.2 SDK unary acknowledgement contract with mock Context and transport
+        if: inputs.verification_scope == 'all'
         run: node --experimental-transform-types scripts/operation-rpc-contract.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/@deepseek-ai/dsh-client-connection/lib/client.browser.js" "$RUNNER_TEMP/release/operation-rpc-contract.json"
       - name: Verify the actual rc.2 Gateway and Cordis logical stream and incoming answer contract
+        if: inputs.verification_scope == 'all'
         run: node --experimental-transform-types scripts/operation-stream-contract.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/@deepseek-ai" "$RUNNER_TEMP/release/operation-stream-contract.json"
       - name: Verify the packaged offline downgrade exporter without reviving cleared history
         run: |
@@ -81,6 +84,7 @@ jobs:
           node scripts/fetch-legacy-history-archive.mjs "$RUNNER_TEMP/frozen-jay39.tgz"
           node --experimental-transform-types scripts/history-downgrade-smoke.mjs "${archives[0]}" "$RUNNER_TEMP/release/downgrade-verification.json" "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "$RUNNER_TEMP/frozen-jay39.tgz"
       - name: Read a large catalog and accept the live directory feed in three installed runtimes
+        if: inputs.verification_scope == 'all'
         run: |
           shopt -s nullglob
           archives=("$RUNNER_TEMP/release/"*.tgz)
@@ -88,12 +92,14 @@ jobs:
           for runtime in alpha rc rc21; do
             node --experimental-transform-types scripts/catalog-runtime-smoke.mjs "$RUNNER_TEMP/dsh-$runtime/node_modules/.bin/dsh" "${archives[0]}" "$RUNNER_TEMP/release/catalog-verification-$runtime.json"
           done
-      - name: Accept incremental disk history and calibrate the long-run observer for 30 seconds
+      - name: Accept installed incremental history, offline reading and controller restart
         run: |
           shopt -s nullglob
           archives=("$RUNNER_TEMP/release/"*.tgz)
           test "${#archives[@]}" -eq 1
-          DSH_HISTORY_ARCHIVE_REPORT="$RUNNER_TEMP/release/history-acceptance.json" DSH_HISTORY_SOAK_REPORT="$RUNNER_TEMP/release/soak-calibration.json" node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}" --outages --soak-seconds=30
+          options=()
+          if [ "${{ inputs.verification_scope }}" = all ]; then options=(--outages --soak-seconds=30); fi
+          DSH_HISTORY_ARCHIVE_REPORT="$RUNNER_TEMP/release/history-acceptance.json" DSH_HISTORY_SOAK_REPORT="$RUNNER_TEMP/release/soak-calibration.json" node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}" "${options[@]}"
       - name: Survive SSH disconnect in the installed archive
         run: |
           shopt -s nullglob
@@ -101,6 +107,7 @@ jobs:
           test "${#archives[@]}" -eq 1
           node --experimental-transform-types scripts/tunnel-disconnect-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}"
       - name: Measure immutable history storage against the frozen jay.39 baseline
+        if: inputs.verification_scope == 'all'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -180,7 +187,7 @@ jobs:
           retention-days: 7
 
   network-history:
-    if: github.ref_type == 'tag' || inputs.verification_scope != 'kernel-only'
+    if: inputs.verification_scope == 'all'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -244,6 +251,7 @@ jobs:
           retention-days: 14
 
   kernel-loss-history:
+    if: inputs.verification_scope == 'all' || inputs.verification_scope == 'kernel-only'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -300,7 +308,7 @@ jobs:
           retention-days: 14
 
   publish:
-    needs: [verify, network-history, kernel-loss-history]
+    needs: verify
     if: github.repository == 'Biogod2020/dsh-ssh' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

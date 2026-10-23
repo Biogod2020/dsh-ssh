@@ -95,7 +95,7 @@ export function apply(ctx: ClientContext): void {
   try {
     const desktop = mountDesktopWorkspaces(ctx.locale, ctx)
     if (desktop) disposers.push(desktop)
-    if (desktop) disposers.push(mountNativeWorkspaces(ctx))
+    disposers.push(mountNativeWorkspaces(ctx))
     if (desktop) disposers.push(mountNativeSessionControls(ctx))
     const native = mountNativeSshPanel(ctx, controller, api, terminalFont, ctx.locale)
     if (native) disposers.push(native)
