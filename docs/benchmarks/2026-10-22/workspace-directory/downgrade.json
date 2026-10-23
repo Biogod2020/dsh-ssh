@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "archiveSha256": "bcb79c2767f8ac7bafbbbaf59c36095f1cc8c8cdd4cccc2f4b90e3b77c389347",
+  "exporterSha256": "929146476e2dfa2e294b4f0da3c2049100c986efd5e5831a33931ab36f4fbfad",
+  "packagedExporter": true,
+  "retainedSessions": 1,
+  "retainedEvents": 603,
+  "appendedEvents": 3,
+  "firstSavedAtPreserved": true,
+  "allOtherMetadataPreserved": true,
+  "sourceHistoryFilesUnchanged": true,
+  "clearedArchivesNotRevived": true,
+  "perSessionBarriersUnchanged": true,
+  "activeWriterRefused": true,
+  "existingTargetNotOverwritten": true,
+  "sourceControlDataUnchanged": true,
+  "exporterLocksReleased": true,
+  "automaticRestore": false,
+  "modelRequests": 0,
+  "legacyRuntimeRead": true,
+  "legacyPluginVersion": "0.3.24-jay.39"
+}

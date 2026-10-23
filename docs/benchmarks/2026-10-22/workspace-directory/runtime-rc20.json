@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "completed": true,
+  "runtime": "0.2.0-rc.2",
+  "archiveSha256": "bcb79c2767f8ac7bafbbbaf59c36095f1cc8c8cdd4cccc2f4b90e3b77c389347",
+  "generatedMetadataSessions": 1200,
+  "rawSdkSessionRows": 1201,
+  "rawSdkResponseBytes": 1555460,
+  "largeDecodeThresholdBytes": 1048576,
+  "compiledGatewayCatalogRead": true,
+  "freshSelectedCatalog": true,
+  "workspaceFeedOpens": 1,
+  "repeatedCatalogReads": 101,
+  "pushedArchiveAndUnarchive": true,
+  "liveFeedWaitRequestedMilliseconds": 43000,
+  "liveFeedWaitElapsedMilliseconds": 43002.094458,
+  "liveFeedWaitWallMilliseconds": 43002,
+  "harnessSha256": "1ab64de3ebdbf0142e98a14e432d77dc50b6ea3b0f1e14d137671e56e2c3718f",
+  "remotePidPreserved": true,
+  "modelRequests": 0,
+  "nativeDesktopVerified": false
+}

@@ -12,7 +12,7 @@ import { DEFAULT_KNOWN_HOSTS } from '../src/engine/known-hosts.ts'
 
 const [dsh, archive, output] = process.argv.slice(2), run = promisify(execFile)
 assert([dsh, archive, output].every(value => value && isAbsolute(value)), 'Supply absolute DSH, package and new report paths')
-const version = (await run(dsh, ['--version'])).stdout.trim(); assert.equal(version, '0.2.1-rc.2')
+const version = (await run(dsh, ['--version'])).stdout.trim(); assert(['0.2.0-rc.2','0.2.1-alpha.4','0.2.1-rc.2'].includes(version), 'Use one of the reviewed runtimes')
 const root = await mkdtemp(join(tmpdir(), 'dsh-catalog-archive-')), local = join(root, 'local'), remote = join(root, 'remote')
 const remoteRoot = join(remote, '.local/share/dsh-remote'), project = join(remote, 'selected-project'), nonce = randomUUID()
 await writeFile(output, JSON.stringify({ passed: false, completed: false, phase: 'starting', modelRequests: 0 }) + '\n', { mode: 0o600, flag: 'wx' })
@@ -26,8 +26,15 @@ const plugin = join(root, 'seed'); await mkdir(plugin, { mode: 0o700 })
 await writeFile(join(plugin, 'package.json'), JSON.stringify({ name: '@fixture/catalog-seed', version: '1.0.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
 await writeFile(join(plugin, 'cordis.patch.yml'), '- insert:\n    - id: catalog-seed\n      name: "@fixture/catalog-seed"\n')
 await writeFile(join(plugin, 'index.js'), `
-export const inject=['webServer','connection','sessions'];
-export function apply(ctx){let created=0;
+export const inject=['webServer','connection','sessions','workspaceController'];
+export function apply(ctx){let created=0,followOpens=0;
+const controller=ctx.workspaceController,originalFollow=controller.follow;
+controller.follow=function(...args){followOpens++;return originalFollow.apply(this,args)};
+ctx.effect(()=>()=>{controller.follow=originalFollow});
+ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/catalog-stats',handler:async(req,res)=>{
+ const denied=ctx.connection.requestRejection(req);if(denied){res.writeHead(denied);res.end();return}
+ res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({followOpens}));
+}}));
 ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/identity',handler:async(req,res)=>{
  const denied=ctx.connection.requestRejection(req);if(denied){res.writeHead(denied);res.end();return}
  res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({pid:process.pid,home:process.env.DSH_HOME,nonce:${JSON.stringify(nonce)}}));
@@ -76,8 +83,9 @@ try {
   const { sessionId } = await api('remote/session/create', { id: workspace.id })
   const view = new URL((await api('remote/open', { id: workspace.id, sessionId })).url), remoteHeaders = await auth(view)
   let created = 0, bytes = 0, rows = 0
-  const rpc = async (method, args) => {
-    const rpcId = randomUUID(), response = await fetch(view.origin + '/api/' + method, { method: 'POST', headers: remoteHeaders,
+  const directUrl=new URL(receipt.url),directHeaders=await auth(directUrl)
+  const rpc = async (method, args, direct=false) => {
+    const rpcId = randomUUID(), response = await fetch((direct?directUrl.origin:view.origin) + '/api/' + method, { method: 'POST', headers: direct?directHeaders:remoteHeaders,
       body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(30000) })
     assert.equal(response.status, 200); const raw = await response.text(), body = JSON.parse(raw)
     assert.equal(body.rpcId, rpcId); assert.equal(body.result.ok, true); return { raw, value: body.result.value }
@@ -94,10 +102,30 @@ try {
   const selected = await api('remote/sessions?id=' + workspace.id)
   assert.equal(selected.stale, false); assert.equal(selected.sessions.find(row => row.sessionId === sessionId)?.title, title)
   assert(!selected.warning); assert.equal(new Set(selected.sessions.map(row => row.sessionId)).size, selected.sessions.length)
+  const stats=async()=>{
+    const response=await fetch(directUrl.origin+'/api/fixture/catalog-stats',{headers:directHeaders,signal:AbortSignal.timeout(5000)})
+    assert.equal(response.status,200);return response.json()
+  }
+  assert.equal((await stats()).followOpens,1)
+  for(let n=0;n<100;n++)assert.equal((await api('remote/sessions?id='+workspace.id)).stale,false)
+  const feedWaitStarted=performance.now(),feedWaitWallStarted=Date.now()
+  await delay(43000) // Expire aggregation and cross a real 30s ping + 10s pong budget.
+  const feedWaitElapsed=performance.now()-feedWaitStarted,feedWaitWallElapsed=Date.now()-feedWaitWallStarted
+  assert.equal((await api('remote/sessions?id='+workspace.id)).stale,false)
+  // Bypass the local gateway mutation callback: only the official pushed
+  // archive/unarchive increments can invalidate this fresh local catalog.
+  await rpc('workspace/archiveSession',{request:{sessionId}},true)
+  await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&!value.sessions.some(row=>row.sessionId===sessionId)})
+  await rpc('workspace/unarchiveSession',{request:{sessionId}},true)
+  await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&value.sessions.some(row=>row.sessionId===sessionId)})
+  assert.equal((await stats()).followOpens,1)
   assert.equal(JSON.parse(await readFile(join(remoteRoot, 'state/server.json'), 'utf8')).pid, receipt.pid)
   result = { passed: true, completed: true, runtime: version, archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
     generatedMetadataSessions: created, rawSdkSessionRows: rows, rawSdkResponseBytes: bytes, largeDecodeThresholdBytes: 1024 * 1024,
-    compiledGatewayCatalogRead: true, freshSelectedCatalog: true, remotePidPreserved: true, modelRequests: 0, nativeDesktopVerified: false }
+    compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
+    pushedArchiveAndUnarchive: true, liveFeedWaitRequestedMilliseconds: 43000,
+    liveFeedWaitElapsedMilliseconds: feedWaitElapsed, liveFeedWaitWallMilliseconds: feedWaitWallElapsed,
+    harnessSha256: createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'), remotePidPreserved: true, modelRequests: 0, nativeDesktopVerified: false }
   passed = true
 } finally {
   let cleanupError

@@ -27,6 +27,7 @@ async function fixture(healthMisses = 2) {
   let dispatched = 0, releaseCancel: ((redirect?: boolean) => void) | undefined
   let healthDelay = 0, healthReads = 0, terminalFrames = 0, workspaceWrites = 0, upgradeDelay = 0
   let releaseBaseline: (() => void) | undefined
+  let followOpens=0, publishWorkspace:((value:object)=>void)|undefined, closeWorkspace:(()=>void)|undefined
   let rootEncoding: string | undefined
   let baselineValue: { items: Array<{workspaceId:string;sessionIds:string[];title?:string}>; archivedSessionIds:string[] } = {items:[],archivedSessionIds:[]}
   let endAfterBaseline = false, listItems: object[] = [], listReads = 0
@@ -76,6 +77,9 @@ async function fixture(healthMisses = 2) {
       ws.on('message', data => {
         let frame: any; try { frame = JSON.parse(data.toString()) } catch { /* plain terminal fixture */ }
         if (frame?.endpoint === 'workspace/follow') {
+          followOpens++
+          publishWorkspace=value=>ws.send(JSON.stringify({type:'item',streamId:frame.streamId,value}))
+          closeWorkspace=()=>ws.close()
           releaseBaseline = () => {
             ws.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value: { type: 'baseline', value: baselineValue } }))
             if(endAfterBaseline)ws.send(JSON.stringify({type:'end',streamId:frame.streamId}))
@@ -137,6 +141,7 @@ async function fixture(healthMisses = 2) {
     setHealthDelay(ms: number) { healthDelay = ms }, setUpgradeDelay(ms: number) { upgradeDelay = ms },
     get healthReads() { return healthReads }, get terminalFrames() { return terminalFrames }, get workspaceWrites() { return workspaceWrites },
     get baselineWaiting() { return !!releaseBaseline }, releaseBaseline: () => releaseBaseline?.(),
+    get followOpens(){return followOpens},publishWorkspace:(value:object)=>publishWorkspace?.(value),closeWorkspace:()=>closeWorkspace?.(),
     setBaseline(value:typeof baselineValue,end=false){baselineValue=value;endAfterBaseline=end},
     pauseBaselineClose(){pauseBaselineClose=true},
     setSessionList(items:object[]){listItems=items},get listReads(){return listReads},
@@ -419,4 +424,59 @@ it('preserves compressed asset bytes and headers while requesting identity HTML 
   expect(asset.bytes).toEqual(f.compressed)
   await raw('/')
   expect(f.rootEncoding).toBeUndefined()
+})
+
+
+it('reuses one live Host directory across a hundred reads and applies membership changes without another baseline',async()=>{
+  const f=await fixture(),changed=vi.fn();f.gateway.onCatalogChange=changed
+  const initial={items:Array.from({length:100},(_,n)=>({workspaceId:'project-'+n,sessionIds:['session-'+n]})),archivedSessionIds:[]}
+  f.setBaseline(initial)
+  const reading=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===1);f.releaseBaseline()
+  const baseline=await reading
+  for(let n=0;n<100;n++)expect(await f.gateway.workspaceCatalogSnapshot()).toBe(baseline)
+  expect(f.followOpens).toBe(1)
+  f.publishWorkspace({type:'upsert',workspace:{workspaceId:'project-3',sessionIds:['new-session']}})
+  await wait(()=>changed.mock.calls.length===1)
+  expect((await f.gateway.workspaceCatalogSnapshot()).items.find(row=>row.workspaceId==='project-3')?.sessionIds).toEqual(['new-session'])
+  expect(baseline.items[3]!.sessionIds).toEqual(['session-3'])
+  f.publishWorkspace({type:'remove',workspaceId:'project-3'})
+  f.publishWorkspace({type:'upsert',workspace:{workspaceId:'project-3',sessionIds:['obsolete-session']}})
+  f.publishWorkspace({type:'archived',archivedSessionIds:['session-9']})
+  await wait(()=>changed.mock.calls.length===3)
+  const current=await f.gateway.workspaceCatalogSnapshot()
+  expect(current.items).toHaveLength(99);expect(current.items.some(row=>row.workspaceId==='project-3')).toBe(false)
+  expect(current.archivedSessionIds).toEqual(['session-9']);expect(f.followOpens).toBe(1)
+  // A persistent read must release the limited read lane after its baseline.
+  await expect(f.gateway.rpc('session/list',{})).resolves.toEqual({items:[]})
+})
+
+it('starts a new full directory generation after disconnection and never serves the lost feed as fresh',async()=>{
+  const f=await fixture(),changed=vi.fn();f.gateway.onCatalogChange=changed
+  f.setBaseline({items:[{workspaceId:'old-project',sessionIds:['old']}],archivedSessionIds:[]})
+  const first=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===1);f.releaseBaseline();await first
+  f.closeWorkspace();await wait(()=>changed.mock.calls.length===1)
+  f.setBaseline({items:[{workspaceId:'new-project',sessionIds:['new']}],archivedSessionIds:[]})
+  const next=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===2);f.releaseBaseline()
+  await expect(next).resolves.toEqual({items:[{workspaceId:'new-project',sessionIds:['new']}],archivedSessionIds:[]})
+})
+
+it('moves only the read-only directory observer to a replacement carrier while preserving a healthy terminal',async()=>{
+  const f=await fixture(0),terminal=f.stream();await once(terminal,'open');await echo(terminal,'before-feed')
+  const first=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===1);f.releaseBaseline();await first
+  await confirmedRepair(f)
+  const next=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===2);f.releaseBaseline();await next
+  await delay(50)
+  expect(f.stop).not.toHaveBeenCalledWith('old');await echo(terminal,'same-shell-after-feed-repair')
+  const closed=once(terminal,'close');terminal.close();await closed
+  await wait(()=>f.stop.mock.calls.some(([id])=>id==='old'))
+  expect(f.dispatched).toBe(0)
+})
+
+it('rejects an invalid live directory increment and fences the cached Host list instead of silently dropping it',async()=>{
+  const f=await fixture(),changed=vi.fn();f.gateway.onCatalogChange=changed
+  const first=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===1);f.releaseBaseline();await first
+  f.publishWorkspace({type:'upsert',workspace:{workspaceId:'malformed',sessionIds:'wrong-type'}})
+  await wait(()=>changed.mock.calls.length===1)
+  const next=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===2);f.releaseBaseline()
+  await expect(next).resolves.toEqual({items:[],archivedSessionIds:[]})
 })

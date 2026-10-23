@@ -7,8 +7,8 @@ import { RemoteWorkspaces } from '../src/remote/manager.ts'
 import type { SshEngine } from '../src/engine.ts'
 import { CatalogReadError } from '../src/remote/catalog-json.ts'
 
-const cleanups: Array<() => void> = []
-afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); vi.useRealTimers() })
+const cleanups: Array<() => Promise<void>> = []
+afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); vi.useRealTimers() })
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'ssh-catalog-performance-'))
   const store = new HostStore(join(root, 'hosts.json'))
@@ -19,7 +19,7 @@ function fixture() {
   const hostId = (manager as any).hostId('fixture')
   const rows = [{ sessionId: 'one', updatedAt: 1, running: false, blank: false }, { sessionId: 'two', updatedAt: 2, running: true, blank: false }]
   const gateway = {
-    workspaceSnapshot: vi.fn(async () => ({ items: [{ workspaceId: 'first', sessionIds: ['one'] }, { workspaceId: 'second', sessionIds: ['two'] }], archivedSessionIds: [] })),
+    workspaceCatalogSnapshot: vi.fn(async () => ({ items: [{ workspaceId: 'first', sessionIds: ['one'] }, { workspaceId: 'second', sessionIds: ['two'] }], archivedSessionIds: [] })),
     rpc: vi.fn(async (method: string) => method === 'session/list' ? { items: [...rows] } : method === 'workspace/create'
       ? { workspace: { sessionIds: ['one'] } } : { sessionId: 'created' }),
     healthy: vi.fn(async () => true), dispose: vi.fn(), launch: vi.fn(() => 'http://127.0.0.1:1/'),
@@ -30,7 +30,7 @@ function fixture() {
     const id = (n ? 'b' : 'a').repeat(24)
     ;(manager as any).workspaces.set(id, { id, hostId, alias: 'fixture', remotePath: '/'+workspaceId, title: workspaceId, workspaceId })
   }
-  cleanups.push(() => { manager.dispose(); rmSync(root, { recursive: true, force: true }) })
+  cleanups.push(async () => { await manager.dispose(); rmSync(root, { recursive: true, force: true }) })
   return { manager, store, gateway, hostId, rows, runtime, first: 'a'.repeat(24), second: 'b'.repeat(24) }
 }
 it('shares one remote catalog across projects and short bursts, with original freshness and bounded expiry', async () => {
@@ -38,14 +38,14 @@ it('shares one remote catalog across projects and short bursts, with original fr
   const f = fixture()
   const [first, second] = await Promise.all([f.manager.sessions(f.first), f.manager.sessions(f.second)])
   expect(first.sessions.map(x => x.sessionId)).toEqual(['one']); expect(second.sessions.map(x => x.sessionId)).toEqual(['two'])
-  expect(f.gateway.workspaceSnapshot).toHaveBeenCalledOnce(); expect(f.gateway.rpc).toHaveBeenCalledOnce()
+  expect(f.gateway.workspaceCatalogSnapshot).toHaveBeenCalledOnce(); expect(f.gateway.rpc).toHaveBeenCalledOnce()
   vi.advanceTimersByTime(1500)
   expect((await f.manager.sessions(f.first)).checkedAt).toBe(first.checkedAt)
   expect(f.gateway.rpc).toHaveBeenCalledOnce()
   vi.advanceTimersByTime(501)
   f.rows[0]!.running = true
   expect((await f.manager.sessions(f.first)).sessions[0]!.running).toBe(true)
-  expect(f.gateway.workspaceSnapshot).toHaveBeenCalledTimes(2); expect(f.gateway.rpc).toHaveBeenCalledTimes(2)
+  expect(f.gateway.workspaceCatalogSnapshot).toHaveBeenCalledTimes(2); expect(f.gateway.rpc).toHaveBeenCalledTimes(2)
 })
 
 it('aggregates a hundred owned projects into one Host baseline and list without mixing Session membership',async()=>{
@@ -53,7 +53,7 @@ it('aggregates a hundred owned projects into one Host baseline and list without 
   workspaces.clear()
   const projects=Array.from({length:100},(_,n)=>({workspaceId:'project-'+n,sessionIds:['session-'+n]}))
   const rows=projects.map((project,n)=>({sessionId:project.sessionIds[0]!,updatedAt:n,running:false,blank:false,projections:{values:{title:'Generated 项目 '+n}}}))
-  f.gateway.workspaceSnapshot.mockResolvedValue({items:projects,archivedSessionIds:[]})
+  f.gateway.workspaceCatalogSnapshot.mockResolvedValue({items:projects,archivedSessionIds:[]})
   f.gateway.rpc.mockImplementation(async()=>({items:rows}))
   const ids=projects.map((project,n)=>{
     const id=n.toString(16).padStart(24,'0')
@@ -61,7 +61,7 @@ it('aggregates a hundred owned projects into one Host baseline and list without 
     return id
   })
   const catalogs=await Promise.all(ids.map(id=>f.manager.sessions(id)))
-  expect(f.gateway.workspaceSnapshot).toHaveBeenCalledOnce();expect(f.gateway.rpc).toHaveBeenCalledOnce()
+  expect(f.gateway.workspaceCatalogSnapshot).toHaveBeenCalledOnce();expect(f.gateway.rpc).toHaveBeenCalledOnce()
   for(const [n,catalog] of catalogs.entries()){
     expect(catalog.stale).toBe(false)
     expect(catalog.sessions.map(row=>row.sessionId)).toEqual(['session-'+n])
@@ -78,7 +78,7 @@ it('invalidates the catalog around explicit creation without caching or replayin
 it('drops failed reads and never uses cached readiness after host settings change or disable', async () => {
   const f = fixture(); await f.manager.sessions(f.first)
   vi.useFakeTimers(); vi.advanceTimersByTime(2001)
-  f.gateway.workspaceSnapshot.mockRejectedValueOnce(new Error('connection lost'))
+  f.gateway.workspaceCatalogSnapshot.mockRejectedValueOnce(new Error('connection lost'))
   expect((await f.manager.sessions(f.first)).stale).toBe(true)
   expect((await f.manager.sessions(f.first)).stale).toBe(false)
   f.store.update('fixture', { user: 'different-owner' })
@@ -125,7 +125,7 @@ it('schedules only saved histories on existing carriers without relying on a mou
   const sync=vi.spyOn(cache,'sync').mockResolvedValue(undefined)
   await (f.manager as any).refreshSavedHistories()
   expect(sync).toHaveBeenCalledOnce();expect(sync.mock.calls[0]!.slice(1,3)).toEqual(['one',false])
-  expect(f.gateway.rpc).not.toHaveBeenCalled();expect(f.gateway.workspaceSnapshot).not.toHaveBeenCalled()
+  expect(f.gateway.rpc).not.toHaveBeenCalled();expect(f.gateway.workspaceCatalogSnapshot).not.toHaveBeenCalled()
   ;(f.manager as any).runtimes.clear();await (f.manager as any).refreshSavedHistories()
   expect(sync).toHaveBeenCalledOnce()
   f.manager.setEnabled(false);await (f.manager as any).refreshSavedHistories();expect(sync).toHaveBeenCalledOnce()
@@ -142,4 +142,44 @@ it('returns local Host observations immediately while one shared health probe is
   f.store.update('fixture',{user:'different-owner'})
   expect(await f.manager.status()).toEqual([{hostId:f.hostId,phase:'disconnected'}])
   expect(f.gateway.healthy).toHaveBeenCalledOnce()
+})
+
+it('never lets a delayed old catalog overwrite a newer saved title or membership',async()=>{
+  const f=fixture()
+  let finishOld!:(value:any)=>void
+  f.gateway.rpc.mockImplementationOnce(()=>new Promise(resolve=>{finishOld=resolve}))
+  const old=f.manager.sessions(f.first)
+  await Promise.resolve()
+  ;(f.manager as any).invalidateCatalog(f.runtime)
+  f.gateway.workspaceCatalogSnapshot.mockResolvedValue({items:[{workspaceId:'first',sessionIds:['two']}],archivedSessionIds:[]})
+  const currentRow={...f.rows[1]!,projections:{values:{title:'Current title'}}}
+  f.gateway.rpc.mockResolvedValue({items:[currentRow]})
+  const current=await f.manager.sessions(f.first)
+  expect(current.sessions.map(row=>[row.sessionId,row.title])).toEqual([['two','Current title']])
+  finishOld({items:[{...f.rows[0]!,projections:{values:{title:'Obsolete title'}}}]})
+  const delayed=await old
+  expect(delayed.stale).toBe(true)
+  expect(delayed.sessions).toEqual(current.sessions)
+  const saved=(f.manager as any).sessionCache.get(f.first,'first')
+  expect(saved.sessions).toEqual(current.sessions)
+  expect((await f.manager.sessions(f.first)).sessions).toEqual(current.sessions)
+  expect(f.gateway.rpc).toHaveBeenCalledTimes(2)
+})
+
+it('fences a read during a dispatched mutation even when its acknowledgement is lost, without replay',async()=>{
+  const f=fixture();await f.manager.sessions(f.first)
+  ;(f.manager as any).invalidateCatalog(f.runtime)
+  let finishOld!:(value:any)=>void, failMutation!:(error:Error)=>void
+  f.gateway.rpc.mockImplementationOnce(()=>new Promise(resolve=>{finishOld=resolve}))
+  const old=f.manager.sessions(f.first)
+  await Promise.resolve()
+  f.gateway.rpc.mockImplementationOnce(()=>new Promise((_,reject)=>{failMutation=reject}))
+  const mutation=f.manager.createSession(f.first)
+  const rejected=expect(mutation).rejects.toThrow('lost acknowledgement')
+  for(let n=0;n<4;n++)await Promise.resolve()
+  finishOld({items:[]})
+  expect((await old).sessions.map(row=>row.sessionId)).toEqual(['one'])
+  failMutation(new Error('lost acknowledgement'));await rejected
+  expect((await f.manager.sessions(f.first)).sessions.map(row=>row.sessionId)).toEqual(['one'])
+  expect(f.gateway.rpc.mock.calls.filter(call=>call[0]==='session/create')).toHaveLength(1)
 })

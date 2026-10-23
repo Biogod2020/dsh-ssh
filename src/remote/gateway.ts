@@ -12,6 +12,8 @@ import { LocalDraftStore, DraftConflictError, type DraftWrite } from './draft-st
 import { readJsonBody } from '../http.ts'
 import { draftClient, seedDraft, type DraftSeed } from './draft-client.ts'
 import { createDraftReplica } from './draft-replica.ts'
+import { watchCatalogPulse } from './catalog-pulse.ts'
+import { WorkspaceDirectoryProjection, type WorkspaceDirectory } from './workspace-directory.ts'
 import { CatalogReadError, catalogJsonLimit, catalogJsonReader, readCatalogJson, runCatalogRead } from './catalog-json.ts'
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
@@ -31,6 +33,7 @@ export class RemoteGateway {
   private healthRead?: { port: number; controller: AbortController; promise: Promise<boolean> }
   private disposed = false
   private catalogLifetime = new AbortController()
+  private workspaceFollower?: { projection: WorkspaceDirectoryProjection; first: Promise<WorkspaceDirectory>; lifetime: AbortController }
   origin = ''
   onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
@@ -61,6 +64,9 @@ export class RemoteGateway {
     if (response.status !== 303) throw new Error('Remote DSH authentication handshake failed')
     const cookie = response.headers.getSetCookie().map(line => line.split(';')[0]).join('; ')
     if (!cookie) throw new Error('Remote DSH did not issue an authenticated session')
+    this.workspaceFollower?.lifetime.abort()
+    this.workspaceFollower = undefined
+    this.onCatalogChange()
     this.localPort = port; this.upstreamCookie = cookie
   }
   /** Bound retained carriers without evicting live terminals to make room. */
@@ -185,6 +191,24 @@ export class RemoteGateway {
     return this.baseline('workspace/follow', {}, frame => frame?.type === 'baseline' && Array.isArray(frame.value?.items)
       && Array.isArray(frame.value?.archivedSessionIds) ? frame.value : undefined)
   }
+  /** One read-only live membership feed per Host. The read lane is released
+   * after its baseline, while later snapshots reuse ordered increments. */
+  workspaceCatalogSnapshot(): Promise<WorkspaceDirectory> {
+    const current = this.workspaceFollower
+    if (current) return current.projection.snapshot() ? Promise.resolve(current.projection.snapshot()!) : current.first
+    const lifetime = new AbortController(), projection = new WorkspaceDirectoryProjection()
+    const follower = { projection, lifetime, first: undefined as unknown as Promise<WorkspaceDirectory> }
+    this.workspaceFollower = follower
+    const signal = AbortSignal.any([lifetime.signal, this.catalogLifetime.signal])
+    const closed = () => {
+      if (this.workspaceFollower !== follower) return
+      this.workspaceFollower = undefined; this.onCatalogChange()
+    }
+    follower.first = runCatalogRead(this.hostId, signal, () => this.baselineRequest('workspace/follow', {}, frame => projection.accept(frame), {
+      signal, changed: () => { if (this.workspaceFollower === follower) this.onCatalogChange() }, closed,
+    })).catch(error => { closed(); throw error })
+    return follower.first
+  }
   /** Cold-safe history reads never start an Agent or replay an operation. */
   async historySnapshot(sessionId: string): Promise<HistoryOpening> {
     return this.baseline('session/follow', { request: { address: { kind: 'session', sessionId }, maxMessages: 500 } },
@@ -194,7 +218,7 @@ export class RemoteGateway {
   private baseline<T>(endpoint: string, args: object, read: (frame: any) => T | undefined): Promise<T> {
     return runCatalogRead(this.hostId, this.catalogLifetime.signal, () => this.baselineRequest(endpoint, args, read), endpoint === 'session/follow')
   }
-  private baselineRequest<T>(endpoint: string, args: object, read: (frame: any) => T | undefined): Promise<T> {
+  private baselineRequest<T>(endpoint: string, args: object, read: (frame: any) => T | undefined, follow?: { signal: AbortSignal; changed(): void; closed(): void }): Promise<T> {
     return new Promise((resolve, reject) => {
       const streamId = randomUUID(), port = this.localPort, release = this.retainStream(port)
       const origin = `http://127.0.0.1:${port}`
@@ -202,15 +226,17 @@ export class RemoteGateway {
         headers: { Host: new URL(origin).host, Origin: origin, Cookie: this.upstreamCookie },
         handshakeTimeout: 5000, maxPayload: 8 * 1024 * 1024,
       })
-      let settled = false
+      let settled = false, delivered = false
+      let stopPulse: (() => void) | undefined
+      const signal = follow?.signal ?? this.catalogLifetime.signal
       let decoding = false, buffered = 0
       const frames: Buffer[] = []
       const parsing = new AbortController()
       const disposed = () => finish(new DOMException('Remote catalog observer was disposed', 'AbortError'))
       const finish = (cause?: Error, value?: Parameters<typeof resolve>[0]) => {
         if (settled) return
-        settled = true; clearTimeout(deadline); parsing.abort(); this.catalogLifetime.signal.removeEventListener('abort', disposed)
-        frames.length = 0; buffered = 0
+        settled = true; clearTimeout(deadline); parsing.abort(); signal.removeEventListener('abort', disposed)
+        stopPulse?.(); frames.length = 0; buffered = 0
         if (socket.readyState === WebSocket.OPEN) {
           // Resume the transport for its close handshake after decoding. A
           // paused observer must not keep the retired SSH carrier alive.
@@ -219,22 +245,27 @@ export class RemoteGateway {
           socket.once('close', () => clearTimeout(closing))
           socket.send(JSON.stringify({ type: 'cancel', streamId })); socket.close()
         } else socket.terminate()
-        if (cause) reject(cause); else resolve(value!)
+        follow?.closed()
+        if (!delivered) { if (cause) reject(cause); else resolve(value!) }
       }
       const deadline = setTimeout(() => finish(new Error('Remote workspace catalog timed out')), 8000)
-      this.catalogLifetime.signal.addEventListener('abort', disposed, { once: true })
+      signal.addEventListener('abort', disposed, { once: true })
       socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } })))
       const decode = async () => {
         if (decoding || settled) return
         decoding = true
         try { while (frames.length && !settled) {
           const bytes = frames.shift()!
-          const frame = await catalogJsonReader.parse(bytes, AbortSignal.any([parsing.signal, this.catalogLifetime.signal])) as any
+          const frame = await catalogJsonReader.parse(bytes, AbortSignal.any([parsing.signal, signal])) as any
           buffered = Math.max(0, buffered - bytes.length)
           if (settled) return
           if (frame.streamId !== streamId) continue
           const value = frame.type === 'item' ? read(frame.value) : undefined
-          if (value !== undefined) finish(undefined, value)
+          if (value !== undefined) {
+            if (!follow) finish(undefined, value)
+            else if (!delivered) { delivered = true; clearTimeout(deadline); stopPulse = watchCatalogPulse(socket, error => finish(error)); resolve(value) }
+            else follow.changed()
+          }
           else if (frame.type === 'error' || frame.type === 'end') finish(new RemoteFailureError(
             `Remote ${endpoint} is unavailable${typeof frame.error?.code === 'string' ? ' (' + frame.error.code.slice(0, 80) + ')' : ''}`, frame.error?.code))
         } } catch(error) { finish(error instanceof Error ? error : new Error('Remote workspace catalog is incompatible')) }
@@ -252,6 +283,7 @@ export class RemoteGateway {
       })
       socket.once('error', () => { release(); finish(new Error('Remote workspace catalog is unavailable')) })
       socket.once('close', () => { release(); finish(new Error('Remote workspace catalog disconnected')) })
+      if (signal.aborted) disposed()
     })
   }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
