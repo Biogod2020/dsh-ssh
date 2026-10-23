@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "scope": "Actual generated remote embedded-page web Client; native Desktop still pending",
+  "runtime": "0.2.1-rc.2",
+  "archiveSha256": "a9f82b7230b0791b73edc218244d971182a6e2c2702ac1392d6853a689c58ff3",
+  "generatedFixture": true,
+  "seedVersion": "1.0.2",
+  "generatedEventTypes": [
+    "turn/start",
+    "step/start",
+    "user/message",
+    "assistant/message",
+    "step/end",
+    "turn/end"
+  ],
+  "historyRenderedWithoutProjectionError": true,
+  "codeBlockCopyButtonCopied": true,
+  "pastedCodeExact": "printf \"clipboard-code-中文-🙂\"",
+  "assistantMessageCopyButtonCopied": true,
+  "pastedMessageExact": "Clipboard fixture 中文 🙂\n\n```sh\nprintf \"clipboard-code-中文-🙂\"\n```",
+  "canaryPlacedBeforeClipboardCheck": true,
+  "originalClipboardNotRead": true,
+  "testDraftCleared": true,
+  "modelRequests": 0,
+  "nativeDesktopVerified": false,
+  "localControllerShutdownConfirmed": true,
+  "emptyDraftTombstoneConfirmedByInstalledGateway": true,
+  "generatedRemoteShutdownConfirmed": true,
+  "temporaryTabs9And10Closed": true,
+  "webFallbackSidebarUsed": true,
+  "nativeRowActionsNotRetestedInWeb": true
+}

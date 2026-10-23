@@ -30,4 +30,6 @@ The authenticated embedded page installs a page-local compatibility wrapper befo
 
 Native code-block copy and final archive/unarchive/reopen with valid generated history are still pending. Earlier handwritten fixture messages omitted assistant stream metadata and triggered projection failures; these test records are preserved privately and are not counted as successful history acceptance. A corrected test generator is prepared. The Mac locked before that final native run. The native latency matrix, focus/menu/sleep acceptance, a stable final-candidate 24-hour run and memory-release policy also remain open under the existing iteration goal.
 
+The corrected generator has now been exercised in an actual isolated **web Client** using the installed `a9f82b7…c58ff3` candidate. Its six events render successfully, and code-block plus whole-reply copy/paste preserve Chinese, emoji and Markdown. The empty test draft was confirmed on disk afterward. [Screenshot and exact results](benchmarks/2026-10-22/web-clipboard/README.md). This narrows the remaining fixture uncertainty; it does not replace native guest/focus acceptance.
+
 One earlier package attempt had two 5-second test timeouts. The unchanged focused checks then passed, and the complete final package verification passed; thresholds were not increased. No npm tag, release, or daily-app update was performed.

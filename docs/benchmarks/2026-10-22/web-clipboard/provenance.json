@@ -1,0 +1,12 @@
+{
+  "codeCommit": "f97f7fd5750510746454d20282b3c62aef5e1f6c",
+  "archiveSha256": "a9f82b7230b0791b73edc218244d971182a6e2c2702ac1392d6853a689c58ff3",
+  "screenshotSha256": "27892382c1b8f702b3fd8e1f1f90b06b24648aad03434d244e446ec1aba4a702",
+  "screenshot": "docs/images/clipboard-code-web.png",
+  "data": "Generated isolated Session, no model requests",
+  "nativeDesktopVerified": false,
+  "testsFromCodeCommit": 875,
+  "codeFilesChangedAfterCi": false,
+  "npmPublished": false,
+  "dailyInstalled": false
+}
