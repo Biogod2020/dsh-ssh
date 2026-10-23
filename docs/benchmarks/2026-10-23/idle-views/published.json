@@ -1,0 +1,34 @@
+{
+  "version": "0.3.24-jay.41",
+  "matchesCI": true,
+  "runtimeJsMatchesWebTestedArchive": true,
+  "webTestedSourceFilesCompared": 105,
+  "sha256": "a4c11489e0f2abe31a532bf378c1c71a6599d843e6da694c6d495a24ee5c4ae1",
+  "bytes": 1369537,
+  "integrity": "sha512-E8kpwJt4HZv8DFC5sNLBRICqackLrpmoi0ODHFWOnIKVBZ1/E3wq/flD7JFDGRU67BEEeW7RPbbFVj1G49Ypew==",
+  "registry": "https://registry.npmjs.org",
+  "provenance": true,
+  "sync": {
+    "status": 201
+  },
+  "registries": [
+    {
+      "registry": "https://registry.npmjs.org",
+      "version": "0.3.24-jay.41",
+      "bytes": 1369537,
+      "integrity": "sha512-E8kpwJt4HZv8DFC5sNLBRICqackLrpmoi0ODHFWOnIKVBZ1/E3wq/flD7JFDGRU67BEEeW7RPbbFVj1G49Ypew==",
+      "downloadHost": "registry.npmjs.org"
+    },
+    {
+      "registry": "https://registry.npmmirror.com",
+      "version": "0.3.24-jay.41",
+      "bytes": 1369537,
+      "integrity": "sha512-E8kpwJt4HZv8DFC5sNLBRICqackLrpmoi0ODHFWOnIKVBZ1/E3wq/flD7JFDGRU67BEEeW7RPbbFVj1G49Ypew==",
+      "downloadHost": "cdn.npmmirror.com"
+    }
+  ],
+  "workflow": "https://github.com/Biogod2020/dsh-ssh/actions/runs/39966172605",
+  "verifyPublishInstallationJobs": "success",
+  "macosNpmByNameIsolatedInstall": "passed",
+  "githubReleaseArchiveMatchesCI": true
+}

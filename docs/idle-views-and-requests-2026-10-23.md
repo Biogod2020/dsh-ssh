@@ -40,3 +40,9 @@
 采纳了准备阶段的取消代数检查、提交后必须删除原视图、成功提交清除令牌、先解冻网关再解冻客户端，以及未知流上行数据阻止释放。相关回归与实际终端/草稿路径均通过。
 
 未采纳三项与实现证据不符或会破坏保护的建议：终端流已在冻结入口逐项排除；非 JSON 响应不能在收到响应头时假定内容读取完成；覆盖状态失效只撤销安全证明，不会中断正常客户端启动。保留这些边界，避免把不完整观察误当作可以关闭的证明。
+
+## 已发布版本
+
+[0.3.24-jay.41](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.41) 的 [verify、OIDC publish、verify-installation](https://github.com/Biogod2020/dsh-ssh/actions/runs/39966172605) 全部成功。npm 与实际国内镜像 CDN 的归档完整性一致，三个运行时验收和按包名安装通过；macOS 另完成 npm 按包名安装到 DSH 0.2.1-rc.2 的隔离验收。
+
+CI 归档为 1,369,537 字节，SHA-256 `a4c11489e0f2abe31a532bf378c1c71a6599d843e6da694c6d495a24ee5c4ae1`。三个运行时 JS 与 105 个源码文件均与内置浏览器实测的候选包逐字节一致。[公开文件与安装核对结果](benchmarks/2026-10-23/idle-views/published.json)。
