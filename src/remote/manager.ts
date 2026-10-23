@@ -16,6 +16,7 @@ import { RemoteHistoryService } from './history-service.ts'
 import { readHistoryDelta } from './history-reader.ts'
 import { LocalDraftStore } from './draft-store.ts'
 import { CatalogReadError } from './catalog-json.ts'
+import { ViewReceiptStore } from './view-receipts.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
@@ -44,6 +45,7 @@ export class RemoteWorkspaces {
   private sessionCache: RemoteSessionCache
   private historyCache: RemoteHistoryService
   private drafts: LocalDraftStore
+  private viewReceipts: ViewReceiptStore
   private catalogReads = new Map<string, Promise<RemoteSessionCatalog>>()
   private journal?: RemoteActivityStore
   private journalIssue?: string
@@ -57,6 +59,7 @@ export class RemoteWorkspaces {
     const root = options.root ?? join(dshHome(), 'remote-workspaces')
     mkdirSync(root, { recursive: true, mode: 0o700 }); this.path = join(root, 'workspaces.json')
     this.drafts = new LocalDraftStore(join(root, 'drafts'))
+    this.viewReceipts = new ViewReceiptStore(join(root, 'view-observations'))
     this.sessionCache = new RemoteSessionCache(join(root, 'session-catalog.json'))
     this.historyCache = new RemoteHistoryService(new SegmentedHistoryCache(join(root, 'history')), async (item, sessionId) => {
       const { runtime, check } = await this.connectedWorkspace(item.id)
@@ -116,6 +119,13 @@ export class RemoteWorkspaces {
   }
   list(): RemoteWorkspace[] { return [...this.workspaces.values()].map(x => ({ ...x })) }
   historyCopies() { return this.historyCache.status() }
+  viewObservationPresence() { return this.viewReceipts.available() }
+  async viewObservationHosts(after = '') {
+    const page = await this.viewReceipts.hosts(after)
+    return { hosts: page.items.map(hostId => ({ hostId, alias: [...this.workspaces.values()].find(row => row.hostId === hostId)?.alias })), ...(page.next ? { next: page.next } : {}), ...(page.issue ? { issue: page.issue } : {}) }
+  }
+  viewObservations(hostId: string, after = '') { return this.viewReceipts.list(hostId, after) }
+  dismissViewObservation(hostId: string, observationId: string) { return this.viewReceipts.dismiss(hostId, observationId) }
   auditHistory() { return this.historyCache.cache.audit?.() }
   finishHistoryClear(selection: { key: string; generation: number }[]) {
     if (!this.historyCache.cache.finishClear) throw new Error('Interrupted clear recovery is unavailable in this storage')
@@ -361,7 +371,7 @@ export class RemoteWorkspaces {
       if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || Number(target.port) !== receipt.port || !target.searchParams.get('token')) throw new Error('Invalid remote DSH address')
       check()
       const tunnel = await this.engine.startWorkspaceTunnel(alias, receipt.port, updatedAt)
-      const gateway = new RemoteGateway(tunnel.localPort, receipt, alias, this.options.returnUrl(), hostId, this.recoveryProof(hostId), this.drafts)
+      const gateway = new RemoteGateway(tunnel.localPort, receipt, alias, this.options.returnUrl(), hostId, this.recoveryProof(hostId), this.drafts, this.viewReceipts)
       try { await gateway.start() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       try { check() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       runtime = { node: installed.node, gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0,health:{healthy:true,checkedAt:Date.now()} }; this.runtimes.set(hostId, runtime)
@@ -544,6 +554,6 @@ export class RemoteWorkspaces {
   }
   dispose(): Promise<void> {
     this.setEnabled(false); this.disposed = true; clearInterval(this.recovery)
-    return Promise.all([this.historyCache.cache.close?.().catch(() => {}), this.drafts.close().catch(() => {})]).then(() => {})
+    return Promise.all([this.historyCache.cache.close?.().catch(() => {}), this.drafts.close().catch(() => {}), this.viewReceipts.close()]).then(() => {})
   }
 }

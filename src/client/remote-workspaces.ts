@@ -9,6 +9,7 @@ import { remoteSelection, subscribeRemoteSelection } from './remote-presentation
 import { remoteSessionRows } from './remote-session-rows.ts'
 import { remoteNavigation } from './remote-navigation.ts'
 import { mountHistoryCache, warmHistoryCopy, markHistoryRequested } from './history-cache.ts'
+import { mountViewObservations } from './view-observations.ts'
 
 const base = '/api/dsh-ssh/remote/'
 interface RequestOptions { signal?: AbortSignal; expectedHostId?: string }
@@ -125,7 +126,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   const keyed = new Map<string, { node: HTMLElement; sessions: ReturnType<typeof remoteSessionRows>; button: HTMLButtonElement; name: HTMLElement; path: HTMLElement; lamp: HTMLElement; state: HTMLElement }>()
   const cards = new Map<string, { node: HTMLElement; target: HTMLElement; path: HTMLElement; message: HTMLElement; help: HTMLElement; time: HTMLTimeElement; stage: HTMLElement; details: HTMLDetailsElement; summary: HTMLElement; original: HTMLElement; action: HTMLButtonElement }>()
   const recovery = recoveryFromHash(), lifetime = new AbortController(), options = { signal: lifetime.signal }
-  let disposed = false, busy = false, stale = true, offline = !navigator.onLine, recoveryFailed = false, recoveryStarted = false
+  let disposed = false, busy = false, stale = true, offline = !navigator.onLine, recoveryFailed = false, recoveryStarted = false, hasViewObservations = false
   let timer: ReturnType<typeof setTimeout> | undefined, polling: AbortController | undefined, pollEpoch = 0
   let activeItem: string | undefined, operation: RemoteOperation | undefined, status = '', failure = false
   let failureError: unknown, watch: AbortController | undefined, watchEpoch = 0, dismissing: string | undefined
@@ -133,6 +134,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   let items: RemoteWorkspace[] = [], hosts: Array<{ hostId: string; phase: RemotePhase }> = []
   let operations: RemoteOperation[] = []
   let history: RemoteOperation[] = [], showHistory = false, warning: string | undefined
+  const observations = mountViewObservations(heading)
   let ownedFocus: HTMLElement | undefined
   function focusFallback(workspaceId?: string): void {
     const ready = workspaceId ? keyed.get(workspaceId)?.button : undefined
@@ -160,7 +162,8 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     section.dataset.native = String(native); headingLabel.hidden = native
     rows.hidden = native
     const title = tt(native ? 'remote.connectionActivity' : 'remote.workspaces'); section.setAttribute('aria-label', title); text(headingLabel, title)
-    heading.hidden = !items.length && !operations.length && !history.length && !status && !warning; section.hidden = heading.hidden
+    heading.hidden = !items.length && !operations.length && !history.length && !status && !warning && !hasViewObservations; section.hidden = heading.hidden
+    observations.update(hasViewObservations)
     historyButton.hidden = !history.length; historyButton.setAttribute('aria-expanded', String(showHistory))
     text(historyButton, tt(showHistory ? 'remote.historyClose' : 'remote.history'))
     historyHelp.hidden = !showHistory; text(historyHelp, tt('remote.historyHelp'))
@@ -370,9 +373,9 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     if (disposed || document.hidden || offline) return
     const epoch = ++pollEpoch, controller = new AbortController(); polling = controller
     try {
-      const result = await json<{ workspaces: RemoteWorkspace[]; hosts: typeof hosts; operations?: RemoteOperation[]; history?: RemoteOperation[]; warning?: string }>('workspaces', undefined, { signal: controller.signal })
+      const result = await json<{ workspaces: RemoteWorkspace[]; hosts: typeof hosts; operations?: RemoteOperation[]; history?: RemoteOperation[]; warning?: string; viewObservations?: boolean }>('workspaces', undefined, { signal: controller.signal })
       if (epoch !== pollEpoch || disposed) return
-      items = result.workspaces; hosts = result.hosts; operations = result.operations ?? []; history = result.history ?? operations; warning = result.warning; stale = false
+      items = result.workspaces; hosts = result.hosts; operations = result.operations ?? []; history = result.history ?? operations; warning = result.warning; stale = false; hasViewObservations = result.viewObservations === true
       remoteNavigation.update(items, hosts)
       if (remoteNavigation.getSnapshot().native) for (const item of items) void remoteNavigation.refresh(item)
       for (const row of keyed.values()) void row.sessions.refresh()
@@ -418,7 +421,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   if (recovery) { window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search); void runRecovery() }
   return () => {
     disposed = true; lifetime.abort(); watchEpoch++; watch?.abort(); clearTimeout(timer); pollEpoch++; polling?.abort(); unsubscribe(); stopLocale?.(); stopSelection()
-    unbindNavigation(); stopNavigation(); stopCache(); remoteNavigation.clear()
+    unbindNavigation(); stopNavigation(); stopCache(); observations.dispose(); remoteNavigation.clear()
     for (const row of keyed.values()) row.sessions.dispose()
     document.removeEventListener('visibilitychange', refresh); window.removeEventListener('offline', offlineChanged); window.removeEventListener('online', onlineChanged); section.remove()
     document.removeEventListener('focusin', focusChanged); document.removeEventListener('pointerdown', pointerChanged); ownedFocus = undefined

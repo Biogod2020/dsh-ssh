@@ -94,3 +94,9 @@ Gemini 大范围审阅请求超时，没有算作完成；缩小范围后已实�
 ### Clipboard and native Session row actions
 
 Added focused/gesture-gated embedded text copy and Host-bound native row actions (pin/unpin, archive/unarchive, rename), durable pin/archive metadata, and same-Session reselection after archive clears the guest shell. Full846 tests/typecheck/build/archive, all3 baseline runtimes, rc.2 actual metadata actions and published jay.39 downgrade passed on the same cfb942 candidate. Actual Desktop message copy/paste and row interactions were observed. Native code-block copy and valid-history reopen remain pending because the handwritten fixture omitted stream metadata and the Mac locked before the corrected fixture could run. Daily installation and npm unchanged. [Evidence and remaining gates](clipboard-and-session-actions-2026-10-22.md).
+
+### 未确认操作的本机存储与查看基础
+
+复制和会话按钮提交 `92edea3` 的 [CI 39894893422](https://github.com/Biogod2020/dsh-ssh/actions/runs/39894893422) 三组检查均已终态核对成功。随后补上主机绑定的未知结果元数据保存、持久清理标记与离线查看入口；两次真实 SIGKILL 验证保存/清理边界，失败翻页不会丢失游标。完整 97 文件 / 875 项、类型检查、构建和产物通过，100 份源码与准确安装包一致。相同 `a9f82b7…c58ff3` 包通过三个实际运行时和已发布旧 `.39` 的 603 条历史回退；rc.2 还实际走通生成提示的本机保存、读取、移除和迟到保存隔离。Gemini 两次实际复核，按真实源码逐项取舍。
+
+这仍是[存储和查看基础](view-observations-2026-10-22.md)，没有启用自动操作观察、原子释放或内存预算回收。Mac 短暂可用后又锁屏，原生代码块复制和有效历史重开仍待验收；旧持续观察的计时间隔失败保留，不能算最终候选 24 小时通过。未发布 npm，日常安装、配置和会话保持不动。

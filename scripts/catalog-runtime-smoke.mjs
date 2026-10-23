@@ -130,7 +130,7 @@ try {
   await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&value.sessions.some(row=>row.sessionId===sessionId)})
   assert.equal((await stats()).followOpens,1)
   assert.equal(JSON.parse(await readFile(join(remoteRoot, 'state/server.json'), 'utf8')).pid, receipt.pid)
-  let remoteSessionActionsVerified = false
+  let remoteSessionActionsVerified = false, localObservationFixtureVerified = false
   if (version === '0.2.1-rc.2') {
     const action = (name, extra={}) => api('remote/session/action', { id:workspace.id, expectedHostId:workspace.hostId, sessionId, action:name, ...extra })
     await action('pin')
@@ -143,11 +143,27 @@ try {
     await action('unarchive')
     await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&value.sessions.some(row=>row.sessionId===sessionId)})
     remoteSessionActionsVerified = true
+    // Generated ended metadata only: no command failure or automatic view
+    // eviction is simulated or counted as verified by this fixture.
+    const notice={observationId:randomUUID(),startedAt:Date.now(),endedAt:Date.now(),transport:'http',category:'session',selectedSessionIdAtDispatch:sessionId}
+    const saveNotice=async()=>{
+      const response=await fetch(embedded.origin+'/__dsh_remote/observations',{method:'PUT',headers:embeddedHeaders,body:JSON.stringify({records:[notice]}),signal:AbortSignal.timeout(10000)})
+      assert.equal(response.status,200);return response.json()
+    }
+    assert.equal((await saveNotice()).receipts[0]?.status,'saved')
+    assert((await api('remote/view-observations/hosts')).hosts.some(row=>row.hostId===workspace.hostId))
+    const saved=await api('remote/view-observations?hostId='+workspace.hostId)
+    assert.equal(saved.entries[0]?.observationId,notice.observationId);assert.equal(saved.entries[0]?.outcome,'unconfirmed')
+    await api('remote/view-observations/dismiss',{hostId:workspace.hostId,observationId:notice.observationId})
+    assert.equal((await saveNotice()).receipts[0]?.status,'dismissed')
+    assert.equal((await api('remote/view-observations?hostId='+workspace.hostId)).entries.length,0)
+    localObservationFixtureVerified = true
   }
   result = { passed: true, completed: true, runtime: version, archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
     generatedMetadataSessions: created, rawSdkSessionRows: rows, rawSdkResponseBytes: bytes, largeDecodeThresholdBytes: 1024 * 1024,
     ...inspectionVerification, ...draftInspectionVerification, compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
-    pushedArchiveAndUnarchive: true, remoteSessionActionsVerified, liveFeedWaitRequestedMilliseconds: 43000,
+    pushedArchiveAndUnarchive: true, remoteSessionActionsVerified, localObservationFixtureVerified,
+    automaticViewEvictionVerified:false, clientOperationObserverVerified:false, liveFeedWaitRequestedMilliseconds: 43000,
     liveFeedWaitElapsedMilliseconds: feedWaitElapsed, liveFeedWaitWallMilliseconds: feedWaitWallElapsed,
     harnessSha256: createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'), remotePidPreserved: true, modelRequests: 0, nativeDesktopVerified: false }
   passed = true

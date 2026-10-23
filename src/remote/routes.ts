@@ -11,6 +11,23 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
     if (denied || !isLoopbackRequest(req)) { writeJson(res, denied ?? 403, { error: 'Remote workspace access denied' }); return }
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
+      if (url.pathname.startsWith('/api/dsh-ssh/remote/view-observations')) {
+        res.setHeader('Cache-Control', 'no-store')
+        try {
+          if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/view-observations/hosts') {
+            writeJson(res, 200, await manager.viewObservationHosts(url.searchParams.get('after') ?? '')); return
+          }
+          if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/view-observations') {
+            writeJson(res, 200, await manager.viewObservations(url.searchParams.get('hostId') ?? '', url.searchParams.get('after') ?? '')); return
+          }
+          if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/view-observations/dismiss') {
+            const body = await readJsonBody(req, { maxBytes: 8192 }) as { hostId?: unknown; observationId?: unknown }
+            if (typeof body.hostId !== 'string' || typeof body.observationId !== 'string') throw new Error('Invalid notice selection')
+            await manager.dismissViewObservation(body.hostId, body.observationId); writeJson(res, 200, { ok: true }); return
+          }
+        } catch { writeJson(res, 507, { error: 'Local observation metadata needs inspection; its files were preserved', errorCode: 'view-observations/storage' }); return }
+        writeJson(res, 404, { error: 'Unknown local observation route' }); return
+      }
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/history') {
         writeJson(res, 200, await manager.historyCopies()); return
       }
@@ -55,8 +72,8 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
         await manager.snoozeHistory(); writeJson(res, 200, { ok: true }); return
       }
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/workspaces') {
-        const hosts = await manager.status()
-        writeJson(res, 200, { workspaces: manager.catalog(), hosts, operations: manager.activity(), history: manager.history(), warning: manager.activityWarning() }); return
+        const [hosts, observations] = await Promise.all([manager.status(), manager.viewObservationPresence?.()])
+        writeJson(res, 200, { workspaces: manager.catalog(), hosts, operations: manager.activity(), history: manager.history(), warning: manager.activityWarning(), ...(observations ? { viewObservations: true } : {}) }); return
       }
       if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/operation') {
         const operation = manager.operation(url.searchParams.get('id') ?? '')

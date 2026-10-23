@@ -1,0 +1,20 @@
+{
+  "scope": "Local ended-operation metadata storage and reader foundation, not automatic Client observation or view eviction",
+  "sourceParent": "92edea3325504fd8a4daa731bb495f7e6cde062f",
+  "candidatePackageVersion": "0.3.24-jay.39 (unpublishable test archive; does not replace occupied registry version)",
+  "archiveSha256": "a9f82b7230b0791b73edc218244d971182a6e2c2702ac1392d6853a689c58ff3",
+  "sourceFilesByteMatched": 100,
+  "localFullTestFiles": 97,
+  "localFullTests": 875,
+  "realSigkillReceiptBoundaryCases": 2,
+  "typecheck": true,
+  "build": true,
+  "artifact": true,
+  "pureJsArchive": true,
+  "modelRequests": 0,
+  "automaticViewEvictionVerified": false,
+  "clientOperationObserverVerified": false,
+  "nativeDesktopVerified": false,
+  "npmPublished": false,
+  "dailyInstalled": false
+}

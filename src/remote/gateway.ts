@@ -15,6 +15,7 @@ import { createDraftReplica } from './draft-replica.ts'
 import { watchCatalogPulse } from './catalog-pulse.ts'
 import { WorkspaceDirectoryProjection, type WorkspaceDirectory } from './workspace-directory.ts'
 import { CatalogReadError, catalogJsonLimit, catalogJsonReader, readCatalogJson, runCatalogRead } from './catalog-json.ts'
+import { ViewReceiptStore, type ViewReceiptInput } from './view-receipts.ts'
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
 const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
@@ -38,7 +39,7 @@ export class RemoteGateway {
   onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
   constructor(public localPort: number, readonly receipt: RemoteReceipt, readonly alias: string, readonly returnUrl: string,
-    readonly hostId: string, readonly recoveryProof: string, private readonly drafts?: LocalDraftStore) {
+    readonly hostId: string, readonly recoveryProof: string, private readonly drafts?: LocalDraftStore, private readonly viewReceipts?: ViewReceiptStore) {
     this.server = createServer((req, res) => { void this.handle(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' })
       res.end('Remote DSH is unavailable. The request was not replayed.')
@@ -306,6 +307,22 @@ export class RemoteGateway {
     }
     const session = this.authenticated(req)
     if (!session) { res.writeHead(401); res.end('Reopen this remote workspace from the local DSH window.'); return }
+    if (url.pathname === '/__dsh_remote/observations') {
+      const reply = (status: number, value: unknown) => {
+        res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+        res.end(JSON.stringify(value))
+      }
+      if (!session.embedded) { reply(403, { error: 'Embedded view ownership is required' }); return }
+      if (req.method !== 'PUT') { reply(405, { error: 'Unsupported observation method' }); return }
+      if (!this.viewReceipts) { reply(503, { error: 'Local observation storage is unavailable' }); return }
+      try {
+        const body = await readJsonBody(req, { maxBytes: 128 * 1024, objectOnly: true }) as { records?: ViewReceiptInput[] }
+        if (!body || Object.keys(body).some(name => name !== 'records') || !Array.isArray(body.records)) throw new Error('Invalid observation batch')
+        const receipts = await this.viewReceipts.saveMany(this.hostId, body.records)
+        reply(200, { receipts })
+      } catch { reply(507, { error: 'Observation metadata was not confirmed on disk. Keep this view open.', code: 'view-observations/storage' }) }
+      return
+    }
     if (url.pathname === '/__dsh_remote/draft') {
       const reply = (status: number, value: unknown) => {
         res.writeHead(status, { 'content-type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
