@@ -89,7 +89,7 @@ jobs:
           shopt -s nullglob
           archives=("$RUNNER_TEMP/release/"*.tgz)
           test "${#archives[@]}" -eq 1
-          DSH_HISTORY_SOAK_REPORT="$RUNNER_TEMP/release/soak-calibration.json" node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}" --outages --soak-seconds=30
+          DSH_HISTORY_ARCHIVE_REPORT="$RUNNER_TEMP/release/history-acceptance.json" DSH_HISTORY_SOAK_REPORT="$RUNNER_TEMP/release/soak-calibration.json" node --experimental-transform-types scripts/history-delta-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}" --outages --soak-seconds=30
       - name: Survive SSH disconnect in the installed archive
         run: |
           shopt -s nullglob
@@ -124,7 +124,9 @@ jobs:
         if: always()
         with:
           name: soak-observer-calibration
-          path: ${{ runner.temp }}/release/soak-calibration.json
+          path: |
+            ${{ runner.temp }}/release/soak-calibration.json
+            ${{ runner.temp }}/release/history-acceptance.json
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

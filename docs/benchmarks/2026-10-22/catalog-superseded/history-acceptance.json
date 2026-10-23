@@ -1,0 +1,53 @@
+{
+  "passed": true,
+  "completed": true,
+  "soak": {
+    "requestedSeconds": 30,
+    "executed": true,
+    "completed": true,
+    "minimum24HoursVerified": false
+  },
+  "runtime": "0.2.1-rc.2",
+  "generatedMessages": 1100,
+  "records": 1104,
+  "newEvents": 3,
+  "installedBundle": true,
+  "diskReadAfterRestartWithoutSsh": true,
+  "controllerOutages": [
+    {
+      "requestedMilliseconds": 0,
+      "actualMilliseconds": 1.2371669999993173,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 3000,
+      "actualMilliseconds": 3001.640333000003,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 30000,
+      "actualMilliseconds": 30001.61091699999,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    },
+    {
+      "requestedMilliseconds": 300000,
+      "actualMilliseconds": 300005.05162499996,
+      "offlineDiskRead": true,
+      "remotePidPreserved": true
+    }
+  ],
+  "selectiveClear": true,
+  "remotePidPreserved": true,
+  "modelRequests": 0,
+  "localDraftAcrossControllerRestart": true,
+  "draftGatewayOriginChanged": true,
+  "draftClearedWithoutRevival": true,
+  "serializedDraftClient": true,
+  "nativeEditorVerified": false,
+  "localFileInventory": true,
+  "maintenanceWithoutSsh": true,
+  "interruptedClearRecoveryFixture": "previously confirmed clear plus restored generated v1 file"
+}

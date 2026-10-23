@@ -1,0 +1,20 @@
+{
+  "archiveSha256": "4386cad3901b6fef75f27db59c6502dd6ce073409df1e8c5815df73b9910efe2",
+  "baseCommit": "cf532ebe5708afbef3c280da56065cb9393a4f94",
+  "sourceFilesByteMatched": 96,
+  "node": "v24.16.0",
+  "scope": "macOS generated private Homes and real loopback SSH; no native UI or model requests",
+  "fullVerificationTests": 816,
+  "failedCiRun": 39880097248,
+  "failedCiCause": "A pushed catalog increment superseded the history source metadata read; old reply correctly fenced but the transient was wrongly surfaced as a history sync failure",
+  "frozenObserverAndHarnessUnchanged": true,
+  "fullControllerOutagesPassed": [
+    0,
+    3000,
+    30000,
+    300000
+  ],
+  "historyAcceptanceReportSha256": "f6499db4bc9a89d614eca086a5e91284a3551ddb745eb21b05b2c20ec472d1b1",
+  "soakCalibrationSeconds": 30,
+  "minimum24HoursVerified": false
+}

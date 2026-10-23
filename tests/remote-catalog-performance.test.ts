@@ -158,7 +158,8 @@ it('never lets a delayed old catalog overwrite a newer saved title or membership
   expect(current.sessions.map(row=>[row.sessionId,row.title])).toEqual([['two','Current title']])
   finishOld({items:[{...f.rows[0]!,projections:{values:{title:'Obsolete title'}}}]})
   const delayed=await old
-  expect(delayed.stale).toBe(true)
+  expect(delayed.stale).toBe(false)
+  expect(delayed.warning).toBeUndefined()
   expect(delayed.sessions).toEqual(current.sessions)
   const saved=(f.manager as any).sessionCache.get(f.first,'first')
   expect(saved.sessions).toEqual(current.sessions)
@@ -182,4 +183,64 @@ it('fences a read during a dispatched mutation even when its acknowledgement is 
   failMutation(new Error('lost acknowledgement'));await rejected
   expect((await f.manager.sessions(f.first)).sessions.map(row=>row.sessionId)).toEqual(['one'])
   expect(f.gateway.rpc.mock.calls.filter(call=>call[0]==='session/create')).toHaveLength(1)
+})
+
+it('rechecks read-only metadata once when a directory increment supersedes the first history-source read',async()=>{
+  const f=fixture()
+  f.gateway.rpc.mockImplementationOnce(async()=>{
+    ;(f.manager as any).invalidateCatalog(f.runtime)
+    return {items:[...f.rows]}
+  })
+  const item=(f.manager as any).workspaces.get(f.first)
+  const source=await (f.manager as any).historyCache.source(item,'one')
+  expect(source.gateway).toBe(f.gateway);expect(source.updatedAt).toBe(1)
+  expect(f.gateway.rpc.mock.calls.map(call=>call[0])).toEqual(['session/list','session/list'])
+})
+
+it('returns a current Session catalog after one superseded read rather than a transient sync failure',async()=>{
+  const f=fixture()
+  f.gateway.rpc.mockImplementationOnce(async()=>{
+    ;(f.manager as any).invalidateCatalog(f.runtime)
+    return {items:[]}
+  })
+  const catalog=await f.manager.sessions(f.first)
+  expect(catalog.stale).toBe(false);expect(catalog.warning).toBeUndefined()
+  expect(catalog.sessions.map(row=>row.sessionId)).toEqual(['one'])
+  expect(f.gateway.rpc.mock.calls.map(call=>call[0])).toEqual(['session/list','session/list'])
+})
+
+
+it('bounds superseded reads and never re-queries after disable or Host ownership change',async()=>{
+  const f=fixture();await f.manager.sessions(f.first)
+  ;(f.manager as any).invalidateCatalog(f.runtime)
+  f.gateway.rpc.mockImplementation(async()=>{
+    ;(f.manager as any).invalidateCatalog(f.runtime)
+    return {items:[]}
+  })
+  const start=f.gateway.rpc.mock.calls.length
+  const failed=await f.manager.sessions(f.first)
+  expect(failed.stale).toBe(true);expect(failed.sessions.map(row=>row.sessionId)).toEqual(['one'])
+  expect(f.gateway.rpc.mock.calls.length-start).toBe(2)
+  f.gateway.rpc.mockImplementationOnce(async()=>{
+    ;(f.manager as any).invalidateCatalog(f.runtime)
+    f.store.update('fixture',{user:'new-owner'})
+    return {items:[]}
+  })
+  const before=f.gateway.rpc.mock.calls.length
+  expect((await f.manager.sessions(f.first)).stale).toBe(true)
+  expect(f.gateway.rpc.mock.calls.length-before).toBe(1)
+})
+
+it('does not issue the superseded read replacement after the manager is disabled',async()=>{
+  const f=fixture();await f.manager.sessions(f.first)
+  ;(f.manager as any).invalidateCatalog(f.runtime)
+  f.gateway.rpc.mockImplementationOnce(async()=>{
+    ;(f.manager as any).invalidateCatalog(f.runtime)
+    f.manager.setEnabled(false)
+    return {items:[]}
+  })
+  const before=f.gateway.rpc.mock.calls.length
+  const result=await f.manager.sessions(f.first)
+  expect(result.stale).toBe(true);expect(result.sessions.map(row=>row.sessionId)).toEqual(['one'])
+  expect(f.gateway.rpc.mock.calls.length-before).toBe(1)
 })

@@ -21,6 +21,9 @@ interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
 interface HostCatalog { workspaces: Awaited<ReturnType<RemoteGateway['workspaceCatalogSnapshot']>>; sessions: { items: SessionSummary[] }; checkedAt: number; revision: number }
 interface Runtime { node: string; gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; health?:{healthy:boolean;checkedAt:number};healthRead?:Promise<boolean>; catalogRevision?: number; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
+class SupersededCatalogError extends Error {
+  constructor() { super('Remote catalog changed during this read'); this.name = 'SupersededCatalogError' }
+}
 interface ManagerOptions {
   installer: string; bootstrap: string; root?: string; remoteRoot?: string; returnUrl: () => string
   legacy?: () => Array<{ alias: string; remotePath: string; title: string }>
@@ -57,13 +60,15 @@ export class RemoteWorkspaces {
     this.sessionCache = new RemoteSessionCache(join(root, 'session-catalog.json'))
     this.historyCache = new RemoteHistoryService(new SegmentedHistoryCache(join(root, 'history')), async (item, sessionId) => {
       const { runtime, check } = await this.connectedWorkspace(item.id)
-      const catalog = await this.hostCatalog(runtime); check(); this.assertCatalogCurrent(runtime, catalog)
-      if (!catalog.workspaces.items.some(row => row.workspaceId === item.workspaceId && row.sessionIds.includes(sessionId))
-        || catalog.workspaces.archivedSessionIds.includes(sessionId)) throw new Error('Session does not belong to this remote workspace')
-      const summary = catalog.sessions.items.find(row => row.sessionId === sessionId)
-      return { gateway: runtime.gateway, check, updatedAt: summary?.updatedAt ?? 0,
-        delta: (afterSeq, throughSeq) => readHistoryDelta(this.engine, item.alias, runtime.node, runtime.gateway.receipt, { sessionId, afterSeq, throughSeq }, runtime.updatedAt),
-        title: typeof summary?.projections?.values?.title === 'string' ? summary.projections.values.title : '' }
+      return this.withCatalog(runtime, catalog => {
+        check()
+        if (!catalog.workspaces.items.some(row => row.workspaceId === item.workspaceId && row.sessionIds.includes(sessionId))
+          || catalog.workspaces.archivedSessionIds.includes(sessionId)) throw new Error('Session does not belong to this remote workspace')
+        const summary = catalog.sessions.items.find(row => row.sessionId === sessionId)
+        return { gateway: runtime.gateway, check, updatedAt: summary?.updatedAt ?? 0,
+          delta: (afterSeq, throughSeq) => readHistoryDelta(this.engine, item.alias, runtime.node, runtime.gateway.receipt, { sessionId, afterSeq, throughSeq }, runtime.updatedAt),
+          title: typeof summary?.projections?.values?.title === 'string' ? summary.projections.values.title : '' }
+      })
     })
     const keyPath = join(root, 'recovery.key')
     if (!existsSync(keyPath)) {
@@ -395,7 +400,25 @@ export class RemoteWorkspaces {
     for (const item of this.workspaces.values()) if (item.hostId === runtime.hostId) this.catalogReads.delete(item.id)
   }
   private assertCatalogCurrent(runtime: Runtime, catalog: HostCatalog): void {
-    if (catalog.revision !== (runtime.catalogRevision ?? 0)) throw new Error('Remote catalog changed during this read')
+    if (catalog.revision !== (runtime.catalogRevision ?? 0)) throw new SupersededCatalogError()
+  }
+  /** A pushed increment invalidates the old reply, not the operation being
+   * observed. Re-query these two read-only lists at most once on the existing
+   * carrier; never retry transport errors, writes or changed Host ownership.
+   * Consume synchronously under the final revision check, with no await gap
+   * between validation and installing a Session list or history source. */
+  private async withCatalog<T>(runtime: Runtime, consume: (catalog: HostCatalog) => T): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      if (this.disposed || !this.enabled || this.runtimes.get(runtime.hostId) !== runtime
+        || !this.ownerMatches(runtime.alias, runtime.hostId, runtime.updatedAt)) throw new Error('Remote connection changed')
+      try {
+        const catalog = await this.hostCatalog(runtime)
+        this.assertCatalogCurrent(runtime, catalog)
+        return consume(catalog)
+      } catch (error) {
+        if (!(error instanceof SupersededCatalogError) || attempt >= 1) throw error
+      }
+    }
   }
   /** Metadata reads use an existing carrier only; opening the sidebar never starts SSH. */
   private hostCatalog(runtime: Runtime): Promise<HostCatalog> {
@@ -426,22 +449,22 @@ export class RemoteWorkspaces {
     if (pending) return pending
     const read = (async () => {
       try {
-        const snapshot = await this.hostCatalog(runtime)
-        this.assertCatalogCurrent(runtime, snapshot)
-        const { workspaces, sessions: result, checkedAt } = snapshot
-        this.assertActive(epoch); this.assertOwner(item.alias, item.hostId, runtime.updatedAt)
-        if (this.runtimes.get(item.hostId) !== runtime) throw new Error('Remote connection changed')
-        const workspace = workspaces.items.find(x => x.workspaceId === item.workspaceId)
-        if (!workspace || !Array.isArray(workspace.sessionIds) || !Array.isArray(result.items)) throw new Error('Remote workspace catalog is incompatible')
-        const members = new Set(workspace.sessionIds), archived = new Set(workspaces.archivedSessionIds)
-        const sessions = result.items.filter(x => members.has(x.sessionId) && !archived.has(x.sessionId) && x.origin !== 'subagent')
-          .map(x => ({ sessionId: x.sessionId, title: typeof x.projections?.values?.title === 'string' ? x.projections.values.title.slice(0, 1024) : '',
-            running: x.running === true, blank: x.blank === true, updatedAt: Number.isFinite(x.updatedAt) ? x.updatedAt : 0 }))
-          .sort((a, b) => b.updatedAt - a.updatedAt)
-        const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt }
-        this.sessionCache.save(id, catalog)
-        for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt, session.running)
-        return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
+        return await this.withCatalog(runtime, snapshot => {
+          const { workspaces, sessions: result, checkedAt } = snapshot
+          this.assertActive(epoch); this.assertOwner(item.alias, item.hostId, runtime.updatedAt)
+          if (this.runtimes.get(item.hostId) !== runtime) throw new Error('Remote connection changed')
+          const workspace = workspaces.items.find(x => x.workspaceId === item.workspaceId)
+          if (!workspace || !Array.isArray(workspace.sessionIds) || !Array.isArray(result.items)) throw new Error('Remote workspace catalog is incompatible')
+          const members = new Set(workspace.sessionIds), archived = new Set(workspaces.archivedSessionIds)
+          const sessions = result.items.filter(x => members.has(x.sessionId) && !archived.has(x.sessionId) && x.origin !== 'subagent')
+            .map(x => ({ sessionId: x.sessionId, title: typeof x.projections?.values?.title === 'string' ? x.projections.values.title.slice(0, 1024) : '',
+              running: x.running === true, blank: x.blank === true, updatedAt: Number.isFinite(x.updatedAt) ? x.updatedAt : 0 }))
+            .sort((a, b) => b.updatedAt - a.updatedAt)
+          const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt }
+          this.sessionCache.save(id, catalog)
+          for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt, session.running)
+          return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
+        })
       } catch(error) { return { ...cached(), warning: error instanceof CatalogReadError ? error.message : 'Remote session status could not be checked. Showing the last saved list.' } }
     })()
     this.catalogReads.set(id, read)
