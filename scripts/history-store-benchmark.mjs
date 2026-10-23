@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { performance } from 'node:perf_hooks'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 
 // Run in a disposable child process; count application IO, including metadata,
 // instead of treating the compressed network response as the whole cost.
@@ -37,6 +38,8 @@ assert(Number.isInteger(count) && count > 0 && count <= 100000)
 assert(Number.isInteger(samples) && samples >= 30 && samples <= 200)
 assert(Number.isInteger(increments)&&increments>=30&&increments<=10000)
 const module = await import(pathToFileURL(resolve(modulePath)).href)
+const moduleSha256 = createHash('sha256').update(await originalRead(resolve(modulePath))).digest('hex')
+const harnessSha256 = createHash('sha256').update(await originalRead(new URL(import.meta.url))).digest('hex')
 const Cache = module.SegmentedHistoryCache ?? module.RemoteHistoryCache
 const root = await mkdtemp(join(tmpdir(), 'dsh-history-benchmark-'))
 const key = module.historyKey('generated-host', 'generated-project', 'generated-session')
@@ -49,6 +52,7 @@ let meta = { key, hostId: 'generated-host', workspaceId: 'generated-project', se
   remotePath: '/generated/project', title: 'Generated benchmark', cursor: count - 1, complete: true, savedAt: Date.now(), remoteUpdatedAt: 1 }
 const summarize = values => { const sorted = [...values].sort((a,b) => a-b); return {
   samples: values.length, p50: sorted[Math.ceil(sorted.length * .5) - 1], p95: sorted[Math.ceil(sorted.length * .95) - 1], max: sorted.at(-1),
+  total: values.reduce((sum, value) => sum + value, 0),
 } }
 async function measure(n, fn) {
   const times = [], bytesRead = [], bytesWritten = [], writes = [], metadata = []
@@ -83,7 +87,7 @@ try {
     assert.equal(io.read,0,'File inventory must not read history bodies or metadata file contents')
     assert.equal(io.written,0,'File inventory must not write or delete history')
   }) : undefined
-  console.log(JSON.stringify({ schema:1, store:Cache.name, node:process.version, platform:platform(), arch:arch(), memoryBytes:totalmem(),
+  console.log(JSON.stringify({ schema:1, store:Cache.name, moduleSha256, harnessSha256, node:process.version, platform:platform(), arch:arch(), memoryBytes:totalmem(),
     events:count, initialBytes, methodology:'generated mixed text; fixed 100-record window; GC before each untimed sample; filesystem cache not flushed; application byte IO includes metadata file contents; fileMetadataCalls counts explicit stat/lstat/readdir/opendir and handle.stat API calls, not kernel syscalls or physical SSD bytes; inventory is a separate 30-sample metadata-only scan',
     warm,append,unchanged,restart,...(inventory?{inventory}:{}),failures:0 },null,2))
 } finally { await cache.close?.(); await rm(root,{recursive:true,force:true}) }

@@ -1,0 +1,20 @@
+{
+  "ciRun": 39920351748,
+  "commit": "86ff293910b8265ccd4800ee844ccb8c33929fe2",
+  "ciArchiveSha256": "329c48d461cb9f2ed1d3e46992d3d524f67336cf354b25d109adb13281cd9151",
+  "nativeArchiveSha256": "a5791380f6b4540800afa9b31984cd3e4a6df429469c276fd25e456f4ab9f148",
+  "archiveBytesIdentical": false,
+  "decompressedTarIdentical": false,
+  "memberTypeModeLinkSizeAndContentIdentical": false,
+  "memberCount": 278,
+  "notAnExactArchiveByteMatch": true,
+  "doesNotReplaceFinalReleaseArchiveInstallationCheck": true,
+  "memberFileContentsIdentical": true,
+  "sourceOnlyModeDifferences": {
+    "count": 61,
+    "allUnderPackageSrc": true,
+    "ciMode": "0644",
+    "nativeMode": "0600"
+  },
+  "compiledJsContentsAndModesIdentical": true
+}

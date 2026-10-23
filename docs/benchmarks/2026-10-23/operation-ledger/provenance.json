@@ -1,0 +1,13 @@
+{
+  "archiveSha256": "f53508849cbbb472381a8f8e3edf9f8bc42a0f91f552591efd97c37d1a221748",
+  "sourceFilesByteMatched": 101,
+  "fullLocalTests": 904,
+  "testFiles": 98,
+  "typecheckBuildAndArtifactPassed": true,
+  "compiledJsIdenticalToPreviouslyNativeVerifiedArchive": "a5791380f6b4540800afa9b31984cd3e4a6df429469c276fd25e456f4ab9f148",
+  "compiledJsFileCount": 3,
+  "operationLedgerWiredIntoClient": false,
+  "gatewayFreezeImplemented": false,
+  "automaticEvictionImplemented": false,
+  "newNativeOperationObserverAcceptance": false
+}

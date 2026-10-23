@@ -69,6 +69,8 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-alpha/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts
+      - name: Verify the actual rc.2 SDK unary acknowledgement contract with mock Context and transport
+        run: node --experimental-transform-types scripts/operation-rpc-contract.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/@deepseek-ai/dsh-client-connection/lib/client.browser.js" "$RUNNER_TEMP/release/operation-rpc-contract.json"
       - name: Verify the packaged offline downgrade exporter without reviving cleared history
         run: |
           shopt -s nullglob
@@ -106,11 +108,41 @@ jobs:
             node --expose-gc --experimental-transform-types scripts/history-store-benchmark.mjs "$RUNNER_TEMP/history-benchmarks/baseline.ts" "$events" 100 > "$RUNNER_TEMP/history-benchmarks/baseline-$events.json"
             node --expose-gc --experimental-transform-types scripts/history-store-benchmark.mjs "$PWD/src/remote/history-store.ts" "$events" 100 > "$RUNNER_TEMP/history-benchmarks/candidate-$events.json"
           done
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict'
+          import { readFile } from 'node:fs/promises'
+          import { join } from 'node:path'
+          let harness
+          const implementations=new Map()
+          for(const events of [10000,100000])for(const store of ['baseline','candidate']){
+            const report=JSON.parse(await readFile(join(process.env.RUNNER_TEMP,'history-benchmarks',`${store}-${events}.json`),'utf8'))
+            assert.equal(report.failures,0)
+            assert.equal(report.events,events)
+            assert.match(report.moduleSha256,/^[a-f0-9]{64}$/)
+            if(implementations.has(store))assert.equal(report.moduleSha256,implementations.get(store))
+            else implementations.set(store,report.moduleSha256)
+            harness ??= report.harnessSha256
+            assert.match(harness,/^[a-f0-9]{64}$/)
+            assert.equal(report.harnessSha256,harness)
+            for(const phase of ['warm','append','unchanged','restart']){
+              assert.equal(report[phase].milliseconds.samples,['append','restart'].includes(phase)?30:100)
+              for(const value of Object.values(report[phase]))assert(Number.isFinite(value.total)&&value.total>=0)
+            }
+            assert.equal(report.unchanged.applicationBytesWritten.total,0)
+          }
+          NODE
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
           name: history-storage-measurements
           path: ${{ runner.temp }}/history-benchmarks/*.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: operation-rpc-contract
+          path: ${{ runner.temp }}/release/operation-rpc-contract.json
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
