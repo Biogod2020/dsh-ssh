@@ -15,13 +15,15 @@ export function createDraftReplica(options: {
   let input = { ...options.input }, baseline: SavedDraft | undefined, ready = false, mounted = true, seeded = false
   let references = false, attachments = false, timer: ReturnType<typeof setTimeout> | undefined
   let loading: Promise<boolean> | undefined, saving: Promise<boolean> | undefined
+  let retiredInput: { text: string; hadReferences: boolean; hadAttachments: boolean } | undefined
   let state: DraftState = { status: 'loading', hadReferences: false, hadAttachments: false }
   const listeners = new Set<() => void>()
+  const notify = () => { for (const listener of [...listeners]) listener() }
   const publish = (status: DraftState['status']) => {
     state = { status, ...(status === 'conflict' ? { savedText: baseline?.text ?? '' } : {}), hadReferences: references, hadAttachments: attachments }
-    for (const listener of listeners) listener()
+    notify()
   }
-  const payload = () => ({ text: input.draft, hadReferences: references || !!input.occurrences?.length, hadAttachments: attachments || !!input.attachmentIds?.length })
+  const payload = () => retiredInput ?? ({ text: input.draft, hadReferences: references || !!input.occurrences?.length, hadAttachments: attachments || !!input.attachmentIds?.length })
   const dirty = () => {
     const current = payload()
     return current.text !== (baseline?.text ?? '') || current.hadReferences !== (baseline?.hadReferences ?? false)
@@ -78,7 +80,7 @@ export function createDraftReplica(options: {
         }
         ready = true; publish(dirty() ? 'unsaved' : 'saved'); schedule(); return true
       } catch { if (mounted) { ready = false; publish('error') }; return false }
-      finally { loading = undefined }
+      finally { loading = undefined; notify() }
     })
     return loading
   }
@@ -119,7 +121,11 @@ export function createDraftReplica(options: {
     if (state.status === 'conflict') return Promise.resolve(false)
     if (saving) return saving
     if (!ready) return load().then(ok => ok ? flush() : false)
-    saving = commit().catch(() => { publish('error'); return false }).finally(() => { saving = undefined })
+    saving = commit().catch(() => { publish('error'); return false }).finally(() => {
+      saving = undefined
+      if (state.status === 'saved' && dirty()) publish('unsaved')
+      else notify()
+    })
     return saving
   }
   function preservedBy(saved: SavedDraft | undefined): boolean {
@@ -130,6 +136,9 @@ export function createDraftReplica(options: {
   return {
     getSnapshot: () => state,
     getSaved: () => baseline,
+    // Only the owning recovery UI requests text. Never include it in view
+    // inspection, diagnostics, or a request to the remote Host.
+    retainedInput: () => ({ ...payload() }),
     // Only lifecycle metadata crosses the view-inspection boundary. Text,
     // references and attachment identities remain with the draft owner.
     preservedBy,
@@ -143,13 +152,13 @@ export function createDraftReplica(options: {
     inspection: () => ({
       status: state.status, persisted: ready && !loading && !saving && !dirty() && state.status === 'saved',
       revision: input.draftRev, inputPhase: input.phase,
-      hasReferences: references || !!input.occurrences?.length,
-      hasAttachments: attachments || !!input.attachmentIds?.length,
+      hasReferences: retiredInput?.hadReferences ?? (references || !!input.occurrences?.length),
+      hasAttachments: retiredInput?.hadAttachments ?? (attachments || !!input.attachmentIds?.length),
     }),
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     load, flush,
     beforeLeave() {
-      if (!ready && state.status === 'error' && !input.draft && !input.attachmentIds?.length
+      if (!ready && state.status === 'error' && !input.draft && !input.attachmentIds?.length && !input.occurrences?.length && !references && !attachments
         && input.draftRev === options.input.draftRev && !baseline?.text) return Promise.resolve(true)
       return flush()
     },
@@ -161,6 +170,7 @@ export function createDraftReplica(options: {
     keepCurrent() { if (!mounted) return Promise.resolve(false); ready = true; publish('unsaved'); return flush() },
     acknowledgeReferences() { references = attachments = false; if (ready) { publish('unsaved'); schedule() } },
     dispose() {
+      retiredInput ??= { ...payload() }
       clearTimeout(timer); mounted = false; listeners.clear()
       // A known snapshot can finish saving after a view unmounts. A pending
       // read cannot restore text into a disposed Session or another Host.

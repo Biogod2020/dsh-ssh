@@ -33,3 +33,8 @@ Native code-block copy and final archive/unarchive/reopen with valid generated h
 The corrected generator has now been exercised in an actual isolated **web Client** using the installed `a9f82b7…c58ff3` candidate. Its six events render successfully, and code-block plus whole-reply copy/paste preserve Chinese, emoji and Markdown. The empty test draft was confirmed on disk afterward. [Screenshot and exact results](benchmarks/2026-10-22/web-clipboard/README.md). This narrows the remaining fixture uncertainty; it does not replace native guest/focus acceptance.
 
 One earlier package attempt had two 5-second test timeouts. The unchanged focused checks then passed, and the complete final package verification passed; thresholds were not increased. No npm tag, release, or daily-app update was performed.
+
+
+### 2026-10-23 原生复验更新
+
+实际安装的最终候选现已通过代码块/整条回复复制、原生远端置顶/重命名/归档/取消归档和有效历史重开，以及保存失败后的恢复复制与关闭保护。补上弹窗 inert 和 guest 禁用 window.confirm 两个原生边界；887 项、构建及同一包三个运行时和旧版回退通过。此前仅比对源码的原生安装来源校验作废，本次已重新核对实际 JS 并重跑。[真实截图、范围和剩余门槛](native-draft-recovery-2026-10-23.md)。

@@ -26,15 +26,20 @@ export function embeddedClipboard(): void {
       field.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none'
       // Override only the event caused by our temporary field. No listener
       // survives the synchronous command or changes ordinary selection copy.
+      let populated = false
       const onCopy = (event: ClipboardEvent) => {
         if (event.target !== field || !event.clipboardData) return
-        event.clipboardData.setData('text/plain', text); event.preventDefault()
+        event.clipboardData.setData('text/plain', text); event.preventDefault(); populated = true
       }
       let accepted = false
+      // A modal dialog makes the rest of the document inert. Keep the
+      // temporary field in the active dialog so it can receive focus.
+      const owner = focused instanceof Element ? focused.closest('dialog[open]') : null
       try {
-        document.body.append(field); field.focus({ preventScroll: true }); field.select()
+        ;(owner ?? document.body).append(field); field.focus({ preventScroll: true }); field.select()
+        if (document.activeElement !== field) throw new Error('Copy field did not receive focus')
         field.addEventListener('copy', onCopy)
-        accepted = document.execCommand('copy') === true
+        accepted = document.execCommand('copy') === true && populated
       } catch { /* Fall through to the native API, preserving its rejection. */ }
       finally {
         field.removeEventListener('copy', onCopy); field.remove()

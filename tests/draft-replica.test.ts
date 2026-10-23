@@ -163,3 +163,23 @@ it('marks a draft unpersisted until its actual save completes and requires match
   expect(f.replica.preservedBy({...f.saved!,sessionId:'different-session'})).toBe(false)
   expect(f.replica.preservedBy({...f.saved!,hadAttachments:true})).toBe(false)
 })
+it('retains detached text and resource flags after disposal without retaining or exposing resource identities',async()=>{
+  const refs:unknown[]=[{url:'generated-private-reference'}],attachments:unknown[]=['generated-private-attachment']
+  const f=fixture(undefined,{...input('Generated retained text'),occurrences:refs,attachmentIds:attachments})
+  await f.replica.load();f.intercept(async()=>{throw Error('Generated failed save')})
+  const closing=f.replica.dispose();refs.length=0;attachments.length=0
+  expect(await closing).toBe(false)
+  const retained=f.replica.retainedInput()
+  expect(retained).toEqual({text:'Generated retained text',hadReferences:true,hadAttachments:true})
+  retained.text='Changed returned copy';retained.hadReferences=false
+  expect(f.replica.retainedInput()).toEqual({text:'Generated retained text',hadReferences:true,hadAttachments:true})
+  expect(JSON.stringify(f.replica.inspection())).not.toContain('Generated retained text')
+  expect(JSON.stringify(retained)).not.toContain('generated-private-reference')
+})
+it('keeps an empty input with a reference protected when local draft reads fail',async()=>{
+  const f=fixture(undefined,{...input(),occurrences:['generated-reference']},false)
+  f.fetch.mockRejectedValue(Error('Generated unavailable local store'))
+  expect(await f.replica.load()).toBe(false)
+  expect(await f.replica.beforeLeave()).toBe(false)
+  expect(f.writes).toHaveLength(0)
+})

@@ -253,4 +253,11 @@ it('retains an unsaved Host view when switching or closing cannot confirm its dr
   expect(f.bridge.release).not.toHaveBeenCalled()
   expect(f.fetch).toHaveBeenCalledOnce()
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')
+  const recovery=[...document.querySelectorAll<HTMLButtonElement>('button')].find(node=>node.textContent==='Review unsaved text')!
+  expect(recovery).toBeDefined();recovery.click()
+  await vi.waitFor(()=>expect(view.guest.executeJavaScript).toHaveBeenCalledWith('Boolean(window.__dshSshDrafts?.openRecovery?.())'))
+  await vi.waitFor(()=>expect(recovery.disabled).toBe(false))
+  view.guest.executeJavaScript.mockImplementation(async()=>false);recovery.click()
+  await vi.waitFor(()=>expect(document.querySelector('[role="alert"]')?.textContent).toContain('current conversation input'))
+  expect(view.guest.isConnected).toBe(true);expect(f.bridge.release).not.toHaveBeenCalled();expect(f.fetch).toHaveBeenCalledOnce()
 })

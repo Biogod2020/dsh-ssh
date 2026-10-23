@@ -55,6 +55,37 @@ it('restores backward message selection and leaves no handler on ordinary select
   expect(event.defaultPrevented).toBe(false); expect(f.copied).toHaveBeenCalledOnce()
 })
 
+it('copies inside the active modal rather than its inert document background', async () => {
+  const f = fixture(), dialog = document.createElement('dialog'), button = document.createElement('button')
+  dialog.open = true; dialog.append(button); document.body.append(dialog); button.focus()
+  // jsdom does not implement modal inertness, so check the focus owner at
+  // the browser command boundary. Native acceptance also pastes the result.
+  const copy = f.exec.getMockImplementation()!
+  f.exec.mockImplementation(() => {
+    expect(document.activeElement?.parentElement).toBe(dialog)
+    return copy()
+  })
+  await f.clipboard.writeText('Retained draft · 中文 🙂\nSecond line')
+  expect(f.copied).toHaveBeenCalledExactlyOnceWith('text/plain', 'Retained draft · 中文 🙂\nSecond line')
+  expect(document.activeElement).toBe(button); expect(dialog.querySelector('textarea')).toBeNull()
+  expect(f.native).not.toHaveBeenCalled()
+})
+
+it('rejects a true command result when no populated copy event occurred', async () => {
+  const f = fixture()
+  f.exec.mockReturnValue(true)
+  await expect(f.clipboard.writeText('not actually copied')).rejects.toBe(f.denied)
+  expect(f.native).toHaveBeenCalledOnce(); expect(f.copied).not.toHaveBeenCalled()
+})
+
+it('does not execute copy when the temporary field cannot receive focus', async () => {
+  const f = fixture()
+  vi.spyOn(HTMLTextAreaElement.prototype, 'focus').mockImplementation(() => {})
+  await expect(f.clipboard.writeText('unfocused field')).rejects.toBe(f.denied)
+  expect(f.exec).not.toHaveBeenCalled(); expect(f.native).toHaveBeenCalledOnce()
+  expect(document.querySelector('textarea')).toBeNull()
+})
+
 it.each(['inactive', 'hidden', 'unfocused'])('retains browser permission policy for %s documents', async state => {
   const f = fixture()
   if (state === 'inactive') vi.spyOn(navigator, 'userActivation', 'get').mockReturnValue({ isActive: false } as UserActivation)

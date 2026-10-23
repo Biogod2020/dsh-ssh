@@ -61,6 +61,7 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
   const observer = new MutationObserver(isolate); observer.observe(document.body, { childList: true })
   const render = () => {
     back.textContent = tt('remote.returnLocal'); close.textContent = tt('remote.closeView')
+    reviewDraft.textContent = tt('remote.reviewUnsavedDraft')
     const value = preview ?? active
     title.textContent = value ? `${value.workspace.alias} · ${value.workspace.remotePath}` : ''
     surface.setAttribute('aria-label', tt('remote.desktopWorkspace'))
@@ -100,7 +101,22 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
     view.guest.remove(); void bridge.release(view.lease).catch(() => {})
     if (active === view) { active = undefined; if (preview) { render(); selected() } else hide() }
   }
-  const draftNotice = document.createElement('p'); draftNotice.className = css.hint; draftNotice.setAttribute('role', 'alert'); draftNotice.hidden = true; toolbar.after(draftNotice)
+  const draftNotice = document.createElement('p'); draftNotice.className = css.hint; draftNotice.setAttribute('role', 'alert'); draftNotice.hidden = true
+  const draftMessage = document.createElement('span'), reviewDraft = document.createElement('button'); reviewDraft.type = 'button'; reviewDraft.className = css.ghostButton
+  draftNotice.append(draftMessage, reviewDraft); toolbar.after(draftNotice)
+  reviewDraft.onclick = () => {
+    const view = active
+    if (!view?.ready || !view.guest.isConnected || reviewDraft.disabled) return
+    reviewDraft.disabled = true
+    void view.guest.executeJavaScript<boolean>('Boolean(window.__dshSshDrafts?.openRecovery?.())').then(opened => {
+      if (!opened && !disposed && active === view && views.get(viewKey(view.workspace)) === view) {
+        draftMessage.textContent = tt('remote.reviewCurrentDraft'); view.guest.focus()
+      }
+    }).catch(() => {
+      if (!disposed && active === view && views.get(viewKey(view.workspace)) === view) draftMessage.textContent = tt('remote.draftRecoveryUnavailable')
+    })
+      .finally(() => { reviewDraft.disabled = false })
+  }
   const draftError = () => Object.assign(new Error(tt('remote.unsavedDraft')), { name: 'DraftSaveError' })
   async function flushView(view: View | undefined): Promise<void> {
     if (!view?.ready || !view.guest.isConnected) return
@@ -110,7 +126,7 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
       draftNotice.hidden = true
     } catch {
       if(!view.ready)return
-      draftNotice.textContent = tt('remote.unsavedDraft'); draftNotice.hidden = false; throw draftError()
+      draftMessage.textContent = tt('remote.unsavedDraft'); draftNotice.hidden = false; throw draftError()
     }
   }
   back.onclick = () => {

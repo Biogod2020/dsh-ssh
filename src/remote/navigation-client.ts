@@ -176,7 +176,7 @@ export function navigationManifest(): void {
   const rev = 'native-navigation-7'
   const additions: Row[] = [
     { id: '@jay-local/dsh-ssh-navigation', url: '/__dsh_remote/navigation-client.js?rev=' + rev, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] },
-    { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-2', rev: 'local-drafts-2', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },
+    { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-3', rev: 'local-drafts-3', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },
   ].filter(row => !boot.entries.some(existing => existing.id === row.id))
   if (!additions.length) return
   target.__DSH_BOOT__ = { ...boot, entries: [...boot.entries, ...additions],
