@@ -15,6 +15,7 @@ import { SegmentedHistoryCache } from './history-store.ts'
 import { RemoteHistoryService } from './history-service.ts'
 import { readHistoryDelta } from './history-reader.ts'
 import { LocalDraftStore } from './draft-store.ts'
+import { CatalogReadError } from './catalog-json.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
@@ -426,7 +427,7 @@ export class RemoteWorkspaces {
         this.sessionCache.save(id, catalog)
         for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt, session.running)
         return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
-      } catch { return { ...cached(), warning: 'Remote session status could not be checked. Showing the last saved list.' } }
+      } catch(error) { return { ...cached(), warning: error instanceof CatalogReadError ? error.message : 'Remote session status could not be checked. Showing the last saved list.' } }
     })()
     this.catalogReads.set(id, read)
     try { return await read } finally { if (this.catalogReads.get(id) === read) this.catalogReads.delete(id) }

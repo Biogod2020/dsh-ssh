@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { HostStore } from '../src/store.ts'
 import { RemoteWorkspaces } from '../src/remote/manager.ts'
 import type { SshEngine } from '../src/engine.ts'
+import { CatalogReadError } from '../src/remote/catalog-json.ts'
 
 const cleanups: Array<() => void> = []
 afterEach(() => { for (const cleanup of cleanups.splice(0).reverse()) cleanup(); vi.useRealTimers() })
@@ -46,6 +47,27 @@ it('shares one remote catalog across projects and short bursts, with original fr
   expect((await f.manager.sessions(f.first)).sessions[0]!.running).toBe(true)
   expect(f.gateway.workspaceSnapshot).toHaveBeenCalledTimes(2); expect(f.gateway.rpc).toHaveBeenCalledTimes(2)
 })
+
+it('aggregates a hundred owned projects into one Host baseline and list without mixing Session membership',async()=>{
+  const f=fixture(),workspaces=(f.manager as any).workspaces as Map<string,unknown>
+  workspaces.clear()
+  const projects=Array.from({length:100},(_,n)=>({workspaceId:'project-'+n,sessionIds:['session-'+n]}))
+  const rows=projects.map((project,n)=>({sessionId:project.sessionIds[0]!,updatedAt:n,running:false,blank:false,projections:{values:{title:'Generated 项目 '+n}}}))
+  f.gateway.workspaceSnapshot.mockResolvedValue({items:projects,archivedSessionIds:[]})
+  f.gateway.rpc.mockImplementation(async()=>({items:rows}))
+  const ids=projects.map((project,n)=>{
+    const id=n.toString(16).padStart(24,'0')
+    workspaces.set(id,{id,hostId:f.hostId,alias:'fixture',remotePath:'/generated/'+n,title:'Generated '+n,workspaceId:project.workspaceId})
+    return id
+  })
+  const catalogs=await Promise.all(ids.map(id=>f.manager.sessions(id)))
+  expect(f.gateway.workspaceSnapshot).toHaveBeenCalledOnce();expect(f.gateway.rpc).toHaveBeenCalledOnce()
+  for(const [n,catalog] of catalogs.entries()){
+    expect(catalog.stale).toBe(false)
+    expect(catalog.sessions.map(row=>row.sessionId)).toEqual(['session-'+n])
+    expect(catalog.sessions[0]!.title).toBe('Generated 项目 '+n)
+  }
+})
 it('invalidates the catalog around explicit creation without caching or replaying the mutation', async () => {
   const f = fixture(); await f.manager.sessions(f.first)
   expect(await f.manager.createSession(f.first)).toEqual({ sessionId: 'created' })
@@ -66,6 +88,23 @@ it('drops failed reads and never uses cached readiness after host settings chang
   f.manager.setEnabled(false)
   expect((await f.manager.sessions(f.first)).stale).toBe(true)
   expect(f.gateway.rpc).toHaveBeenCalledTimes(reads)
+})
+
+it('keeps the saved list when a bounded catalog read fails and shows only approved local diagnostics',async()=>{
+  const f=fixture(),first=await f.manager.sessions(f.first)
+  ;(f.runtime as any).catalog=undefined
+  f.gateway.rpc.mockRejectedValueOnce(new CatalogReadError('size'))
+  const failed=await f.manager.sessions(f.first)
+  expect(failed.stale).toBe(true);expect(failed.sessions).toEqual(first.sessions)
+  expect(failed.warning).toContain('8 MiB byte budget')
+})
+
+it('does not expose arbitrary remote failure text with the saved catalog',async()=>{
+  const f=fixture();await f.manager.sessions(f.first);(f.runtime as any).catalog=undefined
+  f.gateway.rpc.mockRejectedValueOnce(new Error('generated-private-remote-detail'))
+  const failed=await f.manager.sessions(f.first)
+  expect(failed.warning).toContain('Showing the last saved list')
+  expect(failed.warning).not.toContain('generated-private-remote-detail')
 })
 it('uses the actual open RPC for reachability, validates membership, and never retries a failed write', async () => {
   const f = fixture()

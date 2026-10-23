@@ -20,10 +20,10 @@ export class HistoryReadScheduler {
       this.waiting.push(read);this.drain()
     })
   }
-  cancel(key:string):void{
+  cancel(key:string,reason=new Error('Local history copy was cleared before this read was dispatched')):void{
     const cancelled=this.waiting.filter(read=>read.lane.key===key)
     this.waiting=this.waiting.filter(read=>read.lane.key!==key)
-    for(const read of cancelled)read.reject(new Error('Local history copy was cleared before this read was dispatched'))
+    for(const read of cancelled)read.reject(reason)
   }
   private drain():void{
     while(this.active<2){

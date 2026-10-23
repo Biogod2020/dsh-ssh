@@ -11,6 +11,7 @@ import { HostStore } from '../src/store.ts'
 import type { SshEngine } from '../src/engine.ts'
 import { WebSocket, WebSocketServer } from 'ws'
 import { once } from 'node:events'
+import { catalogJsonReader } from '../src/remote/catalog-json.ts'
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
@@ -27,6 +28,9 @@ async function fixture(healthMisses = 2) {
   let healthDelay = 0, healthReads = 0, terminalFrames = 0, workspaceWrites = 0, upgradeDelay = 0
   let releaseBaseline: (() => void) | undefined
   let rootEncoding: string | undefined
+  let baselineValue: { items: Array<{workspaceId:string;sessionIds:string[];title?:string}>; archivedSessionIds:string[] } = {items:[],archivedSessionIds:[]}
+  let endAfterBaseline = false, listItems: object[] = [], listReads = 0
+  let pauseBaselineClose = false
   const asset = Buffer.from('window.generatedFixture = true;\n'.repeat(1000)), compressed = gzipSync(asset)
   const remote = httpServer((req, res) => {
     if (req.url?.startsWith('/?token=')) { res.writeHead(303, { 'Set-Cookie': 'fixture=only; Path=/' }); res.end(); return }
@@ -56,6 +60,12 @@ async function fixture(healthMisses = 2) {
         res.end(JSON.stringify({ rpcId: JSON.parse(raw).rpcId, result: { ok: true, value: { workspace: { workspaceId: 'fixture-project', path: root, title: 'fixture', sessionIds: [] } } } }))
       }); return
     }
+    if (req.url === '/api/session/list') {
+      let raw='';req.on('data',chunk=>{raw+=chunk});req.once('end',()=>{
+        listReads++;res.setHeader('content-type','application/json')
+        res.end(JSON.stringify({rpcId:JSON.parse(raw).rpcId,result:{ok:true,value:{items:listItems}}}))
+      });return
+    }
     if (req.url === '/') { healthReads++; rootEncoding = req.headers['accept-encoding'] }
     const send = () => { if (!res.destroyed) { res.writeHead(200); res.end('ready') } }
     if (healthDelay && req.url === '/') setTimeout(send, healthDelay).unref(); else send()
@@ -66,7 +76,11 @@ async function fixture(healthMisses = 2) {
       ws.on('message', data => {
         let frame: any; try { frame = JSON.parse(data.toString()) } catch { /* plain terminal fixture */ }
         if (frame?.endpoint === 'workspace/follow') {
-          releaseBaseline = () => ws.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value: { type: 'baseline', value: { items: [], archivedSessionIds: [] } } }))
+          releaseBaseline = () => {
+            ws.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value: { type: 'baseline', value: baselineValue } }))
+            if(endAfterBaseline)ws.send(JSON.stringify({type:'end',streamId:frame.streamId}))
+            if(pauseBaselineClose)ws.pause()
+          }
           return
         }
         terminalFrames++; ws.send(data)
@@ -123,6 +137,9 @@ async function fixture(healthMisses = 2) {
     setHealthDelay(ms: number) { healthDelay = ms }, setUpgradeDelay(ms: number) { upgradeDelay = ms },
     get healthReads() { return healthReads }, get terminalFrames() { return terminalFrames }, get workspaceWrites() { return workspaceWrites },
     get baselineWaiting() { return !!releaseBaseline }, releaseBaseline: () => releaseBaseline?.(),
+    setBaseline(value:typeof baselineValue,end=false){baselineValue=value;endAfterBaseline=end},
+    pauseBaselineClose(){pauseBaselineClose=true},
+    setSessionList(items:object[]){listItems=items},get listReads(){return listReads},
     get dispatched() { return dispatched }, release: (redirect = false) => releaseCancel?.(redirect) }
 }
 
@@ -289,6 +306,51 @@ it('also retains an internal catalog observer until its original snapshot comple
   f.releaseBaseline()
   await expect(reading).resolves.toEqual({ items: [], archivedSessionIds: [] })
   await wait(() => f.stop.mock.calls.some(([id]) => id === 'old'))
+})
+
+it('decodes a large 100-project baseline before its immediately following end frame',async()=>{
+  const f=await fixture(),baseline={items:Array.from({length:100},(_,i)=>({workspaceId:'project-'+i,sessionIds:['same-'+i],title:'Generated 中英文 '.repeat(1000)})),archivedSessionIds:[]}
+  f.setBaseline(baseline,true)
+  const decoded=catalogJsonReader.stats().workerDecodes,reading=f.gateway.workspaceSnapshot()
+  await wait(()=>f.baselineWaiting);f.releaseBaseline()
+  await expect(reading).resolves.toEqual(baseline)
+  expect(catalogJsonReader.stats().workerDecodes).toBe(decoded+1)
+})
+
+it('does not queue cancellation behind an unresolved catalog read or replay the write',async()=>{
+  const f=await fixture(),reading=f.gateway.workspaceSnapshot()
+  await wait(()=>f.baselineWaiting)
+  const cancelling=f.requestCancel();await wait(()=>f.dispatched===1)
+  f.release();expect((await cancelling).status).toBe(200)
+  expect(f.dispatched).toBe(1)
+  f.releaseBaseline();await reading
+})
+
+it('bounds a silent observer close without ending another healthy terminal on its retired carrier',async()=>{
+  const f=await fixture(0),terminal=f.stream();await once(terminal,'open');await echo(terminal,'before-observer')
+  f.pauseBaselineClose()
+  const reading=f.gateway.workspaceSnapshot();await wait(()=>f.baselineWaiting)
+  await confirmedRepair(f);f.releaseBaseline();await reading
+  await delay(1300)
+  expect(f.stop).not.toHaveBeenCalledWith('old');await echo(terminal,'healthy-after-observer-close')
+  const closed=once(terminal,'close');terminal.close();await closed
+  await wait(()=>f.stop.mock.calls.some(([id])=>id==='old'))
+})
+
+it('reports disposal as cancellation and releases a pending catalog observer',async()=>{
+  const f=await fixture(),reading=f.gateway.workspaceSnapshot()
+  const rejected=expect(reading).rejects.toMatchObject({name:'AbortError'})
+  await wait(()=>f.baselineWaiting);f.gateway.dispose();await rejected
+})
+
+it('decodes the large read-only session list and fails oversized lists after one request',async()=>{
+  const f=await fixture(),items=[{sessionId:'fixture',title:'Generated 中英文 '.repeat(30000)}]
+  f.setSessionList(items)
+  await expect(f.gateway.rpc('session/list',{})).resolves.toEqual({items})
+  expect(f.listReads).toBe(1)
+  f.setSessionList([{sessionId:'oversized',title:'x'.repeat(8*1024*1024)}])
+  await expect(f.gateway.rpc('session/list',{})).rejects.toThrow('byte budget')
+  expect(f.listReads).toBe(2)
 })
 
 it('repairs a proven broken SSH carrier immediately without replaying terminal input', async () => {

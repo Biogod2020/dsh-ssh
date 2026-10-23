@@ -12,6 +12,7 @@ import { LocalDraftStore, DraftConflictError, type DraftWrite } from './draft-st
 import { readJsonBody } from '../http.ts'
 import { draftClient, seedDraft, type DraftSeed } from './draft-client.ts'
 import { createDraftReplica } from './draft-replica.ts'
+import { CatalogReadError, catalogJsonLimit, catalogJsonReader, readCatalogJson, runCatalogRead } from './catalog-json.ts'
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
 const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
@@ -29,6 +30,7 @@ export class RemoteGateway {
   private retired = new Map<number, { stop(): void; drained: boolean }>()
   private healthRead?: { port: number; controller: AbortController; promise: Promise<boolean> }
   private disposed = false
+  private catalogLifetime = new AbortController()
   origin = ''
   onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
@@ -141,17 +143,23 @@ export class RemoteGateway {
     return headers
   }
   async rpc<T>(method: string, args: object): Promise<T> {
+    if (method === 'session/list') return runCatalogRead(this.hostId, this.catalogLifetime.signal, () => this.rpcRequest<T>(method, args))
+    return this.rpcRequest<T>(method, args)
+  }
+  private async rpcRequest<T>(method: string, args: object): Promise<T> {
     const port = this.localPort, release = this.retainRequest(port)
     const changesCatalog = catalogMutation(method)
     if (changesCatalog) this.onCatalogChange()
     try {
       const rpcId = randomUUID()
+      const readOnlyCatalog = method === 'session/list'
+      const signal = readOnlyCatalog ? AbortSignal.any([this.catalogLifetime.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)
       const response = await fetch(`http://127.0.0.1:${port}/api/${method}`, {
         method: 'POST', headers: { Host: new URL(this.upstreamOrigin).host, Origin: this.upstreamOrigin, Cookie: this.upstreamCookie, 'content-type': 'application/json' },
-        body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal: AbortSignal.timeout(30000),
+        body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal,
       })
       if (!response.ok) throw new Error(`Remote DSH ${method} returned HTTP ${response.status}; not replayed`)
-      const body = await response.json() as { rpcId?: string; result?: { ok: boolean; value?: T; error?: { message?: string; code?: string } } }
+      const body = (readOnlyCatalog ? await readCatalogJson(response, signal) : await response.json()) as { rpcId?: string; result?: { ok: boolean; value?: T; error?: { message?: string; code?: string } } }
       if (body.rpcId !== rpcId || !body.result) throw new Error('Remote DSH returned an incompatible RPC response')
       if (!body.result.ok) throw new RemoteFailureError(body.result.error?.message ?? `Remote ${method} failed`, body.result.error?.code)
       return body.result.value as T
@@ -184,6 +192,9 @@ export class RemoteGateway {
         && Array.isArray(frame.records) && typeof frame.hasMore === 'boolean' ? frame : undefined)
   }
   private baseline<T>(endpoint: string, args: object, read: (frame: any) => T | undefined): Promise<T> {
+    return runCatalogRead(this.hostId, this.catalogLifetime.signal, () => this.baselineRequest(endpoint, args, read), endpoint === 'session/follow')
+  }
+  private baselineRequest<T>(endpoint: string, args: object, read: (frame: any) => T | undefined): Promise<T> {
     return new Promise((resolve, reject) => {
       const streamId = randomUUID(), port = this.localPort, release = this.retainStream(port)
       const origin = `http://127.0.0.1:${port}`
@@ -192,25 +203,52 @@ export class RemoteGateway {
         handshakeTimeout: 5000, maxPayload: 8 * 1024 * 1024,
       })
       let settled = false
+      let decoding = false, buffered = 0
+      const frames: Buffer[] = []
+      const parsing = new AbortController()
+      const disposed = () => finish(new DOMException('Remote catalog observer was disposed', 'AbortError'))
       const finish = (cause?: Error, value?: Parameters<typeof resolve>[0]) => {
         if (settled) return
-        settled = true; clearTimeout(deadline)
+        settled = true; clearTimeout(deadline); parsing.abort(); this.catalogLifetime.signal.removeEventListener('abort', disposed)
+        frames.length = 0; buffered = 0
         if (socket.readyState === WebSocket.OPEN) {
+          // Resume the transport for its close handshake after decoding. A
+          // paused observer must not keep the retired SSH carrier alive.
+          socket.resume()
+          const closing = setTimeout(() => socket.terminate(), 1000); closing.unref()
+          socket.once('close', () => clearTimeout(closing))
           socket.send(JSON.stringify({ type: 'cancel', streamId })); socket.close()
         } else socket.terminate()
         if (cause) reject(cause); else resolve(value!)
       }
       const deadline = setTimeout(() => finish(new Error('Remote workspace catalog timed out')), 8000)
+      this.catalogLifetime.signal.addEventListener('abort', disposed, { once: true })
       socket.once('open', () => socket.send(JSON.stringify({ type: 'open', streamId, endpoint, payload: { args } })))
-      socket.on('message', bytes => {
-        try {
-          const frame = JSON.parse(bytes.toString())
-          if (frame.streamId !== streamId) return
+      const decode = async () => {
+        if (decoding || settled) return
+        decoding = true
+        try { while (frames.length && !settled) {
+          const bytes = frames.shift()!
+          const frame = await catalogJsonReader.parse(bytes, AbortSignal.any([parsing.signal, this.catalogLifetime.signal])) as any
+          buffered = Math.max(0, buffered - bytes.length)
+          if (settled) return
+          if (frame.streamId !== streamId) continue
           const value = frame.type === 'item' ? read(frame.value) : undefined
           if (value !== undefined) finish(undefined, value)
           else if (frame.type === 'error' || frame.type === 'end') finish(new RemoteFailureError(
             `Remote ${endpoint} is unavailable${typeof frame.error?.code === 'string' ? ' (' + frame.error.code.slice(0, 80) + ')' : ''}`, frame.error?.code))
-        } catch { finish(new Error('Remote workspace catalog is incompatible')) }
+        } } catch(error) { finish(error instanceof Error ? error : new Error('Remote workspace catalog is incompatible')) }
+        finally { decoding = false; if (!settled) socket.resume() }
+      }
+      socket.on('message', bytes => {
+        if (settled) return
+        const frame = Buffer.isBuffer(bytes) ? bytes : Array.isArray(bytes) ? Buffer.concat(bytes) : Buffer.from(bytes)
+        if (buffered + frame.length > 2 * catalogJsonLimit || frames.length >= 256) {
+          finish(new CatalogReadError('backlog')); return
+        }
+        buffered += frame.length; frames.push(frame)
+        socket.pause()
+        void decode()
       })
       socket.once('error', () => { release(); finish(new Error('Remote workspace catalog is unavailable')) })
       socket.once('close', () => { release(); finish(new Error('Remote workspace catalog disconnected')) })
@@ -328,6 +366,7 @@ export class RemoteGateway {
   }
   dispose(): void {
     this.disposed = true; this.healthRead?.controller.abort()
+    this.catalogLifetime.abort()
     this.server.close(); for (const socket of this.sockets) socket.destroy()
     for (const finish of [...this.drainWaiters]) finish()
     for (const old of this.retired.values()) old.stop()

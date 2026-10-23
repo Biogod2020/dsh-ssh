@@ -1,0 +1,8 @@
+{
+  "method": "one Worker per large request; rejected after fixed-data comparison",
+  "sourceHashes": {
+    "src/remote/catalog-json.ts": "60b17260e70d3e7519c48519b7213ee7d0a6e71a4694e922ef7c91ad2ba54dc9",
+    "scripts/catalog-json-benchmark.mjs": "d4581f89f9af27abfd411118adfa14919f5fdc0725c21460b39bcfc0ac533027"
+  },
+  "allMeasurementsRetained": true
+}

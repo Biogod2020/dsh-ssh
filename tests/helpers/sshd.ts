@@ -9,10 +9,30 @@ import { appendFileSync, chmodSync, closeSync, mkdirSync, mkdtempSync, openSync,
 import { DEFAULT_KNOWN_HOSTS } from '../../src/engine/known-hosts.ts'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { connect } from 'node:net'
+import { connect, createServer } from 'node:net'
+import { Client } from 'ssh2'
 
 /** Every spawned sshd (orphan cleanup if the test process dies early). */
 const spawned: ChildProcess[] = []
+
+async function availablePort(): Promise<number> {
+  const reservation = createServer()
+  await new Promise<void>((resolve,reject)=>{reservation.once('error',reject);reservation.listen(0,'127.0.0.1',resolve)})
+  const port = (reservation.address() as {port:number}).port
+  await new Promise<void>((resolve,reject)=>reservation.close(error=>error?reject(error):resolve()))
+  return port
+}
+async function confirmOwnSshd(port:number, publicKey:Buffer, privateKey:Buffer):Promise<void>{
+  await new Promise<void>((resolve,reject)=>{
+    const client=new Client();let settled=false
+    const finish=(error?:Error)=>{if(settled)return;settled=true;clearTimeout(timer);client.end();if(error)reject(error);else resolve()}
+    const timer=setTimeout(()=>finish(new Error('Generated sshd identity was not confirmed')),5000)
+    client.once('error',()=>finish(new Error('Generated sshd identity or authentication did not match')))
+    client.once('close',()=>finish(new Error('Generated sshd closed before readiness confirmation')))
+    client.once('ready',()=>finish())
+    client.connect({host:'127.0.0.1',port,username:process.env.USER,privateKey,readyTimeout:5000,hostVerifier:(key:Buffer)=>key.equals(publicKey)})
+  })
+}
 
 /** Wait until the port accepts TCP connections (aborts on a spawn error). */
 async function waitPort(port: number, timeoutMs: number, spawnError?: () => Error | undefined): Promise<void> {
@@ -50,7 +70,8 @@ export class TestSshd {
   }
 
   /** Start sshd on a random high port. */
-  static async start(options: { home?: string; path?: string; env?:NodeJS.ProcessEnv } = {}): Promise<TestSshd> {
+  static async start(options: { home?: string; path?: string; env?:NodeJS.ProcessEnv; port?:number } = {}): Promise<TestSshd> {
+    if(options.port!==undefined&&(!Number.isInteger(options.port)||options.port<1||options.port>65535))throw new Error('Invalid fixture port')
     const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-sshd-'))
     const root = join(dir, 'remote')
     mkdirSync(join(dir, 'etc'), { recursive: true })
@@ -62,7 +83,7 @@ export class TestSshd {
     writeFileSync(authorized, readFileSync(join(dir, 'client.pub'), 'utf8'), 'utf8')
     chmodSync(authorized, 0o600)
 
-    const port = 22_000 + Math.floor(Math.random() * 5_000)
+    const port = options.port ?? await availablePort()
     const config = [
       `Port ${port}`,
       'ListenAddress 127.0.0.1',
@@ -101,7 +122,10 @@ export class TestSshd {
     try {
       await waitPort(port, 8_000, () => spawnError !== undefined
         ? new Error(`failed to spawn /usr/sbin/sshd: ${spawnError.message}`)
-        : undefined)
+        : child.exitCode!==null||child.signalCode!==null ? new Error('Generated sshd exited before readiness confirmation') : undefined)
+      const publicKey=Buffer.from(readFileSync(join(dir,'etc','host_key.pub'),'utf8').trim().split(/\s+/)[1]!,'base64')
+      await confirmOwnSshd(port,publicKey,readFileSync(join(dir,'client')))
+      if(child.exitCode!==null||child.signalCode!==null)throw new Error('Generated sshd exited before pinning its key')
     } catch (error) {
       child.kill()
       let detail = ''

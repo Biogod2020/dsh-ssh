@@ -76,6 +76,12 @@ jobs:
           test "${#archives[@]}" -eq 1
           node scripts/fetch-legacy-history-archive.mjs "$RUNNER_TEMP/frozen-jay39.tgz"
           node --experimental-transform-types scripts/history-downgrade-smoke.mjs "${archives[0]}" "$RUNNER_TEMP/release/downgrade-verification.json" "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "$RUNNER_TEMP/frozen-jay39.tgz"
+      - name: Read a real large Session catalog through the compiled gateway
+        run: |
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          test "${#archives[@]}" -eq 1
+          node --experimental-transform-types scripts/catalog-runtime-smoke.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/.bin/dsh" "${archives[0]}" "$RUNNER_TEMP/release/catalog-verification.json"
       - name: Accept incremental disk history and calibrate the long-run observer for 30 seconds
         run: |
           shopt -s nullglob
@@ -117,6 +123,13 @@ jobs:
         with:
           name: soak-observer-calibration
           path: ${{ runner.temp }}/release/soak-calibration.json
+          if-no-files-found: ignore
+          retention-days: 14
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: compiled-catalog-verification
+          path: ${{ runner.temp }}/release/catalog-verification.json
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

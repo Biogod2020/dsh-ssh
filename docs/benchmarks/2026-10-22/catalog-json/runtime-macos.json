@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "completed": true,
+  "runtime": "0.2.1-rc.2",
+  "archiveSha256": "0c20ac37001c888a8559c37499cca30227aef22b2ea061dffa56cddaa7682fc6",
+  "generatedMetadataSessions": 800,
+  "rawSdkSessionRows": 801,
+  "rawSdkResponseBytes": 1153414,
+  "largeDecodeThresholdBytes": 1048576,
+  "compiledGatewayCatalogRead": true,
+  "freshSelectedCatalog": true,
+  "remotePidPreserved": true,
+  "modelRequests": 0,
+  "nativeDesktopVerified": false
+}

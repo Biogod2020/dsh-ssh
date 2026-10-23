@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "scope": "Controller JSON decoding only; no SSH, native UI, model, disk or network benchmark",
+  "variant": "legacy",
+  "sessions": 10000,
+  "inputBytes": 4986752,
+  "inputSha256": "b860a0bc2f36867d82dd6a72594fde49beba4cb48823a7df4f4718f38677efa0",
+  "node": "v24.16.0",
+  "platform": "darwin",
+  "arch": "arm64",
+  "cpu": "Apple M5",
+  "memoryBytes": 34359738368,
+  "methodology": {
+    "samples": 100,
+    "separateProcessPerCase": true,
+    "gcBeforeEachSample": true,
+    "reusedInputBuffer": true,
+    "warmup": "one full verified decode before timing; Worker startup is outside these warm samples",
+    "timedWork": "UTF-8 decoding and JSON parsing; Worker return cloning included",
+    "timerMilliseconds": 1,
+    "timerGapIncludesWorkerExitAndTailObservation": true,
+    "noForcedSystemCacheFlush": true,
+    "processRssIncludesAllThreadsAndRuntime": true,
+    "workerLifetime": "one reusable bounded Worker; 30-second idle retirement",
+    "limitation": "Timer scheduling is sampled, not a profiler; Worker startup, buffer copies, result cloning and GC still cost time."
+  },
+  "milliseconds": {
+    "samples": 100,
+    "p50": 5.707292000000052,
+    "p95": 6.104709000000014,
+    "max": 6.237500000000011
+  },
+  "maximumTimerGapMilliseconds": {
+    "samples": 100,
+    "p50": 6.087625000000003,
+    "p95": 7.389999999999986,
+    "max": 7.548459000000037
+  },
+  "processRssBytes": {
+    "samples": 100,
+    "p50": 275283968,
+    "p95": 275283968,
+    "max": 275316736
+  },
+  "workersStarted": 0,
+  "workerDecodes": 0,
+  "failures": 0
+}

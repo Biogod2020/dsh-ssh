@@ -1,0 +1,8 @@
+{
+  "method": "one reusable Worker above1MiB; smaller inputs decoded locally",
+  "sourceHashes": {
+    "src/remote/catalog-json.ts": "d8d2c586d7a55ccb78a06bb0f6506f792c91e6b8243e2596261d26e08ae1ace0",
+    "scripts/catalog-json-benchmark.mjs": "eddbad980bd26ff26abc45ca4391da347ab19011c12a158c1edd59728cdd8945"
+  },
+  "allMeasurementsRetained": true
+}

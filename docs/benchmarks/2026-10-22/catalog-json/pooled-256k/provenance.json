@@ -1,0 +1,8 @@
+{
+  "method": "one reusable Worker; threshold256KiB",
+  "sourceHashes": {
+    "src/remote/catalog-json.ts": "06f4abf675a88686e9b35c1ca6d2afec46918003f57c99bd882dc121888f8fbc",
+    "scripts/catalog-json-benchmark.mjs": "993f19c217ee36ac61f7ee52f11d9722002f9ba247a3c956687ef86c68d72604"
+  },
+  "allMeasurementsRetained": true
+}
