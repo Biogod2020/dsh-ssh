@@ -7,7 +7,7 @@ export function createRemoteOperationObserver(
   type Method = (this: unknown, ...args: any[]) => any
   type Question = { acknowledged: boolean }
   const questions = new Map<string, Set<Question>>()
-  let streams = 0, subscriptions = 0, answers = 0
+  let streams = 0, subscriptions = 0, answers = 0, readSubscriptions = 0
   let owner: { restore(): void; valid(): boolean; answer: boolean } | undefined
   const key = (clientId: unknown, eventId: unknown) => typeof clientId === 'string' && clientId.length > 0 && clientId.length <= 256
     && typeof eventId === 'string' && eventId.length > 0 && eventId.length <= 256 ? JSON.stringify([clientId, eventId]) : undefined
@@ -34,7 +34,7 @@ export function createRemoteOperationObserver(
     inspection() {
       const attached = !!owner && owner.valid()
       if (owner && !attached) invalidate()
-      return { scope: 'logical-client-observation', observedStreams: streams, observedEventSubscriptions: subscriptions,
+      return { scope: 'logical-client-observation', observedStreams: streams, observedReadSubscriptions: readSubscriptions, observedEventSubscriptions: subscriptions,
         observedWaitingAnswers: answers, streamDecoratorAttached: attached, answerDecoratorAttached: attached && !!owner?.answer }
     },
     /** Called only after the official RPC has validated the entire response.
@@ -56,11 +56,15 @@ export function createRemoteOperationObserver(
           invalidate(); return source
         }
         const eventBus = args[0] === '$events'
+        // These pinned SDK streams only observe committed state. Disposing a
+        // reader does not cancel an Agent, terminal or user operation.
+        const readOnly = ['session/follow', 'workspace/follow', 'session/control',
+          'account/watch', 'account/watchExpiry', 'remoteAccess/follow', 'job/list', 'job/follow'].includes(args[0])
         let entry: ReturnType<typeof reserve> | undefined
         let ended = false, begun = false
         const finish = (confirmed: boolean) => {
           if (ended) return
-          ended = true; if (begun) { if (eventBus) subscriptions--; else streams-- }
+          ended = true; if (begun) { if (eventBus) subscriptions--; else streams--; if (readOnly) readSubscriptions-- }
           entry?.finish(confirmed)
         }
         const invoke = (name: 'next' | 'return' | 'throw', values: unknown[]) => {
@@ -68,8 +72,9 @@ export function createRemoteOperationObserver(
             // The pinned SDK only constructs an async generator here; its
             // first pull starts dispatch. An unused iterator owns no operation.
             if (!ended && name === 'next' && !begun) {
-              entry = eventBus ? undefined : reserve(args[0])
+              entry = eventBus || readOnly ? undefined : reserve(args[0])
               begun = true; if (eventBus) subscriptions++; else streams++
+              if (readOnly) readSubscriptions++
               entry?.dispatched()
             }
             const result = typeof source[name] === 'function' ? source[name].apply(source, values)

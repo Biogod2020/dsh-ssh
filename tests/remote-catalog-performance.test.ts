@@ -68,6 +68,17 @@ it('aggregates a hundred owned projects into one Host baseline and list without 
     expect(catalog.sessions[0]!.title).toBe('Generated 项目 '+n)
   }
 })
+it('keeps a quiet Host snapshot for fifteen seconds but invalidates immediately after an explicit change',async()=>{
+  vi.useFakeTimers();vi.setSystemTime(100000)
+  const f=fixture();for(const row of f.rows)row.running=false
+  await f.manager.sessions(f.first)
+  for(let n=0;n<6;n++){vi.advanceTimersByTime(2000);await f.manager.sessions(f.first)}
+  expect(f.gateway.rpc).toHaveBeenCalledOnce()
+  await f.manager.createSession(f.first);await f.manager.sessions(f.first)
+  expect(f.gateway.rpc.mock.calls.map(row=>row[0])).toEqual(['session/list','session/create','session/list'])
+  vi.advanceTimersByTime(15001);await f.manager.sessions(f.first)
+  expect(f.gateway.rpc.mock.calls.filter(row=>row[0]==='session/list')).toHaveLength(3)
+})
 it('invalidates the catalog around explicit creation without caching or replaying the mutation', async () => {
   const f = fixture(); await f.manager.sessions(f.first)
   expect(await f.manager.createSession(f.first)).toEqual({ sessionId: 'created' })
@@ -130,14 +141,15 @@ it('does not expose arbitrary remote failure text with the saved catalog',async(
   expect(failed.warning).toContain('Showing the last saved list')
   expect(failed.warning).not.toContain('generated-private-remote-detail')
 })
-it('uses the actual open RPC for reachability, validates membership, and never retries a failed write', async () => {
+it('opens through the shared read-only catalog without repeated workspace writes and never retries a failed write', async () => {
   const f = fixture()
+  await f.manager.open(f.first, 'one')
   await f.manager.open(f.first, 'one')
   expect(f.gateway.healthy).not.toHaveBeenCalled()
   await expect(f.manager.open(f.first, 'two')).rejects.toThrow('does not belong')
   f.gateway.rpc.mockRejectedValueOnce(new Error('lost acknowledgement'))
   await expect(f.manager.createSession(f.first)).rejects.toThrow('lost acknowledgement')
-  expect(f.gateway.rpc.mock.calls.map(x => x[0])).toEqual(['workspace/create', 'workspace/create', 'session/create'])
+  expect(f.gateway.rpc.mock.calls.map(x => x[0])).toEqual(['session/list', 'session/create'])
 })
 
 it('schedules only saved histories on existing carriers without relying on a mounted sidebar',async()=>{

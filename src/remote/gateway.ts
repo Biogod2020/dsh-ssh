@@ -20,19 +20,21 @@ import { operationClient } from './operation-client.ts'
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
 const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
+interface BrowserSession { expires:number; sessionId?:string; embedded?:boolean; origin:string; pending?:number; channel?:string; unsafeSockets?:number; frozen?:string; freezeTimer?:ReturnType<typeof setTimeout>; uplinks?:Set<Duplex> }
 
 /** One isolated browser origin per remote Host. All native and plugin HTTP/WS traffic shares it. */
 export class RemoteGateway {
   private server: Server
   private sockets = new Set<Socket>()
   private tickets = new Map<string, { expires: number; sessionId?: string; origin: string }>()
-  private sessions = new Map<string, { expires: number; sessionId?: string; embedded?: boolean; origin: string }>()
+  private sessions = new Map<string, BrowserSession>()
   private upstreamCookie = ''
   private requests = new Map<number, Set<Promise<void>>>()
   private drainWaiters = new Set<() => void>()
   private streams = new Map<number, Set<() => void>>()
   private retired = new Map<number, { stop(): void; drained: boolean }>()
   private healthRead?: { port: number; controller: AbortController; promise: Promise<boolean> }
+  private healthSnapshot?: {port:number;at:number}
   private disposed = false
   private catalogLifetime = new AbortController()
   private workspaceFollower?: { projection: WorkspaceDirectoryProjection; first: Promise<WorkspaceDirectory>; lifetime: AbortController }
@@ -72,6 +74,7 @@ export class RemoteGateway {
     const follower = this.workspaceFollower
     this.workspaceFollower = undefined
     this.localPort = port; this.upstreamCookie = cookie
+    this.healthSnapshot = undefined
     follower?.lifetime.abort()
     this.onCatalogChange()
   }
@@ -146,7 +149,7 @@ export class RemoteGateway {
     target.hostname = 'localhost'
     return req.headers.host === target.host ? target.origin : undefined
   }
-  private authenticated(req: IncomingMessage): { sessionId?: string; embedded?: boolean } | undefined {
+  private authenticated(req: IncomingMessage): BrowserSession | undefined {
     const origin = this.requestOrigin(req)
     if (!origin || (req.headers.origin && req.headers.origin !== origin)
       || req.headers['sec-fetch-site'] === 'cross-site') return undefined
@@ -189,13 +192,16 @@ export class RemoteGateway {
   healthy(): Promise<boolean> {
     if (this.disposed) return Promise.resolve(false)
     const port = this.localPort
+    if(this.healthSnapshot?.port===port&&Date.now()-this.healthSnapshot.at<2500)return Promise.resolve(true)
     if (this.healthRead?.port === port) return this.healthRead.promise
     const controller = new AbortController()
     const read = { port, controller, promise: undefined as unknown as Promise<boolean> }
     read.promise = (async () => {
       try {
         const response = await fetch(`http://127.0.0.1:${port}/`, { headers: { Host: `127.0.0.1:${port}`, Cookie: this.upstreamCookie }, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), redirect: 'manual' })
-        await response.body?.cancel(); return response.status === 200
+        await response.body?.cancel()
+        if(response.status===200&&!this.disposed&&this.localPort===port)this.healthSnapshot={port,at:Date.now()}
+        return response.status === 200
       } catch { return false }
       finally { if (this.healthRead === read) this.healthRead = undefined }
     })()
@@ -319,6 +325,23 @@ export class RemoteGateway {
     }
     const session = this.authenticated(req)
     if (!session) { res.writeHead(401); res.end('Reopen this remote workspace from the local DSH window.'); return }
+    if (url.pathname === '/__dsh_remote/release') {
+      res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store')
+      if (!session.embedded || req.method !== 'POST') { res.writeHead(403); res.end('{}'); return }
+      const body = await readJsonBody(req, { maxBytes: 1024, objectOnly: true }) as { action?:string; token?:string }
+      if(!body||!['freeze','check','thaw'].includes(body.action??'')||Object.keys(body).some(key=>!['action','token'].includes(key))){res.writeHead(400);res.end('{"ok":false}');return}
+      const thaw = () => { clearTimeout(session.freezeTimer); session.frozen = undefined; for (const socket of session.uplinks ?? []) socket.resume() }
+      if (body.action === 'check') { res.end(JSON.stringify({ok:!!session.frozen && body.token === session.frozen && !session.pending})); return }
+      if (body.action === 'thaw' && body.token === session.frozen) { thaw(); res.end('{"ok":true}'); return }
+      if (body.action !== 'freeze' || session.frozen || session.pending || session.unsafeSockets) { res.writeHead(409); res.end(JSON.stringify({ok:false,reason:session.unsafeSockets?'unsupported-socket':session.pending?'pending-http':session.frozen?'already-frozen':'invalid-action'})); return }
+      const tasks = await this.rpc<{items:Array<{running?:boolean}>}>('session/list',{_request:{}})
+      if (!Array.isArray(tasks?.items) || tasks.items.some(row=>row.running) || session.frozen || session.pending || session.unsafeSockets) { res.writeHead(409);res.end(JSON.stringify({ok:false,reason:session.unsafeSockets?'unsupported-socket':session.pending?'pending-http':session.frozen?'already-frozen':'running-agent'}));return }
+      // Browser writes are gated; controller metadata/history readers remain
+      // independent. Pause existing multiplexed uplinks without ending tasks.
+      session.frozen = randomUUID(); for (const socket of session.uplinks ?? []) socket.pause()
+      session.freezeTimer = setTimeout(thaw, 10000); session.freezeTimer.unref()
+      res.end(JSON.stringify({ ok:true, token:session.frozen })); return
+    }
     if (url.pathname === '/__dsh_remote/observations') {
       const reply = (status: number, value: unknown) => {
         res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
@@ -381,6 +404,10 @@ export class RemoteGateway {
       try { draftSeed.draft = await this.drafts.read(this.hostId, initialSessionId); draftSeed.issue = this.drafts.writeIssue }
       catch { draftSeed.issue = 'Saved draft could not be read. Keep existing browser text; no saved file was replaced.' }
     }
+    if (session.frozen) { res.writeHead(409, { 'content-type':'application/json' }); res.end('{"error":"View is being suspended; no operation was dispatched"}'); return }
+    session.pending = (session.pending ?? 0) + 1
+    let browserPending=true
+    const finishBrowserRequest=()=>{if(browserPending){browserPending=false;session.pending!--}}
     const port = this.localPort, release = this.retainRequest(port)
     const upstreamOrigin = `http://127.0.0.1:${port}`
     const changesCatalog = req.method === 'POST' && catalogMutation(url.pathname.replace(/^\/api\//, ''))
@@ -389,6 +416,17 @@ export class RemoteGateway {
       await new Promise<void>((resolve, reject) => {
         const upstream = request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: this.headers(req, url.pathname === '/' && req.method === 'GET') }, incoming => {
           const headers = { ...incoming.headers }; delete headers['set-cookie']
+          // The official hot-module graph is a perpetual read-only SSE feed,
+          // not a dispatched operation. Recognize its exact method/path/type;
+          // all other HTTP (including unknown streams) remains protected.
+          if(req.method==='GET'&&url.pathname==='/plugins/events'&&incoming.statusCode===200
+            &&String(headers['content-type']).toLowerCase().startsWith('text/event-stream')){finishBrowserRequest();release()}
+          if (session.embedded && new URL(this.returnUrl).protocol==='http:' && ['localhost','127.0.0.1'].includes(new URL(this.returnUrl).hostname)) {
+            const parent = new URL(this.returnUrl); if (parent.protocol === 'http:') parent.hostname = new URL(origin).hostname
+            delete headers['x-frame-options']
+            // The authenticated controller is the sole permitted frame owner.
+            headers['content-security-policy'] = (String(headers['content-security-policy'] ?? '').replace(/frame-ancestors[^;]*(;|$)/gi, '') + `; frame-ancestors ${parent.origin}`).replace(/^;\s*/, '')
+          }
           headers['referrer-policy'] = 'no-referrer'
           if (headers.location?.startsWith(upstreamOrigin)) headers.location = headers.location.slice(upstreamOrigin.length) || '/'
           const html = url.pathname === '/' && req.method === 'GET' && incoming.statusCode === 200 && String(headers['content-type']).includes('text/html')
@@ -406,7 +444,7 @@ export class RemoteGateway {
             const returnUrl = new URL(this.returnUrl)
             if (returnUrl.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(returnUrl.hostname)) returnUrl.hostname = new URL(origin).hostname
             const body = remotePage(Buffer.concat(chunks).toString('utf8'), {
-              alias: this.alias, returnUrl: returnUrl.href, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded, draftSeed,
+              alias: this.alias, returnUrl: returnUrl.href, hostId: this.hostId, recoveryProof: this.recoveryProof, sessionId: selected, embedded: session.embedded, draftSeed,channel:session.channel??=randomUUID(),
             })
             res.writeHead(incoming.statusCode ?? 200, headers); res.end(body); resolve()
             } catch (error) { reject(error) }
@@ -417,10 +455,15 @@ export class RemoteGateway {
         res.once('close', () => { upstream.destroy(); resolve() })
         req.pipe(upstream)
       })
-    } finally { if (changesCatalog) this.onCatalogChange(); release() }
+    } finally { finishBrowserRequest(); if (changesCatalog) this.onCatalogChange(); release() }
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    if (!this.authenticated(req)) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return }
+    const session = this.authenticated(req)
+    if (!session || session.frozen) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return }
+    const uplinks = session.uplinks ??= new Set(); uplinks.add(socket)
+    const url=new URL(req.url??'/',session.origin),unsupported=url.pathname!=='/api/remote.mux'||!session.channel||url.searchParams.get('dsh-view-channel')!==session.channel
+    if(unsupported)session.unsafeSockets=(session.unsafeSockets??0)+1
+    socket.once('close', () => {uplinks.delete(socket);if(unsupported)session.unsafeSockets!--})
     const port = this.localPort, release = this.retainStream(port)
     const upstream = request({ hostname: '127.0.0.1', port, path: req.url, headers: this.headers(req) })
     socket.once('error', () => socket.destroy())
@@ -441,6 +484,7 @@ export class RemoteGateway {
   }
   dispose(): void {
     this.disposed = true; this.healthRead?.controller.abort()
+    for (const session of this.sessions.values()) clearTimeout(session.freezeTimer)
     this.catalogLifetime.abort()
     this.server.close(); for (const socket of this.sockets) socket.destroy()
     for (const finish of [...this.drainWaiters]) finish()

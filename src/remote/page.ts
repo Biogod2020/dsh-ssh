@@ -4,6 +4,7 @@ import { embeddedClipboard } from './clipboard-client.ts'
 import { operationTransport } from './operation-client.ts'
 import { createOperationLedger } from './operation-ledger.ts'
 import { createRemoteOperationObserver } from './operation-streams.ts'
+import { viewLifecycle } from './view-lifecycle.ts'
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const jsonScript = (value: unknown) => JSON.stringify(value).replaceAll('<', '\\u003c')
@@ -66,7 +67,7 @@ function connectionLamp(recovery: { returnUrl: string; hostId: string; proof: st
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['lang'] })
   const resize = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : undefined
   if (bar) resize?.observe(bar)
-  const active = () => !disposed && !document.hidden && navigator.onLine
+  const active = () => !disposed && !document.hidden && (window as any).__dshSshVisible !== false && navigator.onLine
   const poll = async () => {
     if (!active()) return
     const current = ++epoch, controller = new AbortController(); request = controller
@@ -91,10 +92,12 @@ function connectionLamp(recovery: { returnUrl: string; hostId: string; proof: st
     if (active()) void poll()
   }
   document.addEventListener('visibilitychange', refresh); window.addEventListener('offline', refresh); window.addEventListener('online', refresh)
+  window.addEventListener('dsh-ssh-visibility',refresh)
   const pageHide = (event: PageTransitionEvent) => {
     if (event.persisted) { clearTimeout(timer); epoch++; request?.abort(); state = 'unknown'; render(); return }
     disposed = true; epoch++; clearTimeout(timer); request?.abort(); observer.disconnect(); resize?.disconnect()
     document.removeEventListener('visibilitychange', refresh); window.removeEventListener('offline', refresh); window.removeEventListener('online', refresh)
+    window.removeEventListener('dsh-ssh-visibility',refresh)
     window.removeEventListener('pageshow', refresh); window.removeEventListener('pagehide', pageHide)
   }
   window.addEventListener('pagehide', pageHide); window.addEventListener('pageshow', refresh)
@@ -102,11 +105,11 @@ function connectionLamp(recovery: { returnUrl: string; hostId: string; proof: st
 }
 
 /** Host identity stays visible while the remote service owns native workspace/session navigation. */
-export function remotePage(html: string, options: { alias: string; returnUrl: string; hostId: string; recoveryProof: string; sessionId?: string; embedded?: boolean; draftSeed?: DraftSeed }): string {
+export function remotePage(html: string, options: { alias: string; returnUrl: string; hostId: string; recoveryProof: string; sessionId?: string; embedded?: boolean; draftSeed?: DraftSeed;channel?:string }): string {
   if (options.draftSeed && (options.draftSeed.hostId !== options.hostId || options.draftSeed.sessionId !== options.sessionId)) throw new Error('Invalid saved draft ownership')
   const init = (options.sessionId ? `<script>localStorage.setItem('dsh.sessions.current',${jsonScript(JSON.stringify({ sessionId: options.sessionId }))});</script>` : '')
     + (options.draftSeed ? `<script>(${seedDraft.toString()})(${jsonScript(options.draftSeed)},true);</script>` : '')
-    + (options.embedded ? `<script>(${operationTransport.toString()})(${jsonScript(options.hostId)},(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}));</script><script>(${embeddedClipboard.toString()})();</script>` : '')
+    + (options.embedded ? `<script>(${operationTransport.toString()})(${jsonScript(options.hostId)},(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}),${jsonScript(options.channel??null)});</script><script>(${embeddedClipboard.toString()})();</script><script>(${viewLifecycle.toString()})(${jsonScript(new URL(options.returnUrl).origin)});</script>` : '')
   const bar = `<div id="dsh-remote-host" data-state="checking" data-recovery="false"${options.embedded ? ' data-desktop="true"' : ''} aria-label="SSH">
     <div class="dsh-remote-identity"><span class="dsh-remote-tag">SSH</span><strong title="${escapeHtml(options.alias)}">${escapeHtml(options.alias)}</strong></div>
     <div class="dsh-remote-connection"><span id="dsh-remote-lamp" role="img" aria-label="SSH checking"></span><span id="dsh-remote-status" role="status" aria-live="polite"></span></div>

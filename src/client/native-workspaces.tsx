@@ -80,6 +80,10 @@ function RemoteSessionMenu({ sessionId, remote, menu, navigate, rename, report }
     }}>{tt('remote.modelSettings')}</MenuItemButton>
     {settings.error && <span role="alert">{tt(settings.error === 'draft' ? 'remote.unsavedDraft' : 'remote.settingsUnavailable')}</span>}
     <MenuItemButton onSelect={() => {
+      menu?.[1](false)
+      void remotePresentation()?.reclaim?.().catch(()=>report(tt('remote.unsavedDraft')))
+    }}>{tt('remote.reclaimViews')}</MenuItemButton>
+    <MenuItemButton onSelect={() => {
       const target = resolveRemoteNavigation(sessionId, remote)
       if (!target) return
       const attempt = ++settingsAttempt.current

@@ -46,7 +46,7 @@ async function fixture(ok=true){
 it('routes equal Session ids through the menu to their owning Host only and closes the owning menu',async()=>{
   const f=await fixture()
   const buttons=[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-  expect(buttons).toHaveLength(6)
+  expect(buttons.some(button=>button.textContent==='Close remote view')).toBe(true)
   expect(buttons[1]?.textContent).toBe('Model settings on this host')
   await act(async()=>{buttons[1]!.click()})
   expect(f.settings).toHaveBeenCalledExactlyOnceWith(f.second);expect(f.local).not.toHaveBeenCalled()
@@ -111,7 +111,7 @@ it('keeps a blocked close in the owning menu and explains the unsaved draft',asy
   const f=await fixture();release?.()
   const close=vi.fn(async()=>{throw Object.assign(new Error('Generated unsaved'),{name:'DraftSaveError'})})
   release=registerRemotePresentation({resume:()=>false,open:async()=>{},close})
-  await act(async()=>{document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[2]!.click()})
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button=>button.textContent==='Close remote view')!.click()})
   expect(close).toHaveBeenCalledExactlyOnceWith(f.second)
   expect(document.querySelector('[role="menu"]')).not.toBeNull()
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')

@@ -28,6 +28,17 @@ it('preserves method receiver, yielded values and final value until actual itera
   expect(await stream.next()).toEqual({ done: false, value: 7 }); expect(f.ledger.inspection().pendingRequests).toBe(1)
   expect(await stream.next()).toEqual({ done: true, value: 9 }); expect(f.ledger.inspection()).toMatchObject({ pendingRequests: 0, unconfirmedOperations: 0 })
 })
+it('releases the pinned Host control observer without treating a terminal stream as read-only',async()=>{
+  const f=fixture(),remote={openRemoteStream:(_endpoint:string)=>(async function*(){yield {type:'baseline'}})(),events:{answer:async()=>{}}}
+  f.observer.attach(remote)
+  const control=remote.openRemoteStream('session/control');await control.next()
+  expect(f.observer.inspection()).toMatchObject({observedStreams:1,observedReadSubscriptions:1})
+  expect(f.ledger.inspection().pendingRequests).toBe(0)
+  const terminal=remote.openRemoteStream('terminal/attach');await terminal.next()
+  expect(f.ledger.inspection().pendingRequests).toBe(1)
+  await control.return(undefined);await terminal.return(undefined)
+  expect(f.ledger.inspection().unconfirmedOperations).toBe(1)
+})
 it('does not call a queued return completed while the SDK iterator is still handling an item', async () => {
   const f = fixture(), wait = deferred<number>()
   const remote = { openRemoteStream(_endpoint: string) { return (async function* () { yield await wait.promise })() }, events: { answer: async () => {} } }

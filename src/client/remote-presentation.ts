@@ -6,6 +6,7 @@ export interface RemotePresentation {
   beforeLeave?(): Promise<void>
   close?(workspace: RemoteWorkspace): void | Promise<void>
   settings?(workspace:RemoteWorkspace):boolean|Promise<boolean>
+  reclaim?():Promise<void>
   preview?(workspace: RemoteWorkspace, sessionId: string, signal?: AbortSignal): Promise<void>
   previewFailed?(workspace: RemoteWorkspace): void
 }

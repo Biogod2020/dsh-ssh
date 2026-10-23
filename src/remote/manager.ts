@@ -441,7 +441,9 @@ export class RemoteWorkspaces {
     ])
       .then(([workspaces, sessions]) => {
         if (!Array.isArray(workspaces.items) || !Array.isArray(workspaces.archivedSessionIds) || !Array.isArray(sessions.items)) throw new Error('Remote catalog is incompatible')
-        const checkedAt = Date.now(); entry.expiresAt = checkedAt + 2000
+        // Active work keeps the short status cadence. Quiet Hosts share a
+        // longer snapshot; mutations and directory pushes still invalidate it.
+        const checkedAt = Date.now(); entry.expiresAt = checkedAt + (sessions.items.some(row => row.running) ? 2000 : 15000)
         const catalog = { workspaces, sessions, checkedAt, revision }
         this.assertCatalogCurrent(runtime, catalog)
         return catalog
@@ -523,11 +525,15 @@ export class RemoteWorkspaces {
   }
   async open(id: string, preferredSessionId?: string, hostname?: 'localhost'): Promise<{ url: string; sessionId: string }> {
     const { item, runtime, check } = await this.connectedWorkspace(id)
-    const value = await runtime.gateway.rpc<{ workspace: { sessionIds: string[] } }>('workspace/create', { request: { path: item.remotePath } })
-    check()
     if (preferredSessionId !== undefined && (!preferredSessionId || preferredSessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(preferredSessionId))) throw new Error('Invalid remote session identity')
-    if (preferredSessionId && !value.workspace.sessionIds.includes(preferredSessionId)) throw new Error('Session does not belong to this remote workspace')
-    let sessionId = preferredSessionId ?? value.workspace.sessionIds.at(-1)
+    const members=await this.withCatalog(runtime,catalog=>{
+      check()
+      const workspace=catalog.workspaces.items.find(row=>row.workspaceId===item.workspaceId)
+      if(!workspace)throw new Error('Remote workspace is no longer available')
+      if(preferredSessionId&&!workspace.sessionIds.includes(preferredSessionId))throw new Error('Session does not belong to this remote workspace')
+      return workspace.sessionIds
+    })
+    let sessionId = preferredSessionId ?? members.at(-1)
     if (!sessionId) {
       this.invalidateCatalog(runtime)
       try { sessionId = (await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })).sessionId }

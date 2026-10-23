@@ -8,10 +8,10 @@ import { createRemoteOperationObserver } from '../src/remote/operation-streams.t
 const target=window as any
 afterEach(()=>{window.dispatchEvent(new Event('pagehide'));vi.restoreAllMocks();vi.unstubAllGlobals();
   for(const name of ['__DSH_TRANSPORT__','__dshSshOperations','__dshSshView','__ModuleLoader__','__dshSshOperationOwner'])delete target[name]})
-function fixture(){
+function fixture(channel?:string){
   const send=vi.fn(), originalSocket=WebSocket;vi.stubGlobal('fetch',send)
   target.__dshSshView={state:()=>({sessionId:'generated-session'})}
-  new Function(`(${operationTransport.toString()})('aaaaaaaaaaaaaaaaaaaaaaaa',(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}));`)()
+  new Function(`(${operationTransport.toString()})('aaaaaaaaaaaaaaaaaaaaaaaa',(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}),${JSON.stringify(channel)});`)()
   const api=target.__dshSshOperations, transport=target.__DSH_TRANSPORT__
   const rpc={async call(_channel:unknown,endpoint:unknown,payload:unknown){
     if(endpoint==='local-rejection')throw Error('Generated preflight rejection')
@@ -21,6 +21,20 @@ function fixture(){
   }}
   return{send,api,transport,rpc,originalSocket}
 }
+it('protects unregistered socket writes and permits reclaim after a real terminal stream ends',async()=>{
+  class Socket extends EventTarget {send=vi.fn()}
+  vi.stubGlobal('WebSocket',Socket)
+  const f=fixture('generated-channel');f.api.attach(f.rpc)
+  f.api.attachRemote({openRemoteStream:()=>(async function*(){})(),events:{answer:async()=>{}}})
+  f.send.mockResolvedValue(Response.json({receipts:[]}))
+  const socket=f.transport.createWebSocket('ws://localhost/api/stream')
+  socket.send(JSON.stringify({type:'open',streamId:'terminal-1',endpoint:'terminal/attach'}))
+  expect(await f.api.freeze()).toBeNull();expect(f.api.releaseBlock).toBe('pending-socket')
+  socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'end',streamId:'terminal-1'})}))
+  const token=await f.api.freeze();expect(token).toBeTypeOf('string');f.api.thaw(token)
+  socket.send(JSON.stringify({type:'item',streamId:'unregistered',value:'generated-input'}))
+  expect(await f.api.freeze()).toBeNull();expect(f.api.releaseBlock).toBe('pending-socket')
+})
 it('observes a full unary Promise without patching global transports or claiming full page coverage',async()=>{
   const f=fixture(),original=f.rpc.call,stop=f.api.attach(f.rpc)
   let finish!:(value:object)=>void,reading!:()=>void
@@ -35,7 +49,7 @@ it('observes a full unary Promise without patching global transports or claiming
   finish({ok:true,value:'generated-result'});expect(await pending).toEqual({ok:true,value:'generated-result'})
   expect(f.api.inspection().unary.observedPendingRequests).toBe(0)
   expect(f.send.mock.calls[0][1].body).toBe(JSON.stringify(payload))
-  expect(f.api.freeze).toBeUndefined();stop();expect(f.rpc.call).toBe(original)
+  expect(await f.api.freeze()).toBeNull();stop();expect(f.rpc.call).toBe(original)
 })
 it('preserves preflight and transport rejection without issuing a retry',async()=>{
   const f=fixture();f.api.attach(f.rpc)
@@ -71,6 +85,22 @@ it('does not mistake unbound multipart metadata for finished SDK binary decoding
   f.send.mockResolvedValue(response);await f.transport.fetch('/api/files/read',{method:'POST',body:'{}'});await response.formData()
   expect(f.api.inspection().unary.observedPendingRequests).toBe(1)
   expect(f.api.inspection().automaticReleaseEligible).toBe(false)
+})
+it('does not pin an idle view on the official module-graph SSE observer',async()=>{
+  const f=fixture();f.send.mockResolvedValue(new Response(': connected\n\n',{headers:{'content-type':'text/event-stream'}}))
+  await f.transport.fetch('/plugins/events',{method:'GET'})
+  expect(f.api.inspection().unary.observedPendingRequests).toBe(0)
+  expect(f.api.inspection().fullCoverage).toBe(false)
+})
+it.each([true,false])('correlates complete startup RPC envelopes before saving an unknown observation (matching=%s)',async matching=>{
+  const f=fixture(),message={type:'client-request',rpcId:'generated-rpc-id',method:'session/list',payload:{args:{}}}
+  f.send.mockResolvedValueOnce(Response.json({type:'server-response',rpcId:matching?message.rpcId:'different-rpc-id',result:{ok:true,value:{items:[]}}}))
+  const response=await f.transport.fetch('/api/session/list',{method:'POST',body:JSON.stringify(message)});await response.json()
+  await new Promise(resolve=>setTimeout(resolve,0))
+  f.api.attach(f.rpc);f.api.attachRemote({openRemoteStream:()=>(async function*(){})(),events:{answer:async()=>{}}})
+  let saved=0
+  f.send.mockImplementation(async(_url,options)=>{const records=JSON.parse(options.body).records;saved+=records.length;return Response.json({receipts:records.map((record:any)=>({observationId:record.observationId,status:'saved'}))})})
+  expect(await f.api.freeze()).toBeTypeOf('string');expect(saved).toBe(matching?0:1)
 })
 it('ends startup JSON observations after text/clone consumption while preserving Response receiver semantics',async()=>{
   const f=fixture(),response=new Response('{"generated":true}',{headers:{'content-type':'application/json'}})

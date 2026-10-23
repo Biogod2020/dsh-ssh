@@ -772,6 +772,7 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 .desktopWorkspaceTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .desktopWorkspaceBody { flex: 1; min-height: 0; display: flex; }
 .desktopWorkspaceGuest { width: 100%; height: 100%; flex: 1; min-width: 0; border: 0; }
+.desktopPoolStatus { margin: 0; padding: 4px 12px; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
 .desktopHistory { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
 .desktopHistory[hidden], .desktopWorkspaceBody[hidden] { display: none; }
 .savedHistory { max-width: 1000px; margin: 0 auto; }

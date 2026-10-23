@@ -4,10 +4,10 @@ import type { createRemoteOperationObserver } from './operation-streams.ts'
 /** Install before Connection construction. Only the default SDK's composition
  * is decorated; globals.fetch, globals.WebSocket and the Context stay intact.
  * This first contribution observes unary calls, not full view quiescence. */
-export function operationTransport(hostId: string, makeLedger: typeof createOperationLedger, makeRemote?: typeof createRemoteOperationObserver): void {
+export function operationTransport(hostId: string, makeLedger: typeof createOperationLedger, makeRemote?: typeof createRemoteOperationObserver, channel?:string): void {
   type Rpc = { call(...args: unknown[]): Promise<unknown> }
   type Pending = { dispatched(): void; finish(confirmed: boolean): void }
-  type Api = { hostId: string; attach(rpc: Rpc): () => void; attachRemote(remote: unknown): () => void; inspection(): object }
+  type Api = { hostId: string; releaseBlock?:string; attach(rpc: Rpc): () => void; attachRemote(remote: unknown): () => void; inspection(): object; freeze(): Promise<string | null>; thaw(token:string):boolean; commit(token:string):boolean }
   const target = window as unknown as {
     __DSH_TRANSPORT__?: Record<string, unknown>
     __dshSshOperations?: Api
@@ -18,6 +18,9 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
   let pending = 0, current: Pending | undefined
   let binding: { rpc: Rpc; call: Rpc['call']; restore(): void } | undefined
   let owned: Record<string, unknown> | undefined, supported = false, rpcAttached = false, scopedFetchObserved = false
+  const sockets=new Set<{streams:Map<string,string>;opaque:boolean}>()
+  const readOnly=(endpoint:string)=>['$events','session/follow','workspace/follow','session/control','account/watch','account/watchExpiry','remoteAccess/follow','job/list','job/follow'].includes(endpoint)
+  const ownsBinding=()=>!!binding&&Object.getOwnPropertyDescriptor(binding.rpc,'call')?.value===binding.call
   const category = (endpoint: unknown) => {
     const prefix = typeof endpoint === 'string' ? endpoint.split('/')[0] : ''
     if (prefix === 'session' || prefix === 'workspace' || prefix === 'terminal' || prefix === 'files' || prefix === 'settings') return prefix
@@ -41,8 +44,29 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
   const remote = makeRemote?.(endpoint => ledger.reserve(category(endpoint), 'stream', selected()), invalidate)
   const api: Api = {
     hostId,
+    async freeze() {
+      const state = remote?.inspection()
+      api.releaseBlock=!supported||!ownsBinding()||target.__DSH_TRANSPORT__!==owned||!rpcAttached?'client-composition'
+        :!state?.streamDecoratorAttached||!state.answerDecoratorAttached?'stream-composition'
+        :state.observedWaitingAnswers!==0?'waiting-answer':state.observedStreams!==state.observedReadSubscriptions?'active-stream':pending!==0?'pending-rpc'
+        :[...sockets].some(socket=>socket.opaque||[...socket.streams.values()].some(endpoint=>!readOnly(endpoint)))?'pending-socket':undefined
+      if(api.releaseBlock)return null
+      // The gateway freezes all document HTTP and socket uplinks as the other
+      // half of this barrier. This does not promote ordinary sampling to proof.
+      ledger.coverage(true)
+      const token = ledger.freeze()
+      const saved = await ledger.seal(token, async records => {
+        const response = await fetch('/__dsh_remote/observations', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ records }), signal:AbortSignal.timeout(3000) })
+        if (!response.ok) throw new Error('Observation save failed')
+        return (await response.json()).receipts
+      })
+      if (!saved) { api.releaseBlock='unconfirmed-operation';ledger.thaw(token); return null }
+      return token
+    },
+    thaw: token => ledger.thaw(token),
+    commit: token => ledger.commitRelease(token),
     inspection() {
-      if (!supported || !binding || binding.rpc.call !== binding.call || target.__DSH_TRANSPORT__ !== owned) invalidate()
+      if (!supported || !ownsBinding() || target.__DSH_TRANSPORT__ !== owned) invalidate()
       return { version: 1, scope: 'partial-client-observation', fullCoverage: false, automaticReleaseEligible: false,
         pendingRequests: null, unconfirmedOperations: null,
         unary: { observedPendingRequests: pending, rpcDecoratorAttached: rpcAttached, scopedFetchObserved },
@@ -75,7 +99,7 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
       try { Object.defineProperty(rpc, 'call', { ...descriptor, value: call }) }
       catch { return () => {} }
       const owner = { rpc, call, restore() {
-        if (rpc.call === call) try { Object.defineProperty(rpc, 'call', descriptor) } catch { /* A future immutable instance stays partial. */ }
+        if (Object.getOwnPropertyDescriptor(rpc,'call')?.value === call) try { Object.defineProperty(rpc, 'call', descriptor) } catch { /* A future immutable instance stays partial. */ }
       } }
       // Binding one RPC instance is partial observation, never proof that all
       // logical streams, incoming questions and resource owners are idle.
@@ -100,17 +124,37 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
   const observedFetch: typeof fetch = async (input, init) => {
     if (target.__DSH_TRANSPORT__ !== owned) invalidate()
     const bound = current, entry = bound ?? reserve('other')
+    const requestUrl=new URL(typeof input==='string'||input instanceof URL?String(input):input.url,location.href)
+    const method=init?.method??(typeof input==='object'&&'method' in input?input.method:'GET')
+    const moduleEvents=method.toUpperCase()==='GET'&&requestUrl.origin===location.origin&&requestUrl.pathname==='/plugins/events'
+    let requestId:string|undefined
+    if(!bound&&requestUrl.origin===location.origin&&method.toUpperCase()==='POST'&&typeof init?.body==='string')try{
+      const message=JSON.parse(init.body)
+      if(message.type==='client-request'&&typeof message.rpcId==='string'&&message.rpcId.length<=256&&typeof message.method==='string'
+        &&requestUrl.pathname==='/api/'+message.method)requestId=message.rpcId
+    }catch{/* Preserve unknown request shapes. */}
+    const acknowledged=(value:any)=>!!requestId&&!init?.signal?.aborted&&value?.type==='server-response'&&value.rpcId===requestId
+      &&value.result&&typeof value.result==='object'&&!Array.isArray(value.result)&&(value.result.ok===true
+        ||value.result.ok===false&&typeof value.result.error?.code==='string'&&typeof value.result.error.message==='string'
+          &&value.result.error.details&&typeof value.result.error.details==='object'&&!Array.isArray(value.result.error.details))
     if (bound) scopedFetchObserved = true
     // A caller captured before the public RPC decorator cannot be presented
     // as completely covered by that decorator.
-    if (!bound) invalidate()
+    if (!bound&&!moduleEvents) invalidate()
     try {
       entry.dispatched()
       const response = await send(input, init)
       if (bound) return response
+      if(moduleEvents
+        &&response.status===200&&response.headers.get('content-type')?.toLowerCase().startsWith('text/event-stream')){
+        // A known module-graph observer has no operation acknowledgement to
+        // await. Its open SSE body must not pin the entire remote renderer.
+        entry.finish(true);return response
+      }
       // Startup calls are tracked before the Client contribution can mount.
-      // JSON consumption is only an ended *unknown* observation, never proof
-      // of a validated SDK acknowledgement. Unbound multipart stays protected.
+      // Correlate a complete JSON envelope using the pinned SDK's exact
+      // acknowledgement rules. Other JSON bodies stay unknown; multipart
+      // still waits for the SDK's complete binary decoding.
       if (!response.ok) { setTimeout(() => entry.finish(false), 0); return response }
       if (response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase() === 'application/json') {
         const watched = new WeakSet<Response>()
@@ -122,8 +166,12 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
             if (typeof consume !== 'function') continue
             try {
               Object.defineProperty(body, name, { configurable: true, writable: true, value: async function (this: Response, ...args: unknown[]) {
-                try { return await consume.apply(this, args) }
-                finally { if (this === body) setTimeout(() => entry.finish(false), 0) }
+                let confirmed=false
+                try {
+                  const value=await consume.apply(this,args)
+                  if(this===body)try{confirmed=!!acknowledged(name==='json'?value:name==='text'?JSON.parse(value):undefined)}catch{/* Keep unknown. */}
+                  return value
+                } finally { if (this === body) setTimeout(() => entry.finish(confirmed), 0) }
               } })
             } catch { invalidate() }
           }
@@ -139,7 +187,34 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
       return response
     } catch (error) { if (!bound) entry.finish(false); throw error }
   }
-  try { owned = { ...base, fetch: observedFetch }; target.__DSH_TRANSPORT__ = owned; supported = true }
+  const createWebSocket=(value:string|URL)=>{
+    const url=new URL(value);if(channel)url.searchParams.set('dsh-view-channel',channel)
+    const socket=new WebSocket(url),state={streams:new Map<string,string>(),opaque:false},sendFrame=socket.send
+    sockets.add(state)
+    socket.send=function(this:WebSocket,data:string|ArrayBufferLike|Blob|ArrayBufferView){
+      if(this!==socket)return sendFrame.call(this,data)
+      const frozen=ledger.inspection();if(frozen.frozen||frozen.closed)throw new Error('View dispatch is frozen')
+      try{
+        if(typeof data!=='string')state.opaque=true
+        else{
+          const frame=JSON.parse(data)
+          if(frame.type==='open'){
+            if(typeof frame.streamId!=='string'||typeof frame.endpoint!=='string'||state.streams.size>=4096)state.opaque=true
+            else state.streams.set(frame.streamId,frame.endpoint)
+          }else if(frame.type!=='cancel'&&frame.type!=='ping'){
+            // Unknown uplinks and writes on an alleged observation cannot prove
+            // quiescence, even when the stream never completed registration.
+            if(!state.streams.has(frame.streamId)||readOnly(state.streams.get(frame.streamId)!))state.opaque=true
+          }
+        }
+      }catch{state.opaque=true}
+      return sendFrame.call(this,data)
+    }
+    socket.addEventListener('message',event=>{if(typeof event.data==='string')try{const frame=JSON.parse(event.data);if(frame.type==='end'||frame.type==='error')state.streams.delete(frame.streamId)}catch{/* Retain unknown frames. */}})
+    socket.addEventListener('close',()=>sockets.delete(state),{once:true})
+    return socket
+  }
+  try { owned = { ...base, fetch: observedFetch,...(channel?{createWebSocket}:{}) }; target.__DSH_TRANSPORT__ = owned; supported = true }
   catch { invalidate() }
 }
 

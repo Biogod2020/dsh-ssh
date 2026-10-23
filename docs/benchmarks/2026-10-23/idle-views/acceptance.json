@@ -1,0 +1,72 @@
+{
+  "version": "0.3.24-jay.41",
+  "dsh": "0.2.1-rc.2",
+  "interface": "dsh web in Codex built-in browser",
+  "fixture": {
+    "generated": true,
+    "logicalHosts": 4,
+    "physicalSshServers": 1,
+    "modelGenerationRequests": 0,
+    "desktopGuiOperated": false
+  },
+  "archiveSha256": "491f5071081b8259b634a7997b0ab366973a37b651ed85c70629ac2ca62eb689",
+  "archiveBytes": 1369630,
+  "runtimeJsSha256": {
+    "lib/index.js": "512e973db8197cbddd7a216328d3ccbbcf67ddb232d4c8ae4a37012de3d2c898",
+    "lib/client.js": "0c8a00faa757d0545db4087d380ff6a78aa1c4ba0249225778e2acd501b8eb65",
+    "lib/invariant.js": "c73ec4fd28f60d296fa2ad163e707f1115ba25730e6857d9d7f9a11564c0e5a7"
+  },
+  "installedJsMatches": true,
+  "developmentLink": false,
+  "preservedFixtureFilesOnArchiveInstall": 40,
+  "manualRelease": {
+    "before": 2,
+    "after": 1,
+    "restoredHistory": true,
+    "restoredChineseEmojiDraft": true
+  },
+  "terminalProtection": {
+    "manualReleased": 0,
+    "manualKept": 1,
+    "automaticRetainedAliases": [
+      "view-a",
+      "view-d"
+    ],
+    "sameShellPid": 11076,
+    "sameShellStartedAt": "2026-10-23 06:59:06",
+    "sameRemoteServicePid": 97557,
+    "sameRemoteServiceStartedAt": "2026-10-23 06:08:26"
+  },
+  "controllerRestart": {
+    "readDiskHistoryBeforeSshReconnect": true,
+    "draftRestoredOnNewGatewayOrigin": true,
+    "remoteServiceNotRestarted": true
+  },
+  "renameImmediatelyReflected": true,
+  "fullReplyCopyPreservesChineseEmojiCodeFence": true,
+  "checks": {
+    "testFiles": 102,
+    "tests": 947,
+    "typecheck": true,
+    "build": true,
+    "archive": true,
+    "isolatedRc21Runtime": true
+  },
+  "geminiReviews": [
+    {
+      "requested_model": "gemini-3.8-flash-high",
+      "returned_model": "gemini-3.8-flash-n",
+      "elapsed_seconds": 165.0,
+      "prompt_sha256": "5a03e38a92daa814b2083290fdb14b653a019f0f2bcdca649e22bd4f47e648ee",
+      "nonempty_response": true
+    },
+    {
+      "requested_model": "gemini-3.8-flash-high",
+      "returned_model": "gemini-3.8-flash-n",
+      "elapsed_seconds": 105.71,
+      "prompt_sha256": "3c8dc7942009856593e246c9655a8669a72b2c2e1cbb786dd6b4556d56d5482d",
+      "nonempty_response": true
+    }
+  ],
+  "publishedArchiveRecordedSeparately": true
+}
