@@ -16,5 +16,16 @@
   "webEditorDraftRestoredAcrossGatewayOriginChange": true,
   "remoteProcessIdentityPreserved": true,
   "modelRequests": 0,
-  "desktopAppOperated": false
+  "desktopAppOperated": false,
+  "publishedArchiveSha256": "e2e61a18de143ab26f0d52994084be1c83513e59ed5f02070a8360df67ac6cba",
+  "ciRuntimeJsMatchesTestedWeb": true,
+  "githubReleaseArchiveMatchesCI": true,
+  "actualFinalWebSessionRowActions": [
+    "pin",
+    "rename",
+    "archive",
+    "unarchive"
+  ],
+  "ciRun": "https://github.com/Biogod2020/dsh-ssh/actions/runs/39948729558",
+  "macOsRegistryNameInstallPassed": true
 }

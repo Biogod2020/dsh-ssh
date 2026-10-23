@@ -1,0 +1,21 @@
+{
+  "sync": {
+    "status": 201
+  },
+  "registries": [
+    {
+      "registry": "https://registry.npmjs.org",
+      "version": "0.3.24-jay.40",
+      "bytes": 1353208,
+      "integrity": "sha512-ms+Op5V5+cyglB8wYehxAw45wLmHIEqXW20irKMxXC2sbM8xxaJLySjBQeFIRFleAvPKzBGNnnPWpkR6BThaQg==",
+      "downloadHost": "registry.npmjs.org"
+    },
+    {
+      "registry": "https://registry.npmmirror.com",
+      "version": "0.3.24-jay.40",
+      "bytes": 1353208,
+      "integrity": "sha512-ms+Op5V5+cyglB8wYehxAw45wLmHIEqXW20irKMxXC2sbM8xxaJLySjBQeFIRFleAvPKzBGNnnPWpkR6BThaQg==",
+      "downloadHost": "cdn.npmmirror.com"
+    }
+  ]
+}

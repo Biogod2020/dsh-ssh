@@ -79,3 +79,12 @@ jay.38 的首次 CI 因旧终端连续性测试的定时器竞态失败，未执
 ## 开发候选的性能基线读取
 
 新测量固定读取 jay.39 的不可变提交与 Git blob，通过 GitHub API 下载并校验对象哈希。读取有明确超时，不在性能步骤执行无期限的额外 Git fetch。原始测量 JSON 由工作流保存；失败或超时的任务不算全量验收通过。
+
+
+## 2026-10-23 — jay.40 核心发行
+
+[发行流水线 39948729558](https://github.com/Biogod2020/dsh-ssh/actions/runs/39948729558) 的 verify、OIDC publish 和 verify-installation 全部成功。完整 934 项、类型/构建/产物、三个运行时、磁盘历史补差/重启/回退及真实 SSH 断线通过；按本次核心交付范围，较慢压力专项留作手动按需运行。
+
+[GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.40)、npm 与实际国内镜像 CDN 均匹配 CI 文件：1,353,208 字节，SHA256 `e2e61a18de143ab26f0d52994084be1c83513e59ed5f02070a8360df67ac6cba`。macOS 另完成官方源按包名安装到 DSH 0.2.1-rc.2 的隔离验收。
+
+本轮真实 `dsh web` 交互涵盖本地/远端草稿切换、消息/代码复制、置顶/重命名/归档/恢复、远端模型表单、重启后未连接 SSH 读取磁盘历史，以及新端口上的实际编辑器草稿恢复。没有操作 Desktop App、发起新模型请求或启用自动视图回收。[截图及准确安装包来源](benchmarks/2026-10-23/dshweb-core/README.md)。

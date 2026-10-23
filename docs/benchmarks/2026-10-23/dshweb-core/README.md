@@ -24,3 +24,9 @@ The Web controller sidebar groups local and remote projects; remote conversation
 ![Real editor draft restored on a new gateway origin](restored-draft.jpg)
 
 [Targeted Gemini review and implemented decisions](review.md).
+
+The final candidate also completed pin, rename, archive and unarchive from the actual Web controller sidebar.
+
+![Real Web Session row actions](row-actions.jpg)
+
+Published archive: `e2e61a18de143ab26f0d52994084be1c83513e59ed5f02070a8360df67ac6cba` (1,353,208 bytes). CI runtime JS matches the Web-tested archive byte for byte. GitHub Release, npm and the actual mainland mirror CDN match the same CI archive; [registry verification](published-registries.json). The [release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/39948729558) finished verify, OIDC publish and by-name installation successfully. macOS also passed an isolated npm-by-name installation in DSH 0.2.1-rc.2.
