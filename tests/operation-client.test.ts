@@ -3,6 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createOperationLedger } from '../src/remote/operation-ledger.ts'
 import { operationTransport, operationClient } from '../src/remote/operation-client.ts'
 import { Context } from '@deepseek-ai/cordis'
+import { createRemoteOperationObserver } from '../src/remote/operation-streams.ts'
 
 const target=window as any
 afterEach(()=>{window.dispatchEvent(new Event('pagehide'));vi.restoreAllMocks();vi.unstubAllGlobals();
@@ -10,7 +11,7 @@ afterEach(()=>{window.dispatchEvent(new Event('pagehide'));vi.restoreAllMocks();
 function fixture(){
   const send=vi.fn(), originalSocket=WebSocket;vi.stubGlobal('fetch',send)
   target.__dshSshView={state:()=>({sessionId:'generated-session'})}
-  new Function(`(${operationTransport.toString()})('aaaaaaaaaaaaaaaaaaaaaaaa',(${createOperationLedger.toString()}));`)()
+  new Function(`(${operationTransport.toString()})('aaaaaaaaaaaaaaaaaaaaaaaa',(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}));`)()
   const api=target.__dshSshOperations, transport=target.__DSH_TRANSPORT__
   const rpc={async call(_channel:unknown,endpoint:unknown,payload:unknown){
     if(endpoint==='local-rejection')throw Error('Generated preflight rejection')
@@ -106,7 +107,7 @@ it('owns its binding through a page fiber instead of replacing a Context service
   new Function(`(${operationClient.toString()})();`)()
   const scoped={get:(name:string)=>name==='connection'?{rpc:f.rpc}:undefined,effect:(fn:()=>()=>void)=>cleanup.push(fn())}
   const owner={dispose:()=>cleanup.splice(0).forEach(fn=>fn())}
-  const ctx={...scoped,root:{inject:(deps:string[],apply:(ctx:unknown)=>void)=>{expect(deps).toEqual(['connection']);apply(scoped);return owner}}}
+  const ctx={...scoped,root:{inject:(deps:string[],apply:(ctx:unknown)=>void)=>{expect([['connection'],['remote']]).toContainEqual(deps);apply(scoped);return owner}}}
   modules[0].factory().apply(ctx);expect(f.rpc.call).not.toBe(original)
   window.dispatchEvent(new Event('pagehide'));expect(f.rpc.call).toBe(original)
   expect(fetch).toBe(f.send)
@@ -137,4 +138,13 @@ it('survives entry disposal in real Cordis and releases its RPC binding with the
     expect(target.__dshSshOperationOwner.root).toBe(ctx.root)
   }finally{await ctx.fiber.dispose()}
   expect(f.rpc.call).toBe(original);expect(target.__dshSshOperationOwner).toBeUndefined()
+})
+it('preserves a custom worker transport Remote as well as its RPC composition',()=>{
+  fixture();delete target.__dshSshOperations
+  const base={openStream:async function*(){yield 'generated-worker-item'}},remote={openRemoteStream:()=>base.openStream(),events:{answer:async()=>{}}}
+  const stream=remote.openRemoteStream,answer=remote.events.answer
+  target.__DSH_TRANSPORT__=base;operationTransport('a'.repeat(24),createOperationLedger,createRemoteOperationObserver)
+  const stop=target.__dshSshOperations.attachRemote(remote)
+  expect(target.__DSH_TRANSPORT__).toBe(base);expect(remote.openRemoteStream).toBe(stream);expect(remote.events.answer).toBe(answer)
+  expect(target.__dshSshOperations.inspection().logical.streamDecoratorAttached).toBe(false);stop()
 })

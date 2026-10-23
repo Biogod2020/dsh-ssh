@@ -3,6 +3,7 @@ import { seedDraft, type DraftSeed } from './draft-client.ts'
 import { embeddedClipboard } from './clipboard-client.ts'
 import { operationTransport } from './operation-client.ts'
 import { createOperationLedger } from './operation-ledger.ts'
+import { createRemoteOperationObserver } from './operation-streams.ts'
 
 const escapeHtml = (text: string) => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 const jsonScript = (value: unknown) => JSON.stringify(value).replaceAll('<', '\\u003c')
@@ -105,7 +106,7 @@ export function remotePage(html: string, options: { alias: string; returnUrl: st
   if (options.draftSeed && (options.draftSeed.hostId !== options.hostId || options.draftSeed.sessionId !== options.sessionId)) throw new Error('Invalid saved draft ownership')
   const init = (options.sessionId ? `<script>localStorage.setItem('dsh.sessions.current',${jsonScript(JSON.stringify({ sessionId: options.sessionId }))});</script>` : '')
     + (options.draftSeed ? `<script>(${seedDraft.toString()})(${jsonScript(options.draftSeed)},true);</script>` : '')
-    + (options.embedded ? `<script>(${operationTransport.toString()})(${jsonScript(options.hostId)},(${createOperationLedger.toString()}));</script><script>(${embeddedClipboard.toString()})();</script>` : '')
+    + (options.embedded ? `<script>(${operationTransport.toString()})(${jsonScript(options.hostId)},(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}));</script><script>(${embeddedClipboard.toString()})();</script>` : '')
   const bar = `<div id="dsh-remote-host" data-state="checking" data-recovery="false"${options.embedded ? ' data-desktop="true"' : ''} aria-label="SSH">
     <div class="dsh-remote-identity"><span class="dsh-remote-tag">SSH</span><strong title="${escapeHtml(options.alias)}">${escapeHtml(options.alias)}</strong></div>
     <div class="dsh-remote-connection"><span id="dsh-remote-lamp" role="img" aria-label="SSH checking"></span><span id="dsh-remote-status" role="status" aria-live="polite"></span></div>

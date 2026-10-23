@@ -148,12 +148,17 @@ it('samples only bounded lifecycle metadata and renderer heap estimates, includi
     expect(first.drafts).toMatchObject({pendingUnmountSaves:1,failedUnmountSaves:2,sessions:[{hasAttachments:true}]})
     expect(first.lifecycle).toEqual({scope:'observation-only',pendingRequests:null,unconfirmedOperations:null})
     expect(JSON.stringify(first)).not.toContain(privateText);expect(JSON.stringify(first)).not.toContain('private-generated-address')
-    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'unary-observation',fullCoverage:false,automaticReleaseEligible:false,
+    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'partial-client-observation',fullCoverage:false,automaticReleaseEligible:false,
       pendingRequests:null,unconfirmedOperations:null,unary:{observedPendingRequests:2,rpcDecoratorAttached:true,scopedFetchObserved:true,privateText}})})
-    expect(bridge.inspection().lifecycle).toEqual({scope:'unary-observation',pendingRequests:null,unconfirmedOperations:null,
+    expect(bridge.inspection().lifecycle).toEqual({scope:'partial-client-observation',pendingRequests:null,unconfirmedOperations:null,
       unary:{observedPendingRequests:2,rpcDecoratorAttached:true,scopedFetchObserved:true}})
     expect(JSON.stringify(bridge.inspection().lifecycle)).not.toContain(privateText)
-    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'unary-observation',fullCoverage:true,pendingRequests:0})})
+    const logical={scope:'logical-client-observation',observedStreams:2,observedEventSubscriptions:1,observedWaitingAnswers:1,streamDecoratorAttached:true,answerDecoratorAttached:true}
+    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'partial-client-observation',fullCoverage:false,automaticReleaseEligible:false,
+      pendingRequests:null,unconfirmedOperations:null,unary:{observedPendingRequests:0,rpcDecoratorAttached:true,scopedFetchObserved:true},logical:{...logical,privateText,eventId:'private-generated-event'}})})
+    expect(bridge.inspection().lifecycle.logical).toEqual(logical)
+    expect(JSON.stringify(bridge.inspection().lifecycle)).not.toMatch(/private-generated-event|privateText/)
+    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'partial-client-observation',fullCoverage:true,pendingRequests:0})})
     expect(bridge.inspection().lifecycle).toEqual({scope:'observation-only',pendingRequests:null,unconfirmedOperations:null})
     ;(performance as any).memory.usedJSHeapSize=NaN;ctx.get=()=>undefined
     expect(bridge.inspection()).toMatchObject({memory:{bytes:null},sidebar:null})

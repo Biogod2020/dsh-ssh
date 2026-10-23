@@ -117,3 +117,5 @@ Added focused/gesture-gated embedded text copy and Host-bound native row actions
 ### 单次请求观察已接入页面
 
 `ab724e5` 的 CI39925887478 三组已成功，阶段总 IO 已有[四份实际累计原件](benchmarks/2026-10-23/storage-totals-ci-39925887478/README.md)。随后将 scoped fetch 与公开 RPC 完整回执观察接入页面，11 项 Client 检查包含真实 Cordis 根生命周期，实际 SDK 并发/二进制契约通过；新的 2c5a734 候选 99 文件 / 916 项、三个运行时和旧版回退通过。真实网页启动、有效历史和创建分支回归完成，临时页与独立本机控制器已关闭，原远端 PID/启动时间保留。[源码与证据](benchmarks/2026-10-23/unary-observation/README.md)。逻辑流、用户回答、网关冻结、内存预算和最终原生/24 小时仍待完成，没有启用自动释放。
+
+`806a174` 的 [CI39934278508](https://github.com/Biogod2020/dsh-ssh/actions/runs/39934278508) 三组已成功。随后接入逻辑迭代器与用户回答观察，16 项流检查、12 项 Client 检查以及实际 rc.2 SDK Gateway + Connection + 真实 Cordis 契约通过；完整 100 文件 / 933 项和类型/构建/产物通过。相同 fa80e4e 安装包的三个运行时、旧版回退和真实网页历史/分支回归均通过。[原始证据与范围](benchmarks/2026-10-23/logical-observation/README.md)。Gemini 反馈已按源码取舍；网关冻结、完整覆盖、内存预算、原生 100/30 和最终 24 小时仍未完成，未发布 npm 或替换日常安装。

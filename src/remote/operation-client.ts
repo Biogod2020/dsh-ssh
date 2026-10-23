@@ -1,12 +1,13 @@
 import type { createOperationLedger } from './operation-ledger.ts'
+import type { createRemoteOperationObserver } from './operation-streams.ts'
 
 /** Install before Connection construction. Only the default SDK's composition
  * is decorated; globals.fetch, globals.WebSocket and the Context stay intact.
  * This first contribution observes unary calls, not full view quiescence. */
-export function operationTransport(hostId: string, makeLedger: typeof createOperationLedger): void {
+export function operationTransport(hostId: string, makeLedger: typeof createOperationLedger, makeRemote?: typeof createRemoteOperationObserver): void {
   type Rpc = { call(...args: unknown[]): Promise<unknown> }
   type Pending = { dispatched(): void; finish(confirmed: boolean): void }
-  type Api = { hostId: string; attach(rpc: Rpc): () => void; inspection(): object }
+  type Api = { hostId: string; attach(rpc: Rpc): () => void; attachRemote(remote: unknown): () => void; inspection(): object }
   const target = window as unknown as {
     __DSH_TRANSPORT__?: Record<string, unknown>
     __dshSshOperations?: Api
@@ -37,14 +38,17 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
       finish(confirmed) { if (finished) return; finished = true; pending--; entry.finish(confirmed) },
     }
   }
+  const remote = makeRemote?.(endpoint => ledger.reserve(category(endpoint), 'stream', selected()), invalidate)
   const api: Api = {
     hostId,
     inspection() {
       if (!supported || !binding || binding.rpc.call !== binding.call || target.__DSH_TRANSPORT__ !== owned) invalidate()
-      return { version: 1, scope: 'unary-observation', fullCoverage: false, automaticReleaseEligible: false,
+      return { version: 1, scope: 'partial-client-observation', fullCoverage: false, automaticReleaseEligible: false,
         pendingRequests: null, unconfirmedOperations: null,
-        unary: { observedPendingRequests: pending, rpcDecoratorAttached: rpcAttached, scopedFetchObserved } }
+        unary: { observedPendingRequests: pending, rpcDecoratorAttached: rpcAttached, scopedFetchObserved },
+        ...(remote ? { logical: remote.inspection() } : {}) }
     },
+    attachRemote: value => supported && target.__DSH_TRANSPORT__ === owned ? remote?.attach(value) ?? (() => {}) : (() => {}),
     attach(rpc) {
       if (!supported || target.__DSH_TRANSPORT__ !== owned || !rpc || typeof rpc.call !== 'function') return () => {}
       const previousBinding = binding; binding = undefined; previousBinding?.restore(); invalidate()
@@ -62,6 +66,7 @@ export function operationTransport(hostId: string, makeLedger: typeof createOper
             // binary decoding before resolving its public RPC Promise.
             const acknowledged = !!value && typeof value === 'object' && typeof (value as { ok?: unknown }).ok === 'boolean'
             if (!acknowledged) invalidate()
+            if (acknowledged) remote?.acknowledge(args[1], args[2], value)
             entry.finish(acknowledged); return value
           }, error => { entry.finish(false); throw error })
         } catch (error) { entry.finish(false); throw error }
@@ -146,7 +151,7 @@ export function operationClient(): void {
   type Owner = { root: Root; dispose(): unknown }
   const target = window as unknown as {
     __ModuleLoader__?: { load(value: unknown): void }
-    __dshSshOperations?: { attach(rpc: { call(...args: unknown[]): Promise<unknown> }): () => void }
+    __dshSshOperations?: { attach(rpc: { call(...args: unknown[]): Promise<unknown> }): () => void; attachRemote?(remote: unknown): () => void }
     __dshSshOperationOwner?: Owner
   }
   target.__ModuleLoader__?.load({ id: '@jay-local/dsh-ssh-operations', factory: () => ({
@@ -158,12 +163,16 @@ export function operationClient(): void {
         const connection = scoped.get('connection') as { rpc?: { call(...args: unknown[]): Promise<unknown> } } | undefined
         if (connection?.rpc) scoped.effect(() => target.__dshSshOperations!.attach(connection.rpc!))
       })
+      const remoteRuntime = ctx.root.inject(['remote'], scoped => {
+        const remote = scoped.get('remote')
+        if (remote && target.__dshSshOperations?.attachRemote) scoped.effect(() => target.__dshSshOperations!.attachRemote!(remote))
+      })
       let disposed = false
       const owner: Owner = { root: ctx.root, dispose() {
         if (disposed) return
         disposed = true; window.removeEventListener('pagehide', hide)
         if (target.__dshSshOperationOwner === owner) delete target.__dshSshOperationOwner
-        return runtime.dispose()
+        return Promise.allSettled([runtime.dispose(), remoteRuntime.dispose()])
       } }
       target.__dshSshOperationOwner = owner
       const hide = (event: PageTransitionEvent) => { if (!event.persisted) void owner.dispose() }

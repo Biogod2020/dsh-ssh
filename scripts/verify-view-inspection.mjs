@@ -20,7 +20,11 @@ export async function verifyUnaryInspection(html, contribution) {
   new Script(contribution).runInContext(sandbox,{timeout:1000})
   assert.equal(modules.length,1);assert.equal(modules[0].id,'@jay-local/dsh-ssh-operations')
   const rpc={async call(){const response=await window.__DSH_TRANSPORT__.fetch('api/session/cancel',{method:'POST',body:'{}'});return response.json()}}
-  const original=rpc.call,ctx={get:name=>name==='connection'?{rpc}:undefined,effect:fn=>cleanups.push(fn())}
+  let finishAnswer
+  const answerPending=new Promise(resolve=>{finishAnswer=resolve})
+  const remote={openRemoteStream:()=> (async function*(){yield 1})(),events:{answer:async()=>answerPending}}
+  const original=rpc.call,originalStream=remote.openRemoteStream,originalAnswer=remote.events.answer
+  const ctx={get:name=>name==='connection'?{rpc}:name==='remote'?remote:undefined,effect:fn=>cleanups.push(fn())}
   ctx.root={inject:(_deps,apply)=>{apply(ctx);return{dispose(){for(const cleanup of cleanups.splice(0))cleanup()}}}}
   modules[0].factory().apply(ctx)
   try{
@@ -33,8 +37,15 @@ export async function verifyUnaryInspection(html, contribution) {
     assert.equal(window.__dshSshOperations.inspection().unary.observedPendingRequests,0)
     assert.equal(window.__dshSshOperations.inspection().unary.scopedFetchObserved,true)
     assert.equal(sandbox.fetch,fetch,'The global transport must remain unchanged')
-    return{serializedUnaryObservationInMockClient:true,unaryObserverFullViewCoverage:false}
-  }finally{window.__dshSshOperationOwner.dispose();assert.equal(rpc.call,original)}
+    const stream=remote.openRemoteStream('$events'),question=remote.events.answer({eventId:'generated-event'},'generated-client')
+    assert.equal(window.__dshSshOperations.inspection().logical.observedEventSubscriptions,0)
+    assert.equal(window.__dshSshOperations.inspection().logical.observedWaitingAnswers,1)
+    await stream.next();assert.equal(window.__dshSshOperations.inspection().logical.observedEventSubscriptions,1)
+    await stream.return();finishAnswer();await question
+    assert.equal(window.__dshSshOperations.inspection().logical.observedEventSubscriptions,0)
+    assert.equal(window.__dshSshOperations.inspection().logical.observedWaitingAnswers,0)
+    return{serializedUnaryObservationInMockClient:true,serializedLogicalObservationInMockClient:true,unaryObserverFullViewCoverage:false,logicalObserverFullViewCoverage:false}
+  }finally{await window.__dshSshOperationOwner.dispose();assert.equal(rpc.call,original);assert.equal(remote.openRemoteStream,originalStream);assert.equal(remote.events.answer,originalAnswer)}
 }
 
 export function verifyViewInspection(source, workspaceId, sessionId) {

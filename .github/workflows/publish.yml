@@ -71,6 +71,8 @@ jobs:
         run: pnpm exec vitest run tests/remote-runtime.test.ts
       - name: Verify the actual rc.2 SDK unary acknowledgement contract with mock Context and transport
         run: node --experimental-transform-types scripts/operation-rpc-contract.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/@deepseek-ai/dsh-client-connection/lib/client.browser.js" "$RUNNER_TEMP/release/operation-rpc-contract.json"
+      - name: Verify the actual rc.2 Gateway and Cordis logical stream and incoming answer contract
+        run: node --experimental-transform-types scripts/operation-stream-contract.mjs "$RUNNER_TEMP/dsh-rc21/node_modules/@deepseek-ai" "$RUNNER_TEMP/release/operation-stream-contract.json"
       - name: Verify the packaged offline downgrade exporter without reviving cleared history
         run: |
           shopt -s nullglob
@@ -142,7 +144,7 @@ jobs:
         if: always()
         with:
           name: operation-rpc-contract
-          path: ${{ runner.temp }}/release/operation-rpc-contract.json
+          path: ${{ runner.temp }}/release/operation-*-contract.json
           if-no-files-found: ignore
           retention-days: 14
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { createOperationLedger } from '../src/remote/operation-ledger.ts'
 import { ViewReceiptStore } from '../src/remote/view-receipts.ts'
 import { operationTransport } from '../src/remote/operation-client.ts'
+import { createRemoteOperationObserver } from '../src/remote/operation-streams.ts'
 
 const [bundlePath, output] = process.argv.slice(2)
 assert(bundlePath && output && isAbsolute(bundlePath) && isAbsolute(output), 'Supply the absolute SDK browser bundle and new report path')
@@ -98,7 +99,7 @@ try {
 // the transport only marks dispatch; its decorated public RPC owns completion.
 let scopedReply, scopedConnection
 sandbox.fetch = async (_path, init) => scopedReply(JSON.parse(init.body))
-new Script(`(${operationTransport.toString()})('aaaaaaaaaaaaaaaaaaaaaaaa',(${createOperationLedger.toString()}));`).runInContext(sandbox, { timeout: 3000 })
+new Script(`(${operationTransport.toString()})('aaaaaaaaaaaaaaaaaaaaaaaa',(${createOperationLedger.toString()}),(${createRemoteOperationObserver.toString()}));`).runInContext(sandbox, { timeout: 3000 })
 const scoped = sandbox.window.__dshSshOperations, transport = sandbox.window.__DSH_TRANSPORT__
 assert(scoped && transport)
 sdk.installConnection({ provide(name, value) { assert.equal(name, 'connection'); scopedConnection = value } }, { transport, interactions: 'none' })

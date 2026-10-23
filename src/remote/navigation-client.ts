@@ -100,12 +100,20 @@ export function navigationClient(): void {
           let lifecycle: object = { scope: 'observation-only', pendingRequests: null, unconfirmedOperations: null }
           try {
             const value = target.__dshSshOperations?.inspection() as any, unary = value?.unary
-            if (value?.version === 1 && value.scope === 'unary-observation' && value.fullCoverage === false
+            if (value?.version === 1 && value.scope === 'partial-client-observation' && value.fullCoverage === false
               && value.automaticReleaseEligible === false && value.pendingRequests === null && value.unconfirmedOperations === null
               && Number.isSafeInteger(unary?.observedPendingRequests) && unary.observedPendingRequests >= 0
               && typeof unary.rpcDecoratorAttached === 'boolean' && typeof unary.scopedFetchObserved === 'boolean') {
-              lifecycle = { scope: 'unary-observation', pendingRequests: null, unconfirmedOperations: null,
-                unary: { observedPendingRequests: unary.observedPendingRequests, rpcDecoratorAttached: unary.rpcDecoratorAttached, scopedFetchObserved: unary.scopedFetchObserved } }
+              lifecycle = { scope: 'partial-client-observation', pendingRequests: null, unconfirmedOperations: null,
+                unary: { observedPendingRequests: unary.observedPendingRequests, rpcDecoratorAttached: unary.rpcDecoratorAttached, scopedFetchObserved: unary.scopedFetchObserved },
+                ...(() => {
+                  const logical = value.logical
+                  if (logical?.scope !== 'logical-client-observation'
+                    || !['observedStreams', 'observedEventSubscriptions', 'observedWaitingAnswers'].every(key => Number.isSafeInteger(logical[key]) && logical[key] >= 0)
+                    || typeof logical.streamDecoratorAttached !== 'boolean' || typeof logical.answerDecoratorAttached !== 'boolean') return {}
+                  return { logical: { scope: logical.scope, observedStreams: logical.observedStreams, observedEventSubscriptions: logical.observedEventSubscriptions,
+                    observedWaitingAnswers: logical.observedWaitingAnswers, streamDecoratorAttached: logical.streamDecoratorAttached, answerDecoratorAttached: logical.answerDecoratorAttached } }
+                })() }
             }
           } catch { /* Partial or missing observation cannot authorize release. */ }
           return {
@@ -187,7 +195,7 @@ export function navigationManifest(): void {
   if (!boot || !Array.isArray(boot.entries)) return
   const rev = 'native-navigation-7'
   const additions: Row[] = [
-    { id: '@jay-local/dsh-ssh-operations', url: '/__dsh_remote/operation-client.js?rev=unary-observation-1', rev: 'unary-observation-1', inject: ['@deepseek-ai/dsh-client-connection'] },
+    { id: '@jay-local/dsh-ssh-operations', url: '/__dsh_remote/operation-client.js?rev=partial-client-observation-1', rev: 'partial-client-observation-1', inject: ['@deepseek-ai/dsh-client-connection'] },
     { id: '@jay-local/dsh-ssh-navigation', url: '/__dsh_remote/navigation-client.js?rev=' + rev, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] },
     { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-3', rev: 'local-drafts-3', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },
   ].filter(row => !boot.entries.some(existing => existing.id === row.id))

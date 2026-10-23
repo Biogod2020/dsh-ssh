@@ -64,10 +64,10 @@ it('serves observation only for an authenticated embedded owner and composes its
   expect(script.status).toBe(200);expect(script.headers.get('cache-control')).toBe('no-store')
   expect(await script.text()).toContain('@jay-local/dsh-ssh-operations');expect(f.forwarded()).toBe(0)
   const html=await(await fetch(embedded.gateway.origin,{headers:embedded.headers})).text()
-  expect(html.indexOf('unary-observation')).toBeGreaterThan(-1)
-  expect(html.indexOf('unary-observation')).toBeLessThan(html.indexOf('src="/client.js"'))
+  expect(html.indexOf('partial-client-observation')).toBeGreaterThan(-1)
+  expect(html.indexOf('partial-client-observation')).toBeLessThan(html.indexOf('src="/client.js"'))
   const ordinary=await(await fetch(standalone.gateway.origin,{headers:standalone.headers})).text()
-  expect(ordinary).not.toContain('unary-observation')
+  expect(ordinary).not.toContain('partial-client-observation')
 })
 it('returns a conflict for a late pre-clear write and keeps local failures out of the remote API', async () => {
   const f = await fixture(), a = await f.create('a'.repeat(24)), operationId = randomUUID()

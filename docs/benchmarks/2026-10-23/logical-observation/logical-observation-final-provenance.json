@@ -1,0 +1,12 @@
+{
+  "archiveSha256": "fa80e4e74f8b98c4acbf7943743b8435322e17f17e91b5cd47d9f71b3c485c6b",
+  "sourceFilesByteMatched": 103,
+  "fullTestFiles": 100,
+  "fullTests": 933,
+  "typecheck": true,
+  "build": true,
+  "artifact": true,
+  "pureJsPortablePack": true,
+  "dailyProfileTouched": false,
+  "published": false
+}
