@@ -22,3 +22,5 @@ The Web controller sidebar groups local and remote projects; remote conversation
 ![Disk history after controller restart, before SSH reconnect](offline-history.jpg)
 
 ![Real editor draft restored on a new gateway origin](restored-draft.jpg)
+
+[Targeted Gemini review and implemented decisions](review.md).

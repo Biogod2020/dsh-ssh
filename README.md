@@ -82,14 +82,14 @@
 
 ### 使用 dsh web
 
-也可在 DSH `0.2.1-rc.2` 的 Web profile 安装并启动：
+你也可以在 DSH `0.2.1-rc.2` 的 Web 环境中安装并运行插件：
 
 ```sh
 dsh plugin --profile web add @biogod/dsh-ssh@0.3.24-jay.40
 dsh web --no-open
 ```
 
-通过终端打印的登录链接进入。Web 模式从统一侧栏在同一标签页打开远端，点击页顶 **Local workspaces / 本机工作区** 返回本地；桌面版则保留外层统一侧栏。使用 `localhost` 打开本地页面时，远端入口也会沿用该主机名。远端模型配置走 **Account → Settings → Models → Add model provider**。
+通过终端打印的登录链接进入。Web 模式从统一侧栏在同一标签页打开远端，点击页顶 **Local workspaces / 本机工作区** 返回本地；桌面版则保留外层统一侧栏。使用 `localhost` 打开本地页面时，远端入口也会沿用该主机名。配置远端模型时，进入 **Account → Settings → Models → Add model provider**。
 
 本轮已在真正的 `dsh web` 中实测消息/代码复制、本地与远端草稿切换、重启后的磁盘历史读取，以及新网关端口上的草稿恢复。[真实截图与验收范围](docs/benchmarks/2026-10-23/dshweb-core/README.md)。
 
