@@ -480,3 +480,29 @@ it('rejects an invalid live directory increment and fences the cached Host list 
   const next=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===2);f.releaseBaseline()
   await expect(next).resolves.toEqual({items:[],archivedSessionIds:[]})
 })
+
+it('publishes the replacement carrier before a synchronous catalog observer rebuild and retains that rebuilt feed',async()=>{
+  const f=await fixture(0)
+  const first=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===1);f.releaseBaseline();await first
+  let rebuilt:ReturnType<RemoteGateway['workspaceCatalogSnapshot']>|undefined
+  f.gateway.onCatalogChange=()=>{rebuilt??=f.gateway.workspaceCatalogSnapshot()}
+  await confirmedRepair(f);await wait(()=>f.followOpens===2);f.releaseBaseline()
+  const current=await rebuilt!
+  const next=f.gateway.workspaceCatalogSnapshot();void next.catch(()=>{})
+  await delay(30);expect(f.followOpens).toBe(2)
+  f.releaseBaseline();expect(await next).toBe(current)
+})
+
+it('does not notify catalog subscribers or allocate a new observer after disposal',async()=>{
+  const f=await fixture()
+  const first=f.gateway.workspaceCatalogSnapshot();await wait(()=>f.followOpens===1);f.releaseBaseline();await first
+  let notifications=0
+  f.gateway.onCatalogChange=()=>{
+    notifications++
+    if(notifications<3)void f.gateway.workspaceCatalogSnapshot().catch(()=>{})
+  }
+  f.gateway.dispose()
+  for(let n=0;n<20;n++)await Promise.resolve()
+  await expect(f.gateway.workspaceCatalogSnapshot()).rejects.toMatchObject({name:'AbortError'})
+  expect(notifications).toBe(0);expect(f.followOpens).toBe(1)
+})

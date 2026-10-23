@@ -1,7 +1,7 @@
 {
   "scope": "macOS generated private Homes and real loopback SSH; no native UI, WAN or model requests",
-  "baseCommit": "e89ab2bdb2cad728fc22890f866eeb4ed9a226ee",
-  "archiveSha256": "bcb79c2767f8ac7bafbbbaf59c36095f1cc8c8cdd4cccc2f4b90e3b77c389347",
+  "baseCommit": "6b859c41ee2240fdc6c54c37d800faca835ade43",
+  "archiveSha256": "d8c82e380c0f1e61dcfb00e6a6cff6b89e9488f9d2be006d0167fdc0f6b885d7",
   "sourceFilesByteMatched": 96,
   "node": "v24.16.0",
   "platform": "Darwin",

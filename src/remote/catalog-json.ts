@@ -9,6 +9,7 @@ const readErrors = {
   busy: 'Remote catalog decoder is busy; saved lists were preserved', closed: 'Catalog decoder is closed',
   timeout: 'Remote catalog decoding exceeded its total wait budget', worker: 'Remote catalog decoder failed; saved lists were preserved',
   queue: 'Remote catalog read queue is full; saved lists were preserved', 'queue-timeout': 'Remote catalog queue wait timed out',
+  'projection-size': 'Remote workspace directory exceeds its retained row, reference or byte budget; saved lists were preserved',
   'stream-timeout': 'Remote catalog observer stopped responding; saved lists were preserved',
   backlog: 'Remote catalog observer exceeded its backlog budget; saved lists were preserved',
 } as const

@@ -65,7 +65,7 @@ export class WorkspaceDirectoryProjection {
         this.rows.set(view.workspaceId, view); this.bytes = bytes; this.references = references
       } else if (frame?.type === 'remove') {
         const workspaceId = id(frame.workspaceId), old = this.rows.get(workspaceId)
-        if (!this.removed.has(workspaceId) && this.removed.size >= maxRows) throw new CatalogReadError('size')
+        if (!this.removed.has(workspaceId) && this.removed.size >= maxRows) throw new CatalogReadError('projection-size')
         this.removed.add(workspaceId)
         if (!old) return undefined
         const previous = cost(old); this.rows.delete(workspaceId); this.bytes -= previous.bytes; this.references -= previous.references
@@ -86,6 +86,6 @@ export class WorkspaceDirectoryProjection {
     return this.current
   }
   private check(rows: number, bytes: number, references: number, archived: string[]) {
-    if (rows > maxRows || references > maxReferences || bytes + rows + 100 + (archived === this.archived ? this.archiveBytes : Buffer.byteLength(JSON.stringify(archived))) > catalogJsonLimit) throw new CatalogReadError('size')
+    if (rows > maxRows || references > maxReferences || bytes + rows + 100 + (archived === this.archived ? this.archiveBytes : Buffer.byteLength(JSON.stringify(archived))) > catalogJsonLimit) throw new CatalogReadError('projection-size')
   }
 }

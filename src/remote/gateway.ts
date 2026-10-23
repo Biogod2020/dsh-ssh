@@ -64,10 +64,14 @@ export class RemoteGateway {
     if (response.status !== 303) throw new Error('Remote DSH authentication handshake failed')
     const cookie = response.headers.getSetCookie().map(line => line.split(';')[0]).join('; ')
     if (!cookie) throw new Error('Remote DSH did not issue an authenticated session')
-    this.workspaceFollower?.lifetime.abort()
+    if (this.disposed) throw new DOMException('Remote gateway was disposed', 'AbortError')
+    // Publish the complete carrier before notifying observers. Detach the
+    // old follower first so its synchronous abort cannot erase a rebuilt one.
+    const follower = this.workspaceFollower
     this.workspaceFollower = undefined
-    this.onCatalogChange()
     this.localPort = port; this.upstreamCookie = cookie
+    follower?.lifetime.abort()
+    this.onCatalogChange()
   }
   /** Bound retained carriers without evicting live terminals to make room. */
   canReplaceTunnel(): boolean { return this.retired.size < 2 || !this.streams.get(this.localPort)?.size }
@@ -194,6 +198,7 @@ export class RemoteGateway {
   /** One read-only live membership feed per Host. The read lane is released
    * after its baseline, while later snapshots reuse ordered increments. */
   workspaceCatalogSnapshot(): Promise<WorkspaceDirectory> {
+    if (this.disposed) return Promise.reject(new DOMException('Remote gateway was disposed', 'AbortError'))
     const current = this.workspaceFollower
     if (current) return current.projection.snapshot() ? Promise.resolve(current.projection.snapshot()!) : current.first
     const lifetime = new AbortController(), projection = new WorkspaceDirectoryProjection()
@@ -202,7 +207,8 @@ export class RemoteGateway {
     const signal = AbortSignal.any([lifetime.signal, this.catalogLifetime.signal])
     const closed = () => {
       if (this.workspaceFollower !== follower) return
-      this.workspaceFollower = undefined; this.onCatalogChange()
+      this.workspaceFollower = undefined
+      if (!this.disposed) this.onCatalogChange()
     }
     follower.first = runCatalogRead(this.hostId, signal, () => this.baselineRequest('workspace/follow', {}, frame => projection.accept(frame), {
       signal, changed: () => { if (this.workspaceFollower === follower) this.onCatalogChange() }, closed,

@@ -20,7 +20,7 @@ it('enforces an aggregate retained budget even when individual increments are wi
   const p=new WorkspaceDirectoryProjection();p.accept(baseline())
   const sessionIds=Array.from({length:5000},(_,n)=>n.toString().padStart(250,'x'))
   let accepted=0
-  expect(()=>{for(let n=0;n<10;n++){p.accept({type:'upsert',workspace:{workspaceId:'project-'+n,sessionIds}});accepted++}}).toThrow('8 MiB')
+  expect(()=>{for(let n=0;n<10;n++){p.accept({type:'upsert',workspace:{workspaceId:'project-'+n,sessionIds}});accepted++}}).toThrow('retained row, reference or byte budget')
   expect(accepted).toBeGreaterThan(0);expect(accepted).toBeLessThan(10)
   expect(p.snapshot()!.items).toHaveLength(accepted)
 })
