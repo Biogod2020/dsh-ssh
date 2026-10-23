@@ -9,8 +9,9 @@ it('adds a page-local boot contribution without changing original manifest rows'
   navigationManifest(); navigationManifest()
   const result = (window as any).__DSH_BOOT__
   expect(original.entries).toHaveLength(1); expect(original.batches).toHaveLength(1)
-  expect(result.entries).toHaveLength(3); expect(result.batches).toHaveLength(3)
+  expect(result.entries).toHaveLength(4); expect(result.batches).toHaveLength(4)
   expect(result.entries.some((row: any) => row.id === '@jay-local/dsh-ssh-drafts')).toBe(true)
+  expect(result.entries.find((row:any)=>row.id==='@jay-local/dsh-ssh-operations').inject).toEqual(['@deepseek-ai/dsh-client-connection'])
 })
 
 it('retains only three visited Session clients, reuses them, and releases archives, expiry and page ownership', async () => {
@@ -147,6 +148,13 @@ it('samples only bounded lifecycle metadata and renderer heap estimates, includi
     expect(first.drafts).toMatchObject({pendingUnmountSaves:1,failedUnmountSaves:2,sessions:[{hasAttachments:true}]})
     expect(first.lifecycle).toEqual({scope:'observation-only',pendingRequests:null,unconfirmedOperations:null})
     expect(JSON.stringify(first)).not.toContain(privateText);expect(JSON.stringify(first)).not.toContain('private-generated-address')
+    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'unary-observation',fullCoverage:false,automaticReleaseEligible:false,
+      pendingRequests:null,unconfirmedOperations:null,unary:{observedPendingRequests:2,rpcDecoratorAttached:true,scopedFetchObserved:true,privateText}})})
+    expect(bridge.inspection().lifecycle).toEqual({scope:'unary-observation',pendingRequests:null,unconfirmedOperations:null,
+      unary:{observedPendingRequests:2,rpcDecoratorAttached:true,scopedFetchObserved:true}})
+    expect(JSON.stringify(bridge.inspection().lifecycle)).not.toContain(privateText)
+    vi.stubGlobal('__dshSshOperations',{inspection:()=>({version:1,scope:'unary-observation',fullCoverage:true,pendingRequests:0})})
+    expect(bridge.inspection().lifecycle).toEqual({scope:'observation-only',pendingRequests:null,unconfirmedOperations:null})
     ;(performance as any).memory.usedJSHeapSize=NaN;ctx.get=()=>undefined
     expect(bridge.inspection()).toMatchObject({memory:{bytes:null},sidebar:null})
     vi.stubGlobal('__dshSshDrafts',{inspection:()=>({sessions:privateText})})

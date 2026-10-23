@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "generatedFixture": true,
+  "archiveSha256": "2c5a7346f1a6eee448cb4f8a3842b723dde503423f8bfbd2dfa01dd2074c33b4",
+  "compiledJsFilesByteMatched": 3,
+  "realWebClient": true,
+  "manualCuaAndScreenshotEvidence": true,
+  "savedAxIsDiffNotFullTranscript": true,
+  "validGeneratedHistoryRendered": true,
+  "branchButtonCreatedAndSelectedNewConversation": true,
+  "unicodeFixtureRendered": true,
+  "screenshotFormat": "JPEG",
+  "screenshotSha256": "2142f9019973d24478da75e004103b3f5fdbf9202f546ddeab2f2c41f5281a45",
+  "ownedControllerExitCode": 0,
+  "temporaryBrowserTabClosed": true,
+  "remotePidAndBirthPreserved": true,
+  "dailyProfileTouched": false,
+  "modelGenerationRequests": 0,
+  "unaryInternalCountersInRealPageVerified": false,
+  "nativeUiVerified": false,
+  "fullViewCoverageVerified": false,
+  "automaticViewReleaseVerified": false
+}

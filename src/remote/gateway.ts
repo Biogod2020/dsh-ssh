@@ -16,6 +16,7 @@ import { watchCatalogPulse } from './catalog-pulse.ts'
 import { WorkspaceDirectoryProjection, type WorkspaceDirectory } from './workspace-directory.ts'
 import { CatalogReadError, catalogJsonLimit, catalogJsonReader, readCatalogJson, runCatalogRead } from './catalog-json.ts'
 import { ViewReceiptStore, type ViewReceiptInput } from './view-receipts.ts'
+import { operationClient } from './operation-client.ts'
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
 const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
@@ -348,6 +349,12 @@ export class RemoteGateway {
     if (url.pathname === '/__dsh_remote/navigation-client.js' && req.method === 'GET' && session.embedded) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
       res.end(`(${navigationClient.toString()})();`); return
+    }
+    if (url.pathname === '/__dsh_remote/operation-client.js') {
+      if (!session.embedded) { res.writeHead(403); res.end(); return }
+      if (req.method !== 'GET') { res.writeHead(405); res.end(); return }
+      res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })
+      res.end(`(${operationClient.toString()})();`); return
     }
     if (url.pathname === '/__dsh_remote/draft-client.js' && req.method === 'GET' && session.embedded) {
       res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' })

@@ -1,0 +1,15 @@
+{
+  "archiveSha256": "2c5a7346f1a6eee448cb4f8a3842b723dde503423f8bfbd2dfa01dd2074c33b4",
+  "sourceFilesByteMatched": 102,
+  "fullLocalTests": 916,
+  "testFiles": 99,
+  "typecheckBuildArtifactAndPortableArchivePassed": true,
+  "scopedUnaryObservationWiredIntoEmbeddedPage": true,
+  "globalFetchAndWebSocketUnchanged": true,
+  "connectionServiceAndSdkFactoryNotReplaced": true,
+  "realCordisEntryVersusRootDisposalTested": true,
+  "fullClientOperationCoverage": false,
+  "gatewayFreezeImplemented": false,
+  "automaticEvictionImplemented": false,
+  "newNativeUiAcceptance": false
+}

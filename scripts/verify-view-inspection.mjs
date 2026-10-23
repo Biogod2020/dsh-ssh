@@ -2,6 +2,40 @@
  * serialization and field boundaries; it is not renderer memory or native UI. */
 import assert from 'node:assert/strict'
 import { Script, createContext } from 'node:vm'
+import { webcrypto } from 'node:crypto'
+
+/** Execute the exact served bootstrap and contribution with a MOCK public
+ * RPC/Context. The separate actual-SDK probe checks binary/envelope behavior. */
+export async function verifyUnaryInspection(html, contribution) {
+  const bootstrap=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(match=>match[1])
+    .find(source=>source.includes('__dshSshOperations')&&source.includes('automaticReleaseEligible'))
+  assert(bootstrap,'Embedded page must compose observation before Client boot')
+  const modules=[],cleanups=[]
+  const window={__ModuleLoader__:{load:module=>modules.push(module)},addEventListener(){},removeEventListener(){}}
+  let finish,started
+  const ready=new Promise(resolve=>{started=resolve})
+  const fetch=async()=>({ok:true,json(){started();return new Promise(resolve=>{finish=resolve})}})
+  const sandbox=createContext({window,crypto:webcrypto,fetch,Date,setTimeout,clearTimeout})
+  new Script(bootstrap).runInContext(sandbox,{timeout:1000})
+  new Script(contribution).runInContext(sandbox,{timeout:1000})
+  assert.equal(modules.length,1);assert.equal(modules[0].id,'@jay-local/dsh-ssh-operations')
+  const rpc={async call(){const response=await window.__DSH_TRANSPORT__.fetch('api/session/cancel',{method:'POST',body:'{}'});return response.json()}}
+  const original=rpc.call,ctx={get:name=>name==='connection'?{rpc}:undefined,effect:fn=>cleanups.push(fn())}
+  ctx.root={inject:(_deps,apply)=>{apply(ctx);return{dispose(){for(const cleanup of cleanups.splice(0))cleanup()}}}}
+  modules[0].factory().apply(ctx)
+  try{
+    const pending=rpc.call('/api','session/cancel',{args:{}});await ready
+    const before=JSON.parse(JSON.stringify(window.__dshSshOperations.inspection()))
+    assert.equal(before.unary.observedPendingRequests,1);assert.equal(before.pendingRequests,null)
+    assert.equal(before.fullCoverage,false);assert.equal(before.automaticReleaseEligible,false)
+    assert.equal(window.__dshSshOperations.freeze,undefined)
+    finish({ok:true,value:{}});assert.equal((await pending).ok,true)
+    assert.equal(window.__dshSshOperations.inspection().unary.observedPendingRequests,0)
+    assert.equal(window.__dshSshOperations.inspection().unary.scopedFetchObserved,true)
+    assert.equal(sandbox.fetch,fetch,'The global transport must remain unchanged')
+    return{serializedUnaryObservationInMockClient:true,unaryObserverFullViewCoverage:false}
+  }finally{window.__dshSshOperationOwner.dispose();assert.equal(rpc.call,original)}
+}
 
 export function verifyViewInspection(source, workspaceId, sessionId) {
   const modules=[],cleanups=[]

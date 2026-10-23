@@ -15,16 +15,17 @@ async function fixture(html = false) {
   const remote = createServer((req, res) => {
     if (req.url?.startsWith('/?token=')) { res.writeHead(303, { 'Set-Cookie': 'fixture=only' }); res.end(); return }
     ++forwarded
-    if (html && req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head></head><body><div id="root"></div></body></html>'); return }
+    if (html && req.url === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><head><script src="/client.js"></script></head><body><div id="root"></div></body></html>'); return }
     res.writeHead(503); res.end()
   })
   await new Promise<void>(resolve => remote.listen(0, '127.0.0.1', resolve))
   const port = (remote.address() as { port: number }).port, gateways: RemoteGateway[] = []
-  const create = async (hostId: string) => {
+  const create = async (hostId: string, embedded = false) => {
     const gateway = new RemoteGateway(port, { protocol: 1, pid: process.pid, port, url: `http://127.0.0.1:${port}/?token=fixture-only`,
       root, directory: root, userHome: root, version: '0.2.1-rc.2' }, 'fixture', 'http://127.0.0.1:1/', hostId, 'fixture', drafts)
     gateways.push(gateway); await gateway.start()
-    const auth = await fetch(gateway.launch('same'), { redirect: 'manual' })
+    const launch = new URL(gateway.launch('same')); if(embedded)launch.searchParams.set('dsh-remote-view','desktop')
+    const auth = await fetch(launch, { redirect: 'manual' })
     const headers = { Cookie: auth.headers.getSetCookie().map(value => value.split(';')[0]).join('; '), Origin: gateway.origin, 'content-type': 'application/json' }
     const url = gateway.origin + '/__dsh_remote/draft?sessionId=same'
     return { gateway, headers, url, read: () => fetch(url, { headers }),
@@ -52,6 +53,21 @@ it('authenticates local draft access and binds identical session ids to the gate
   expect(next.gateway.origin).not.toBe(a.gateway.origin)
   expect((await (await next.read()).json()).draft).toEqual(draft)
   expect(f.forwarded()).toBe(0)
+})
+it('serves observation only for an authenticated embedded owner and composes its transport before native boot',async()=>{
+  const f=await fixture(true),embedded=await f.create('a'.repeat(24),true),standalone=await f.create('a'.repeat(24))
+  const path='/__dsh_remote/operation-client.js'
+  expect((await fetch(embedded.gateway.origin+path)).status).toBe(401)
+  expect((await fetch(embedded.gateway.origin+path,{headers:{...embedded.headers,Origin:'https://untrusted.invalid'}})).status).toBe(401)
+  expect((await fetch(standalone.gateway.origin+path,{headers:standalone.headers})).status).toBe(403)
+  const script=await fetch(embedded.gateway.origin+path,{headers:embedded.headers})
+  expect(script.status).toBe(200);expect(script.headers.get('cache-control')).toBe('no-store')
+  expect(await script.text()).toContain('@jay-local/dsh-ssh-operations');expect(f.forwarded()).toBe(0)
+  const html=await(await fetch(embedded.gateway.origin,{headers:embedded.headers})).text()
+  expect(html.indexOf('unary-observation')).toBeGreaterThan(-1)
+  expect(html.indexOf('unary-observation')).toBeLessThan(html.indexOf('src="/client.js"'))
+  const ordinary=await(await fetch(standalone.gateway.origin,{headers:standalone.headers})).text()
+  expect(ordinary).not.toContain('unary-observation')
 })
 it('returns a conflict for a late pre-clear write and keeps local failures out of the remote API', async () => {
   const f = await fixture(), a = await f.create('a'.repeat(24)), operationId = randomUUID()

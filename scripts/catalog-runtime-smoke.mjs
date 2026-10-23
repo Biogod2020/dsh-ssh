@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { TestSshd } from '../tests/helpers/sshd.ts'
 import { DEFAULT_KNOWN_HOSTS } from '../src/engine/known-hosts.ts'
-import { verifyViewInspection, verifyDraftInspection } from './verify-view-inspection.mjs'
+import { verifyViewInspection, verifyDraftInspection, verifyUnaryInspection } from './verify-view-inspection.mjs'
 
 const [dsh, archive, output] = process.argv.slice(2), run = promisify(execFile)
 assert([dsh, archive, output].every(value => value && isAbsolute(value)), 'Supply absolute DSH, package and new report paths')
@@ -112,6 +112,11 @@ try {
   const draftInspectionScript=await fetch(embedded.origin+'/__dsh_remote/draft-client.js',{headers:embeddedHeaders,signal:AbortSignal.timeout(10000)})
   assert.equal(draftInspectionScript.status,200)
   const draftInspectionVerification=await verifyDraftInspection(await draftInspectionScript.text(),workspace.hostId,sessionId)
+  const operationScript=await fetch(embedded.origin+'/__dsh_remote/operation-client.js',{headers:embeddedHeaders,signal:AbortSignal.timeout(10000)})
+  assert.equal(operationScript.status,200)
+  const embeddedPage=await fetch(embedded.origin,{headers:embeddedHeaders,signal:AbortSignal.timeout(10000)})
+  assert.equal(embeddedPage.status,200)
+  const unaryInspectionVerification=await verifyUnaryInspection(await embeddedPage.text(),await operationScript.text())
   const stats=async()=>{
     const response=await fetch(directUrl.origin+'/api/fixture/catalog-stats',{headers:directHeaders,signal:AbortSignal.timeout(5000)})
     assert.equal(response.status,200);return response.json()
@@ -161,7 +166,7 @@ try {
   }
   result = { passed: true, completed: true, runtime: version, archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
     generatedMetadataSessions: created, rawSdkSessionRows: rows, rawSdkResponseBytes: bytes, largeDecodeThresholdBytes: 1024 * 1024,
-    ...inspectionVerification, ...draftInspectionVerification, compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
+    ...inspectionVerification, ...draftInspectionVerification, ...unaryInspectionVerification, compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
     pushedArchiveAndUnarchive: true, remoteSessionActionsVerified, localObservationFixtureVerified,
     automaticViewEvictionVerified:false, clientOperationObserverVerified:false, liveFeedWaitRequestedMilliseconds: 43000,
     liveFeedWaitElapsedMilliseconds: feedWaitElapsed, liveFeedWaitWallMilliseconds: feedWaitWallElapsed,

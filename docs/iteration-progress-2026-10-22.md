@@ -112,3 +112,8 @@ Added focused/gesture-gated embedded text copy and Host-bound native row actions
 ### 释放保护核心与当前 CI 证据
 
 `86ff293` 的完整 CI39920351748 已核对三组成功，全部后端存储/网络/内核丢包原件见[当前测量](benchmarks/2026-10-23/ci-39920351748/README.md)。新增[操作释放核心](operation-release-core-2026-10-23.md)通过 17 项专项、实际 SDK 工厂的 mock 契约检查和真实本机 Store 重开；完整 98 文件 / 904 项及构建通过，相同 f535088 候选三个运行时与旧版回退通过。该核心尚未接入 Client 或网关，没有启用自动回收。存储统计器补上阶段总 IO 与实现/脚本散列，保持原有样本数和性能目标；新统计全量结果待下一次 CI。原生矩阵与最终 24 小时仍是未完成门槛。
+
+
+### 单次请求观察已接入页面
+
+`ab724e5` 的 CI39925887478 三组已成功，阶段总 IO 已有[四份实际累计原件](benchmarks/2026-10-23/storage-totals-ci-39925887478/README.md)。随后将 scoped fetch 与公开 RPC 完整回执观察接入页面，11 项 Client 检查包含真实 Cordis 根生命周期，实际 SDK 并发/二进制契约通过；新的 2c5a734 候选 99 文件 / 916 项、三个运行时和旧版回退通过。真实网页启动、有效历史和创建分支回归完成，临时页与独立本机控制器已关闭，原远端 PID/启动时间保留。[源码与证据](benchmarks/2026-10-23/unary-observation/README.md)。逻辑流、用户回答、网关冻结、内存预算和最终原生/24 小时仍待完成，没有启用自动释放。
