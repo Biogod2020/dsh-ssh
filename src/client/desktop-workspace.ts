@@ -169,7 +169,9 @@ export function mountDesktopWorkspaces(locale?: LocaleRefreshSource, ctx?: Deskt
       if (!view || !view.ready) return false
       if(view!==active||view.workspace.id!==workspace.id||sessionId&&view.sessionId!==sessionId)await flushView(active)
       signal?.throwIfAborted()
-      if (view.workspace.id !== workspace.id || (sessionId && view.sessionId !== sessionId)) {
+      // The remote shell may clear its own selection after archiving. Its
+      // current selection, not our last-opened metadata, owns this decision.
+      if (view.workspace.id !== workspace.id || sessionId) {
         if (!sessionId) return false
         let accepted = false
         try {

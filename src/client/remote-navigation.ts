@@ -24,6 +24,12 @@ export const remoteNavigation = {
   update(workspaces: readonly RemoteWorkspace[], hosts: readonly { hostId: string; phase: RemotePhase }[] = []) { publish({ ...snapshot, workspaces, hosts: new Map(hosts.map(host => [host.hostId, host.phase])) }) },
   stale() { publish({ ...snapshot, hosts: new Map(), catalogs: new Map([...snapshot.catalogs].map(([id, catalog]) => [id, { ...catalog, stale: true }])) }) },
   open(workspace: RemoteWorkspace, sessionId?: string, create?: boolean) { ++intent; open?.(workspace, sessionId, create) },
+  invalidate(workspace: RemoteWorkspace) {
+    pending.get(workspace.id)?.abort(); pending.delete(workspace.id)
+    if (!snapshot.workspaces.some(row => row.id === workspace.id && row.hostId === workspace.hostId)) return
+    const previous = snapshot.catalogs.get(workspace.id)
+    if (previous) { const catalogs = new Map(snapshot.catalogs); catalogs.set(workspace.id, { ...previous, stale: true }); publish({ ...snapshot, catalogs }) }
+  },
   async refresh(workspace: RemoteWorkspace) {
     if (pending.has(workspace.id)) return
     const controller = new AbortController(); pending.set(workspace.id, controller)
@@ -58,6 +64,7 @@ export const isRemoteNavigationKey = (value: unknown): value is string => typeof
 export function resolveRemoteNavigation(value: string, state = snapshot): { workspace: RemoteWorkspace; sessionId?: string } | undefined {
   for (const workspace of state.workspaces) {
     if (value === remoteWorkspaceKey(workspace) || value === remoteSessionKey(workspace)) return { workspace }
-    for (const session of state.catalogs.get(workspace.id)?.sessions ?? []) if (value === remoteSessionKey(workspace, session.sessionId)) return { workspace, sessionId: session.sessionId }
+    const catalog = state.catalogs.get(workspace.id)
+    for (const session of [...catalog?.sessions ?? [], ...catalog?.archivedSessions ?? []]) if (value === remoteSessionKey(workspace, session.sessionId)) return { workspace, sessionId: session.sessionId }
   }
 }

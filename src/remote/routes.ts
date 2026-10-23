@@ -70,6 +70,14 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
         if (typeof body?.id !== 'string') throw new Error('workspace id is required')
         writeJson(res, 200, await manager.createSession(body.id)); return
       }
+      if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/session/action') {
+        const body = await readJsonBody(req, { maxBytes: 8192 }) as { id?: unknown; expectedHostId?: unknown; sessionId?: unknown; action?: unknown; title?: unknown; stopActivity?: unknown }
+        if (typeof body.id !== 'string' || typeof body.sessionId !== 'string' || typeof body.action !== 'string'
+          || typeof body.expectedHostId !== 'string' || !/^[a-f0-9]{24}$/.test(body.expectedHostId)
+          || body.title !== undefined && typeof body.title !== 'string' || body.stopActivity !== undefined && typeof body.stopActivity !== 'boolean') throw new Error('Invalid remote Session action')
+        await manager.sessionAction(body.id, body.sessionId, body.action, body.title as string | undefined, body.stopActivity === true, body.expectedHostId)
+        writeJson(res, 200, { ok: true }); return
+      }
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/connect') {
         const body = await readJsonBody(req) as { alias?: unknown; remotePath?: unknown; expectedHostId?: unknown }
         if (typeof body?.alias !== 'string' || typeof body.remotePath !== 'string') throw new Error('alias and remotePath are required')

@@ -1,0 +1,17 @@
+{
+  "candidateArchiveSha256": "cfb94218df54f9be8d527ca68102cb25abab90e9dc51fed10416d6675a2cff68",
+  "packageVersion": "0.3.24-jay.39",
+  "unpublishedCandidate": true,
+  "sourceParityFiles": 98,
+  "fullTests": 846,
+  "typecheck": true,
+  "build": true,
+  "artifactAndPureJsArchive": true,
+  "runtimeHarnessSha256": "55c5bfd4adc97643003ae49627bcf05d7b6a379e5138a957af17cb24885b9cbc",
+  "nativeDesktopReportsSeparate": true,
+  "clipboardReviewResponseId": "IsfaasSnL9SMytMPxbHz0QQ",
+  "rowActionReviewResponseId": "iczaaqORAZOciLMP0ZnWuQY",
+  "rowActionFollowupResponseId": "Z9DaapmuGoaiuMYPtYmy2AQ",
+  "dailyInstallationUpdated": false,
+  "npmPublished": false
+}

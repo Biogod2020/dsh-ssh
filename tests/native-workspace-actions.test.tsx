@@ -10,7 +10,10 @@ import { registerRemotePresentation,selectRemoteView } from '../src/client/remot
 // keyboard/style behavior is checked in the real Desktop acceptance fixture.
 vi.mock('@deepseek-ai/dsh-client-ui-primitives',async()=>{
   const {createElement}=await import('react')
-  return{MenuItemButton:({children,disabled,onSelect}:any)=>createElement('button',{type:'button',role:'menuitem',disabled,onClick:onSelect},children)}
+  const icon=()=>createElement('svg')
+  return{MenuItemButton:({children,disabled,onSelect}:any)=>createElement('button',{type:'button',role:'menuitem',disabled,onClick:onSelect},children),
+    IconArchiveOutlineRegular:icon,IconUnarchiveOutlineRegular:icon,IconPinFillRegular:icon,IconPinOutlineRegular:icon,
+    Button:({children,...props}:any)=>createElement('button',props,children),Modal:({children,footer}:any)=>createElement('div',{role:'dialog'},children,footer)}
 })
 
 let root:Root|undefined,release:(()=>void)|undefined,unbind:(()=>void)|undefined
@@ -19,7 +22,7 @@ function NativeMenuOwner(props:any){
   const [open,setOpen]=useState(false)
   return <><button onClick={()=>setOpen(value=>!value)}>Session actions</button>{open&&<div role="menu">
     {props.renderSlot('sidebar.workspaces.session.menu.item',{sessionId:props.fixtureSessionKey},{hookContext:[open,setOpen]})}
-  </div>}<button onClick={()=>props.open('local-fixture')}>Open local fixture</button><button onClick={()=>props.open(props.fixtureSessionKey)}>Open remote fixture</button></>
+  </div>}{props.renderSlot('sidebar.workspaces.session.row.action',{sessionId:props.fixtureSessionKey})}<button onClick={()=>props.open('local-fixture')}>Open local fixture</button><button onClick={()=>props.open(props.fixtureSessionKey)}>Open remote fixture</button></>
 }
 async function fixture(ok=true){
   document.documentElement.lang='en';(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true
@@ -43,7 +46,7 @@ async function fixture(ok=true){
 it('routes equal Session ids through the menu to their owning Host only and closes the owning menu',async()=>{
   const f=await fixture()
   const buttons=[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
-  expect(buttons).toHaveLength(3)
+  expect(buttons).toHaveLength(6)
   expect(buttons[1]?.textContent).toBe('Model settings on this host')
   await act(async()=>{buttons[1]!.click()})
   expect(f.settings).toHaveBeenCalledExactlyOnceWith(f.second);expect(f.local).not.toHaveBeenCalled()
@@ -112,4 +115,25 @@ it('keeps a blocked close in the owning menu and explains the unsaved draft',asy
   expect(close).toHaveBeenCalledExactlyOnceWith(f.second)
   expect(document.querySelector('[role="menu"]')).not.toBeNull()
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')
+})
+
+it('routes the visible pin button to the owning Host once without opening its conversation',async()=>{
+  const f=await fixture(),requests=vi.mocked(fetch);requests.mockClear()
+  requests.mockImplementation(async(_url,options)=>({ok:true,json:async()=>options?.method==='POST'?{ok:true}:{workspaceId:'project',stale:false,sessions:[{sessionId:'same',title:'Saved',running:false,blank:false,updatedAt:1,pinned:true}]}}) as Response)
+  await act(async()=>{document.querySelector<HTMLButtonElement>('[aria-label="Pin session"]')!.click()})
+  const writes=requests.mock.calls.filter(([,options])=>options?.method==='POST')
+  expect(writes).toHaveLength(1);expect(JSON.parse(String(writes[0]![1]!.body))).toEqual({id:f.second.id,expectedHostId:f.second.hostId,sessionId:'same',action:'pin'})
+  expect(f.local).not.toHaveBeenCalled();expect(f.settings).not.toHaveBeenCalled()
+  expect(document.querySelector('[aria-label="Unpin session"]')).not.toBeNull()
+})
+it('renames from the owning remote dialog without sending a synthetic id to the local Host',async()=>{
+  const f=await fixture(),requests=vi.mocked(fetch);requests.mockClear()
+  requests.mockImplementation(async(_url,options)=>({ok:true,json:async()=>options?.method==='POST'?{ok:true}:{workspaceId:'project',stale:false,sessions:[{sessionId:'same',title:'Saved',running:false,blank:false,updatedAt:1}]}}) as Response)
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button=>button.textContent==='Rename session')!.click()})
+  const input=document.querySelector<HTMLInputElement>('[aria-label="Session name"]')!
+  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'New remote title');input.dispatchEvent(new Event('input',{bubbles:true}))})
+  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button=>button.textContent==='Save')!.click()})
+  const writes=requests.mock.calls.filter(([,options])=>options?.method==='POST')
+  expect(writes).toHaveLength(1);expect(JSON.parse(String(writes[0]![1]!.body))).toMatchObject({id:f.second.id,sessionId:'same',action:'rename',title:'New remote title'})
+  expect(f.local).not.toHaveBeenCalled();expect(document.querySelector('[role="dialog"]')).toBeNull()
 })

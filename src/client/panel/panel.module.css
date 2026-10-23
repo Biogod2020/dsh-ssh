@@ -1320,6 +1320,10 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 .remoteWorkspaceActivity .remoteWorkspacePath { display: block; margin-top: 4px; }
 .remoteWorkspaceActions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
 .remoteWorkspaceActions button { font-size: 11px; }
+.remoteSessionAction { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.remoteSessionAction:hover { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); }
+.remoteSessionAction:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
+.remoteSessionAction:disabled { opacity: .45; cursor: default; }
 .remoteWorkspaceTimestamp { display: block; font-size: 10px; margin-top: 5px; color: var(--dsw-alias-label-tertiary); }
 .remoteWorkspaceFeedback[data-state='unknown'] { border-inline-start: 3px solid var(--dsw-alias-state-warn-primary); }
 .remoteWorkspaceFeedback[data-state='ready'] { border-inline-start: 3px solid var(--dsw-alias-state-success-primary); }

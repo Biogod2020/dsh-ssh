@@ -130,10 +130,24 @@ try {
   await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&value.sessions.some(row=>row.sessionId===sessionId)})
   assert.equal((await stats()).followOpens,1)
   assert.equal(JSON.parse(await readFile(join(remoteRoot, 'state/server.json'), 'utf8')).pid, receipt.pid)
+  let remoteSessionActionsVerified = false
+  if (version === '0.2.1-rc.2') {
+    const action = (name, extra={}) => api('remote/session/action', { id:workspace.id, expectedHostId:workspace.hostId, sessionId, action:name, ...extra })
+    await action('pin')
+    await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&value.sessions.find(row=>row.sessionId===sessionId)?.pinned===true})
+    await action('unpin')
+    await action('rename',{title:'Native row action rename confirmed'})
+    await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);const row=value.sessions.find(row=>row.sessionId===sessionId);return !value.stale&&row?.pinned!==true&&row?.title==='Native row action rename confirmed'})
+    await action('archive')
+    await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&!value.sessions.some(row=>row.sessionId===sessionId)&&value.archivedSessions?.some(row=>row.sessionId===sessionId)})
+    await action('unarchive')
+    await until(async()=>{const value=await api('remote/sessions?id='+workspace.id);return !value.stale&&value.sessions.some(row=>row.sessionId===sessionId)})
+    remoteSessionActionsVerified = true
+  }
   result = { passed: true, completed: true, runtime: version, archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
     generatedMetadataSessions: created, rawSdkSessionRows: rows, rawSdkResponseBytes: bytes, largeDecodeThresholdBytes: 1024 * 1024,
     ...inspectionVerification, ...draftInspectionVerification, compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
-    pushedArchiveAndUnarchive: true, liveFeedWaitRequestedMilliseconds: 43000,
+    pushedArchiveAndUnarchive: true, remoteSessionActionsVerified, liveFeedWaitRequestedMilliseconds: 43000,
     liveFeedWaitElapsedMilliseconds: feedWaitElapsed, liveFeedWaitWallMilliseconds: feedWaitWallElapsed,
     harnessSha256: createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'), remotePidPreserved: true, modelRequests: 0, nativeDesktopVerified: false }
   passed = true

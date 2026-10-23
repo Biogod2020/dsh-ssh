@@ -89,3 +89,8 @@ Gemini 大范围审阅请求超时，没有算作完成；缩小范围后已实�
 ## 视图采样与卸载保存记账
 
 目录重查修复 `b6e9d95` 的[完整 CI](https://github.com/Biogod2020/dsh-ssh/actions/runs/39883902473)三个门槛均通过。新增[视图采样基础](view-inspection-2026-10-22.md)已通过 91 文件 / 822 项与三个实际安装包的模拟 Client 序列化检查；没有真实堆/RSS或原生UI测量，没有启用自动释放。一次性种子与卸载后只读确认覆盖了旧空种子、清空失败和迟到保存等 React 时序。内存预算、操作观察、恢复入口、释放门闩及原生性能仍保留在本轮要求中。原冻结归档的持续观察继续运行，但记录到采样间隔超限，不能计为 24 小时通过；Mac 系统日志也记录了多次维护休眠。没有重置或删除失败记录。
+
+
+### Clipboard and native Session row actions
+
+Added focused/gesture-gated embedded text copy and Host-bound native row actions (pin/unpin, archive/unarchive, rename), durable pin/archive metadata, and same-Session reselection after archive clears the guest shell. Full846 tests/typecheck/build/archive, all3 baseline runtimes, rc.2 actual metadata actions and published jay.39 downgrade passed on the same cfb942 candidate. Actual Desktop message copy/paste and row interactions were observed. Native code-block copy and valid-history reopen remain pending because the handwritten fixture omitted stream metadata and the Mac locked before the corrected fixture could run. Daily installation and npm unchanged. [Evidence and remaining gates](clipboard-and-session-actions-2026-10-22.md).

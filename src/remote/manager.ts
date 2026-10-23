@@ -455,12 +455,13 @@ export class RemoteWorkspaces {
           if (this.runtimes.get(item.hostId) !== runtime) throw new Error('Remote connection changed')
           const workspace = workspaces.items.find(x => x.workspaceId === item.workspaceId)
           if (!workspace || !Array.isArray(workspace.sessionIds) || !Array.isArray(result.items)) throw new Error('Remote workspace catalog is incompatible')
-          const members = new Set(workspace.sessionIds), archived = new Set(workspaces.archivedSessionIds)
-          const sessions = result.items.filter(x => members.has(x.sessionId) && !archived.has(x.sessionId) && x.origin !== 'subagent')
+          const members = new Set(workspace.sessionIds), archived = new Set(workspaces.archivedSessionIds), pinned = new Set(workspaces.pinnedSessionIds ?? [])
+          const all = result.items.filter(x => members.has(x.sessionId) && x.origin !== 'subagent')
             .map(x => ({ sessionId: x.sessionId, title: typeof x.projections?.values?.title === 'string' ? x.projections.values.title.slice(0, 1024) : '',
-              running: x.running === true, blank: x.blank === true, updatedAt: Number.isFinite(x.updatedAt) ? x.updatedAt : 0 }))
+              running: x.running === true, blank: x.blank === true, updatedAt: Number.isFinite(x.updatedAt) ? x.updatedAt : 0, ...(pinned.has(x.sessionId) ? { pinned: true } : {}) }))
             .sort((a, b) => b.updatedAt - a.updatedAt)
-          const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, stale: false, checkedAt }
+          const sessions = all.filter(row => !archived.has(row.sessionId)), archivedSessions = all.filter(row => archived.has(row.sessionId))
+          const catalog: RemoteSessionCatalog = { workspaceId: item.workspaceId, sessions, ...(archivedSessions.length ? { archivedSessions } : {}), stale: false, checkedAt }
           this.sessionCache.save(id, catalog)
           for (const session of sessions) void this.historyCache.sync(item, session.sessionId, false, session.updatedAt, session.running)
           return { ...catalog, ...(this.sessionCache.warning ? { warning: this.sessionCache.warning } : {}) }
@@ -476,6 +477,24 @@ export class RemoteWorkspaces {
     try {
       const result = await runtime.gateway.rpc<{ sessionId: string }>('session/create', { request: { workspaceId: item.workspaceId } })
       check(); return result
+    } finally { this.invalidateCatalog(runtime) }
+  }
+  /** Explicit metadata mutations use the owning connected Host once. No retry. */
+  async sessionAction(id: string, sessionId: string, action: string, title?: string, stopActivity = false, expectedHostId?: string): Promise<void> {
+    const methods: Record<string, string> = { pin: 'workspace/pinSession', unpin: 'workspace/unpinSession', archive: 'workspace/archiveSession', unarchive: 'workspace/unarchiveSession', rename: 'session/rename' }
+    if (!Object.hasOwn(methods, action) || !sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)
+      || action === 'rename' && (typeof title !== 'string' || !title.trim() || title.length > 1024)) throw new Error('Invalid remote Session action')
+    const { item, runtime, check } = await this.connectedWorkspace(id)
+    if (expectedHostId !== undefined && item.hostId !== expectedHostId) throw new Error('Remote Host identity changed')
+    await this.withCatalog(runtime, catalog => {
+      check()
+      if (!catalog.workspaces.items.some(row => row.workspaceId === item.workspaceId && row.sessionIds.includes(sessionId))) throw new Error('Session does not belong to this remote workspace')
+    })
+    check(); this.invalidateCatalog(runtime)
+    try {
+      await runtime.gateway.rpc(methods[action]!, { request: { sessionId,
+        ...(action === 'rename' ? { title: title!.trim() } : {}), ...(action === 'archive' && stopActivity ? { stopActivity: true } : {}) } })
+      check()
     } finally { this.invalidateCatalog(runtime) }
   }
   private async connectedWorkspace(id: string) {

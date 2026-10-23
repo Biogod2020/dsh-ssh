@@ -43,3 +43,14 @@ it('keeps the parked local blank Session addressable when the remote view owns t
   expect(local.byId.draft.blank).toBe(true)
   expect(local.byId.draft.retainedBy.mainView).toBe(1)
 })
+it('projects remote pin and archive flags into native filters without changing local ids',()=>{
+  const workspace={id:'one',hostId:'a'.repeat(24),alias:'a',title:'Remote',remotePath:'/a',workspaceId:'project'}
+  const entry={sessionId:'same',title:'Remote',running:false,blank:false,updatedAt:1,pinned:true}
+  const remote={native:true,workspaces:[workspace],catalogs:new Map([[workspace.id,{workspaceId:'project',stale:false,sessions:[entry],archivedSessions:[{...entry,sessionId:'archived',pinned:false}]}]])}
+  const original={items:[],pinnedSessionIds:['local'],archivedSessionIds:['local-old']}
+  const combined=combineNavigation({ids:[],byId:{}},original,remote)
+  expect(combined.workspaces.pinnedSessionIds).toEqual(['local',remoteSessionKey(workspace,'same')])
+  expect(combined.workspaces.archivedSessionIds).toEqual(['local-old',remoteSessionKey(workspace,'archived')])
+  expect(resolveRemoteNavigation(remoteSessionKey(workspace,'archived'),remote)?.sessionId).toBe('archived')
+  expect(original.pinnedSessionIds).toEqual(['local'])
+})

@@ -3,6 +3,7 @@ import { CatalogReadError, catalogJsonLimit } from './catalog-json.ts'
 export interface WorkspaceDirectory {
   items: Array<{ workspaceId: string; sessionIds: string[] }>
   archivedSessionIds: string[]
+  pinnedSessionIds?: string[]
 }
 const invalid = () => new Error('Remote workspace directory is incompatible')
 const maxRows = 20000, maxReferences = 100000
@@ -30,6 +31,8 @@ export class WorkspaceDirectoryProjection {
   private removed = new Set<string>()
   private archived: string[] = []
   private archiveBytes = 2
+  private pinned: string[] | undefined
+  private pinBytes = 2
   private bytes = 0
   private references = 0
   private current?: WorkspaceDirectory
@@ -50,8 +53,11 @@ export class WorkspaceDirectoryProjection {
         const size = cost(view); bytes += size.bytes; references += size.references
       }
       const archived = ids(frame.value.archivedSessionIds)
-      this.check(next.size, bytes, references, archived)
+      const pinned = frame.value.pinnedSessionIds === undefined ? undefined : ids(frame.value.pinnedSessionIds)
+      const pinBytes = Buffer.byteLength(JSON.stringify(pinned ?? []))
+      this.check(next.size, bytes, references, archived, pinBytes, pinned?.length ?? 0)
       this.rows = next; this.bytes = bytes; this.references = references; this.archived = archived; this.archiveBytes = Buffer.byteLength(JSON.stringify(archived))
+      this.pinned = pinned; this.pinBytes = pinBytes
     } else {
       if (!before) throw invalid()
       if (frame?.type === 'upsert') {
@@ -77,15 +83,18 @@ export class WorkspaceDirectoryProjection {
       } else if (frame?.type === 'order') {
         ids(frame.workspaceIds); return undefined // Session lists retain their existing updatedAt order.
       } else if (frame?.type === 'pinned') {
-        ids(frame.pinnedSessionIds); return undefined // Pinning does not change project membership.
+        const pinned = ids(frame.pinnedSessionIds), bytes = Buffer.byteLength(JSON.stringify(pinned))
+        this.check(this.rows.size, this.bytes, this.references, this.archived, bytes, pinned.length)
+        if (this.pinned && pinned.length === this.pinned.length && pinned.every((value, n) => value === this.pinned![n])) return undefined
+        this.pinned = pinned; this.pinBytes = bytes
       } else throw invalid()
     }
     // Old snapshots stay detached when an increment arrives during a list RPC.
     // Manager revision checks decide whether that combined read may be saved.
-    this.current = { items: [...this.rows.values()], archivedSessionIds: this.archived }
+    this.current = { items: [...this.rows.values()], archivedSessionIds: this.archived, ...(this.pinned ? { pinnedSessionIds: this.pinned } : {}) }
     return this.current
   }
-  private check(rows: number, bytes: number, references: number, archived: string[]) {
-    if (rows > maxRows || references > maxReferences || bytes + rows + 100 + (archived === this.archived ? this.archiveBytes : Buffer.byteLength(JSON.stringify(archived))) > catalogJsonLimit) throw new CatalogReadError('projection-size')
+  private check(rows: number, bytes: number, references: number, archived: string[], pinBytes = this.pinBytes, pinCount = this.pinned?.length ?? 0) {
+    if (rows > maxRows || references + pinCount > maxReferences || bytes + rows + 100 + pinBytes + (archived === this.archived ? this.archiveBytes : Buffer.byteLength(JSON.stringify(archived))) > catalogJsonLimit) throw new CatalogReadError('projection-size')
   }
 }

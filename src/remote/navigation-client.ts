@@ -146,6 +146,8 @@ export function navigationClient(): void {
             return catalog.items.some(item => item.workspaceId === workspaceId && item.sessionIds.includes(sessionId)) && !catalog.archivedSessionIds?.includes(sessionId)
           }
           if (!member()) return false
+          const current = bridge.state()
+          if (current.workspaceId === workspaceId && current.sessionId === sessionId) { cancelNavigation(); return true }
           const {attempt,signal}=attemptNavigation()
           const apply = () => { if (attempt !== navigationAttempt || !member()) return false; open(sessionId); return true }
           return target.__dshSshDrafts ? target.__dshSshDrafts.prepare(sessionId,signal).then(apply) : apply()
@@ -171,7 +173,7 @@ export function navigationManifest(): void {
   const target = window as unknown as { __DSH_BOOT__?: { entries: Row[]; batches?: Batch[] } }
   const boot = target.__DSH_BOOT__
   if (!boot || !Array.isArray(boot.entries)) return
-  const rev = 'native-navigation-6'
+  const rev = 'native-navigation-7'
   const additions: Row[] = [
     { id: '@jay-local/dsh-ssh-navigation', url: '/__dsh_remote/navigation-client.js?rev=' + rev, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] },
     { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-2', rev: 'local-drafts-2', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },

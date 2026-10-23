@@ -24,10 +24,13 @@ it('enforces an aggregate retained budget even when individual increments are wi
   expect(accepted).toBeGreaterThan(0);expect(accepted).toBeLessThan(10)
   expect(p.snapshot()!.items).toHaveLength(accepted)
 })
-it('does not invalidate Session membership for unchanged rows, project order or pins',()=>{
+it('ignores unchanged membership/order but publishes pins and keeps old snapshots detached',()=>{
   const p=new WorkspaceDirectoryProjection();p.accept(baseline([{workspaceId:'one',sessionIds:['a']}]))
   expect(p.accept({type:'upsert',workspace:{workspaceId:'one',sessionIds:['a'],title:'Changed project title'}})).toBeUndefined()
   expect(p.accept({type:'order',workspaceIds:['one']})).toBeUndefined()
+  const before = p.snapshot()
+  expect(p.accept({type:'pinned',pinnedSessionIds:['a']})).toMatchObject({pinnedSessionIds:['a']})
+  expect(before?.pinnedSessionIds).toBeUndefined()
   expect(p.accept({type:'pinned',pinnedSessionIds:['a']})).toBeUndefined()
   expect(p.accept({type:'archived',archivedSessionIds:['a']})).toMatchObject({archivedSessionIds:['a']})
 })

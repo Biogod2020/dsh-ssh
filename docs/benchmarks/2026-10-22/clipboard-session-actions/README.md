@@ -1,0 +1,1 @@
+Unpublished candidate. rc21 exercises the five Host-bound Session actions using actual DSH/loopback SSH. rc20/alpha4 exercise the existing catalog/serialization/carrier contracts; their new row actions are not counted as verified. Native UI evidence is separate. No model requests.

@@ -15,10 +15,12 @@ export interface RemoteSession {
   running: boolean
   blank: boolean
   updatedAt: number
+  pinned?: boolean
 }
 export interface RemoteSessionCatalog {
   workspaceId: string
   sessions: RemoteSession[]
+  archivedSessions?: RemoteSession[]
   checkedAt?: number
   stale: boolean
   warning?: string

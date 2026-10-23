@@ -60,6 +60,9 @@ it('selects through the remote public UI service without creating, submitting or
   expect(() => bridge.open('bad\nidentity')).toThrow('Invalid remote Session')
   openSession.mockClear()
   expect(bridge.select('project', 'one')).toBe(true)
+  expect(openSession).not.toHaveBeenCalled() // Already current: no repeated navigation or draft load.
+  ctx.sessions.list.getSnapshot = () => ({ byId: {} }) // Archive cleared the remote shell selection.
+  expect(bridge.select('project', 'one')).toBe(true)
   expect(openSession).toHaveBeenCalledExactlyOnceWith('one')
   expect(bridge.select('different-project', 'one')).toBe(false)
   expect(bridge.select('project', 'unknown')).toBe(false)
@@ -110,6 +113,12 @@ it('fences asynchronous draft preparation by the latest navigation and rechecks 
     expect(await bridge.select('project','three')).toBe(true)
     expect(firstSignal!.aborted).toBe(true)
     finish();expect(await old).toBe(false)
+    expect(openSession).toHaveBeenCalledExactlyOnceWith('three')
+    let finishSame!:()=>void, sameSignal:AbortSignal|undefined
+    prepare.mockImplementationOnce(async(_id,signal)=>{sameSignal=signal;await new Promise<void>(resolve=>{finishSame=resolve})})
+    const superseded=bridge.select('project','two')
+    expect(bridge.select('project','one')).toBe(true) // Current row must still cancel the older pending choice.
+    expect(sameSignal!.aborted).toBe(true);finishSame();expect(await superseded).toBe(false)
     expect(openSession).toHaveBeenCalledExactlyOnceWith('three')
     const removed=bridge.select('project','two');archivedSessionIds.push('two')
     expect(await removed).toBe(false);expect(openSession).toHaveBeenCalledTimes(1)

@@ -103,6 +103,14 @@ it('switches projects on the same retained Host without another launch request o
   expect(first.guest.executeJavaScript).toHaveBeenLastCalledWith('(async()=>Boolean(await window.__dshSshView?.select?.("other-remote-work","other-session")))()')
   expect(f.guests).toHaveLength(1); expect(first.guest.loadURL).toHaveBeenCalledOnce()
 })
+it('reselects a retained Session even when its remote shell cleared selection after archive',async()=>{
+  const f=fixture(),first=await f.start()
+  first.guest.dispatchEvent(new Event('dom-ready'));await first.promise
+  first.guest.executeJavaScript.mockClear()
+  await openRemoteWorkspace(workspace,'first')
+  expect(first.guest.executeJavaScript).toHaveBeenCalledWith('(async()=>Boolean(await window.__dshSshView?.select?.("remote-work","first")))()')
+  expect(first.guest.loadURL).toHaveBeenCalledOnce()
+})
 
 it('cancels a pending view without leaking its lease, replaying setup, or disclosing the launch ticket', async () => {
   const f = fixture(), controller = new AbortController()

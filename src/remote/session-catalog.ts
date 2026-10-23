@@ -31,7 +31,7 @@ export class RemoteSessionCache {
     const previous = this.entries[id]
     // Polling updates freshness in memory. Unchanged navigation metadata does
     // not need a complete atomic file rewrite for every project every 5 s.
-    if (previous?.workspaceId === entry.workspaceId && JSON.stringify(previous.sessions) === JSON.stringify(entry.sessions)
+    if (previous?.workspaceId === entry.workspaceId && JSON.stringify([previous.sessions, previous.archivedSessions]) === JSON.stringify([entry.sessions, entry.archivedSessions])
       && Date.now() - this.persistedAt < 60000) { this.entries[id] = entry; return }
     const entries = { ...this.entries, [id]: entry }
     const temporary = `${this.path}.${randomUUID()}.tmp`
@@ -48,7 +48,9 @@ function validCatalog(entry: unknown): entry is RemoteSessionCatalog {
   const x = entry as RemoteSessionCatalog
   return !!x && typeof x.workspaceId === 'string' && Array.isArray(x.sessions) && x.sessions.length <= 20000
     && typeof x.checkedAt === 'number' && Number.isFinite(x.checkedAt)
-    && x.sessions.every(s => s && typeof s.sessionId === 'string' && s.sessionId.length > 0 && s.sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(s.sessionId)
+    && (x.archivedSessions === undefined || Array.isArray(x.archivedSessions) && x.archivedSessions.length + x.sessions.length <= 20000)
+    && [...x.sessions, ...(x.archivedSessions ?? [])].every(s => s && typeof s.sessionId === 'string' && s.sessionId.length > 0 && s.sessionId.length <= 256 && !/[\u0000-\u001f\u007f]/.test(s.sessionId)
       && typeof s.title === 'string' && s.title.length <= 1024 && typeof s.running === 'boolean' && typeof s.blank === 'boolean'
+      && (s.pinned === undefined || typeof s.pinned === 'boolean')
       && typeof s.updatedAt === 'number' && Number.isFinite(s.updatedAt))
 }

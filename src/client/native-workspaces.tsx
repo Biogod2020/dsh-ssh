@@ -1,11 +1,13 @@
 import { createElement, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
-import { MenuItemButton } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal, MenuItemButton, IconArchiveOutlineRegular, IconUnarchiveOutlineRegular, IconPinOutlineRegular, IconPinFillRegular } from '@deepseek-ai/dsh-client-ui-primitives'
 import { projectEntry } from './slot-projection.tsx'
 import { isRemoteNavigationKey, remoteNavigation, remoteSessionKey, remoteWorkspaceKey, resolveRemoteNavigation, type RemoteNavigationSnapshot } from './remote-navigation.ts'
 import { remoteSelection, remotePresentation, subscribeRemoteSelection, type RemoteSelection } from './remote-presentation.ts'
 import { tt } from './panel/helpers.ts'
+import { archiveRemoteSession, mutateRemoteSession, type RemoteSessionAction } from './remote-session-action.ts'
+import css from './panel/panel.module.css'
 
 // Presentation-only projections. Neither Controller nor the local Host receives
 // these identities. Every action must be routed before leaving this component.
@@ -17,9 +19,44 @@ type Hook = <T>(selector: (state: any) => T, equal?: (a: T, b: T) => boolean) =>
 type Props = Record<string, any>
 type MenuOwner = readonly [boolean, (open: boolean) => void]
 
+function RemoteSessionActions({ sessionId, remote, menu, row = false, rename, report }: {
+  sessionId: string; remote: RemoteNavigationSnapshot; menu?: MenuOwner; row?: boolean; rename(key: string, title: string): void; report(message: string): void
+}) {
+  const [busy, setBusy] = useState(false), pending = useRef(false)
+  const target = resolveRemoteNavigation(sessionId, remote), catalog = target && remote.catalogs.get(target.workspace.id)
+  const archived = !!catalog?.archivedSessions?.some(value => value.sessionId === target?.sessionId)
+  const session = [...catalog?.sessions ?? [], ...catalog?.archivedSessions ?? []].find(value => value.sessionId === target?.sessionId)
+  if (!target?.sessionId || !session) return null
+  const disabled = busy || catalog?.stale === true || !navigator.onLine
+  const run = (action: RemoteSessionAction) => {
+    if (disabled || pending.current) return
+    pending.current = true; setBusy(true); report('')
+    void (async () => {
+      if (action === 'archive') { if (!await archiveRemoteSession(target.workspace, target.sessionId!)) return }
+      else await mutateRemoteSession(target.workspace, target.sessionId!, action)
+      menu?.[1](false)
+    })().catch(() => report(tt('remote.actionUnconfirmed'))).finally(() => { pending.current = false; setBusy(false) })
+  }
+  const archiveLabel = tt(archived ? 'remote.unarchiveSession' : 'remote.archiveSession')
+  const pinLabel = tt(session.pinned ? 'remote.unpinSession' : 'remote.pinSession')
+  if (row) return <>
+    <button type="button" className={css.remoteSessionAction} disabled={disabled} aria-label={archiveLabel} title={archiveLabel} onClick={event => { event.stopPropagation(); run(archived ? 'unarchive' : 'archive') }}>
+      {archived ? <IconUnarchiveOutlineRegular size={14} /> : <IconArchiveOutlineRegular size={14} />}
+    </button>
+    {!archived && <button type="button" className={css.remoteSessionAction} disabled={disabled} aria-label={pinLabel} title={pinLabel} onClick={event => { event.stopPropagation(); run(session.pinned ? 'unpin' : 'pin') }}>
+      {session.pinned ? <IconPinFillRegular size={14} /> : <IconPinOutlineRegular size={14} />}
+    </button>}
+  </>
+  return <>
+    <MenuItemButton disabled={disabled} onSelect={() => { menu?.[1](false); rename(sessionId, session.title) }}>{tt('remote.renameSession')}</MenuItemButton>
+    <MenuItemButton disabled={disabled} onSelect={() => run(archived ? 'unarchive' : 'archive')}>{archiveLabel}</MenuItemButton>
+    {!archived && <MenuItemButton disabled={disabled} onSelect={() => run(session.pinned ? 'unpin' : 'pin')}>{pinLabel}</MenuItemButton>}
+  </>
+}
+
 /** Request state belongs to this menu opening, not to the whole sidebar. */
-function RemoteSessionMenu({ sessionId, remote, menu, navigate }: {
-  sessionId: string; remote: RemoteNavigationSnapshot; menu?: MenuOwner; navigate(key: string): boolean
+function RemoteSessionMenu({ sessionId, remote, menu, navigate, rename, report }: {
+  sessionId: string; remote: RemoteNavigationSnapshot; menu?: MenuOwner; navigate(key: string): boolean; rename(key: string, title: string): void; report(message: string): void
 }) {
   const [settings, setSettings] = useState<{ busy?: boolean; error?: 'settings' | 'draft' }>({})
   const settingsAttempt = useRef(0)
@@ -50,6 +87,7 @@ function RemoteSessionMenu({ sessionId, remote, menu, navigate }: {
         if (attempt === settingsAttempt.current) menu?.[1](false)
       }).catch(() => { if (attempt === settingsAttempt.current) setSettings({ error: 'draft' }) })
     }}>{tt('remote.closeView')}</MenuItemButton>
+    <RemoteSessionActions sessionId={sessionId} remote={remote} menu={menu} rename={rename} report={report} />
   </>
 }
 
@@ -59,9 +97,11 @@ export function combineNavigation(list: List, workspaces: Workspaces, remote: Re
   if (selected) for (const [id, row] of Object.entries(byId)) if (row.retainedBy.mainView) byId[id] = {
     ...row, blank: false, retainedBy: { ...row.retainedBy, mainView: 0 },
   }
+  const pinnedSessionIds = Array.isArray(workspaces.pinnedSessionIds) ? [...workspaces.pinnedSessionIds] : []
+  const archivedSessionIds = Array.isArray(workspaces.archivedSessionIds) ? [...workspaces.archivedSessionIds] : []
   for (const workspace of remote.workspaces) {
     const catalog = remote.catalogs.get(workspace.id)
-    const sessions = catalog?.sessions ?? []
+    const sessions = [...catalog?.sessions ?? [], ...catalog?.archivedSessions ?? []]
     const sessionIds: string[] = []
     for (const session of sessions) {
       const id = remoteSessionKey(workspace, session.sessionId)
@@ -69,6 +109,8 @@ export function combineNavigation(list: List, workspaces: Workspaces, remote: Re
       byId[id] = { id, title, displayTitle: title, cwd: `${workspace.alias}:${workspace.remotePath}`, running: !catalog?.stale && session.running,
         blank: false, updatedAt: session.updatedAt, retainedBy: { mainView: selected?.workspaceId === workspace.id && selected.sessionId === session.sessionId ? 1 : 0 } }
       ids.push(id); sessionIds.push(id)
+      if (session.pinned && !catalog?.archivedSessions?.includes(session)) pinnedSessionIds.push(id)
+      if (catalog?.archivedSessions?.includes(session)) archivedSessionIds.push(id)
     }
     if (!sessions.length && (!catalog || catalog.checkedAt === undefined || catalog.stale)) {
       const id = remoteSessionKey(workspace)
@@ -79,11 +121,14 @@ export function combineNavigation(list: List, workspaces: Workspaces, remote: Re
     items.push({ workspaceId: remoteWorkspaceKey(workspace), path: `ssh://${workspace.alias}${workspace.remotePath}`, title: workspace.title, sessionIds,
       createdAt: new Date(0).toISOString(), updatedAt: new Date(Math.max(0, ...sessions.map(session => session.updatedAt))).toISOString() })
   }
-  return { list: { ...list, ids, byId }, workspaces: { ...workspaces, items } }
+  return { list: { ...list, ids, byId }, workspaces: { ...workspaces, items, pinnedSessionIds, archivedSessionIds } }
 }
 
 export function NativeWorkspaces({ original, ...props }: Props & { original: ComponentType<Props> }) {
   const [navigationIssue, setNavigationIssue] = useState(false)
+  const [actionIssue, setActionIssue] = useState('')
+  const [renameTarget, setRenameTarget] = useState<{ key: string; title: string; hostId: string }>()
+  const [renameBusy, setRenameBusy] = useState(false), renamePending = useRef(false)
   const lifetime = useRef(0)
   useLayoutEffect(() => { ++lifetime.current; return () => { ++lifetime.current } }, [])
   // This optional hook is a fixed contract for the lifetime of its native
@@ -125,11 +170,19 @@ export function NativeWorkspaces({ original, ...props }: Props & { original: Com
     if (args.some(isRemoteNavigationKey)) throw new Error(tt('remote.actionInRemote'))
     return props[action](...args)
   }
+  const requestRemoteRename = (key: string, title: string) => {
+    const target = resolveRemoteNavigation(key, remote)
+    if (!target?.sessionId) { setActionIssue(tt('remote.desktopIdentityChanged')); return }
+    setActionIssue(''); setRenameTarget({ key, title, hostId: target.workspace.hostId })
+  }
   const renderSlot = (name: string, owner: Props, ...rest: any[]) => {
     if (isRemoteNavigationKey(owner?.sessionId)) {
       if (name === 'sidebar.session.row.hover') return <span>{tt('remote.remoteSession')}</span>
       if (name === 'sidebar.workspaces.session.menu.item') return <RemoteSessionMenu
-        sessionId={owner.sessionId} remote={remote} menu={rest[0]?.hookContext} navigate={navigate} />
+        sessionId={owner.sessionId} remote={remote} menu={rest[0]?.hookContext} navigate={navigate}
+        rename={requestRemoteRename} report={setActionIssue} />
+      if (name === 'sidebar.workspaces.session.row.action') return <RemoteSessionActions sessionId={owner.sessionId} remote={remote} row
+        rename={requestRemoteRename} report={setActionIssue} />
       return null // Native row actions address the local Host; never pass a remote id.
     }
     return props.renderSlot(name, owner, ...rest)
@@ -137,9 +190,46 @@ export function NativeWorkspaces({ original, ...props }: Props & { original: Com
   return <>{createElement(original, { ...props, useSessions, useWorkspaces, useSessionStatus, usePanelInfo, renderSlot,
     open: (id: string) => { if (!navigate(id)) localAction(() => props.open(id)) },
     startSession: (id?: string, options?: unknown) => { if (!id || !navigate(id, true)) localAction(() => props.startSession(id, options)) },
-    requestSessionRename: (id: string, title: string) => { if (!navigate(id)) props.requestSessionRename(id, title) },
+    requestSessionRename: (id: string, title: string) => { if (isRemoteNavigationKey(id)) requestRemoteRename(id, title); else props.requestSessionRename(id, title) },
+    unarchiveSession: (id: string) => {
+      const target = resolveRemoteNavigation(id, remote)
+      if (!isRemoteNavigationKey(id)) return props.unarchiveSession?.(id)
+      if (target?.sessionId) return mutateRemoteSession(target.workspace, target.sessionId, 'unarchive').catch(error => { setActionIssue(tt('remote.actionUnconfirmed')); throw error })
+      return Promise.reject(new Error(tt('remote.desktopIdentityChanged')))
+    },
+    archiveSession: (id: string) => {
+      if (!isRemoteNavigationKey(id)) return props.archiveSession?.(id)
+      const target = resolveRemoteNavigation(id, remote)
+      if (!target?.sessionId) return Promise.reject(new Error(tt('remote.desktopIdentityChanged')))
+      return archiveRemoteSession(target.workspace, target.sessionId)
+    },
+    renameSession: (id: string, title: string) => {
+      if (!isRemoteNavigationKey(id)) return props.renameSession?.(id, title)
+      const target = resolveRemoteNavigation(id, remote)
+      if (!target?.sessionId) return Promise.reject(new Error(tt('remote.desktopIdentityChanged')))
+      return mutateRemoteSession(target.workspace, target.sessionId, 'rename', title)
+    },
+    forkSession: localOnly('forkSession'),
+    ...Object.fromEntries((['pinSession', 'unpinSession'] as const).map(action => [action, (id: string) => {
+      if (!isRemoteNavigationKey(id)) return props[action]?.(id)
+      const target = resolveRemoteNavigation(id, remote)
+      if (!target?.sessionId) return Promise.reject(new Error(tt('remote.desktopIdentityChanged')))
+      return mutateRemoteSession(target.workspace, target.sessionId, action === 'pinSession' ? 'pin' : 'unpin')
+    }])),
     renameWorkspace: localOnly('renameWorkspace'), deleteWorkspace: localOnly('deleteWorkspace'), insertWorkspaceBefore: localOnly('insertWorkspaceBefore'),
-  })}{navigationIssue && <p role="alert">{tt('remote.unsavedDraft')}</p>}</>
+  })}{navigationIssue && <p role="alert">{tt('remote.unsavedDraft')}</p>}{actionIssue && <p role="alert">{actionIssue}</p>}
+  {renameTarget && <Modal open title={tt('remote.renameSession')} closeLabel={tt('remote.actionCancel')} onClose={() => { if (!renamePending.current) setRenameTarget(undefined) }}
+    footer={<><Button disabled={renameBusy} onClick={() => setRenameTarget(undefined)}>{tt('remote.actionCancel')}</Button><Button disabled={renameBusy || !renameTarget.title.trim()} onClick={() => {
+      if (renamePending.current) return
+      const target = resolveRemoteNavigation(renameTarget.key, remote)
+      if (!target?.sessionId || target.workspace.hostId !== renameTarget.hostId) { setActionIssue(tt('remote.desktopIdentityChanged')); return }
+      renamePending.current = true; setRenameBusy(true)
+      void mutateRemoteSession(target.workspace, target.sessionId, 'rename', renameTarget.title).then(() => setRenameTarget(undefined))
+        .catch(() => setActionIssue(tt('remote.actionUnconfirmed'))).finally(() => { renamePending.current = false; setRenameBusy(false) })
+    }}>{tt('remote.actionSave')}</Button></>}>
+    <input aria-label={tt('remote.sessionName')} data-modal-autofocus value={renameTarget.title} disabled={renameBusy} maxLength={1024}
+      onChange={event => setRenameTarget({ ...renameTarget, title: event.target.value })} />
+  </Modal>}</>
 }
 
 /** Reuse the actual native browser, store, folder rows and keyboard/search UI. */
