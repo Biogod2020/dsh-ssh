@@ -136,3 +136,30 @@ it('does not import over an explicitly empty browser draft', async () => {
   expect(restore).not.toHaveBeenCalled()
   expect(replica.getSnapshot().status).toBe('conflict')
 })
+
+it('reports lifecycle metadata without text and does not equate a saved attachment flag with a recoverable handle',async()=>{
+  const f=fixture(undefined,input('private generated draft'))
+  await f.replica.load();expect(f.replica.inspection()).toMatchObject({persisted:false,hasAttachments:false})
+  await f.replica.flush()
+  expect(f.replica.inspection()).toMatchObject({persisted:true,inputPhase:'plain',revision:0})
+  expect(JSON.stringify(f.replica.inspection())).not.toContain('private generated draft')
+  f.replica.update({...input('private generated draft',1),attachmentIds:['private-handle']})
+  await f.replica.flush()
+  expect(f.replica.inspection()).toMatchObject({persisted:true,hasAttachments:true})
+  expect(JSON.stringify(f.replica.inspection())).not.toContain('private-handle')
+})
+
+it('marks a draft unpersisted until its actual save completes and requires matching durable content for retired recovery',async()=>{
+  const f=fixture();await f.replica.load()
+  let done!:()=>void,began!:()=>void
+  const ready=new Promise<void>(resolve=>{began=resolve})
+  f.intercept(async()=>{began();await new Promise<void>(resolve=>{done=resolve})})
+  f.replica.update(input('unmounted text',1));const saving=f.replica.flush();await ready
+  expect(f.replica.inspection()).toMatchObject({persisted:false,status:'saving'})
+  expect(f.replica.preservedBy(doc(''))).toBe(false)
+  done();await saving
+  expect(f.replica.preservedBy(f.saved)).toBe(true)
+  expect(f.replica.preservedBy({...f.saved!,hostId:'different-host'})).toBe(false)
+  expect(f.replica.preservedBy({...f.saved!,sessionId:'different-session'})).toBe(false)
+  expect(f.replica.preservedBy({...f.saved!,hadAttachments:true})).toBe(false)
+})

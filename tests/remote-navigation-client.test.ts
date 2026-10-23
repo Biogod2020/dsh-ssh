@@ -115,3 +115,32 @@ it('fences asynchronous draft preparation by the latest navigation and rechecks 
     expect(await removed).toBe(false);expect(openSession).toHaveBeenCalledTimes(1)
   }finally{cleanups.forEach(fn=>fn());delete(window as any).__dshSshNavigationOwner}
 })
+
+it('samples only bounded lifecycle metadata and renderer heap estimates, including dormant terminal tabs',()=>{
+  let registration:any
+  const cleanup:Array<()=>void>=[]
+  vi.stubGlobal('__ModuleLoader__',{load:(value:unknown)=>{registration=value}})
+  vi.stubGlobal('performance',{memory:{usedJSHeapSize:123456}})
+  const privateText='Generated private text excluded from measurements'
+  vi.stubGlobal('__dshSshDrafts',{inspection:()=>({pendingUnmountSaves:1,failedUnmountSaves:2,unrelated:privateText,
+    sessions:[{sessionId:'one',status:'saved',revision:4,persisted:true,hasReferences:false,hasAttachments:true,inputPhase:'plain',draft:privateText}]})})
+  const tabs=[{kind:'terminal',sessionId:'dormant'},{kind:'resource',address:'private-generated-address'}]
+  const ctx:any={uiWorkspace:{openSession:vi.fn()},sessions:{list:{getSnapshot:()=>({byId:{one:{id:'one',retainedBy:{mainView:1}}}})}},
+    workspaces:{list:{getSnapshot:()=>({items:[{workspaceId:'project',sessionIds:['one']}]})}},
+    get:(name:string)=>name==='sidebarRight'?{openTabs:{getSnapshot:()=>tabs}}:undefined,
+    effect:(fn:()=>()=>void)=>cleanup.push(fn())}
+  ctx.root={inject:(_deps:string[],apply:(ctx:unknown)=>void)=>{apply(ctx);return{dispose:()=>cleanup.forEach(fn=>fn())}}}
+  navigationClient();registration.factory().apply(ctx)
+  try{
+    const bridge=(window as any).__dshSshView,first=bridge.inspection()
+    expect(first.memory).toEqual({kind:'renderer-js-heap-estimate',bytes:123456})
+    expect(first.sidebar).toEqual({tabs:2,terminals:1});expect(first.navigation).toEqual({sessionId:'one',workspaceId:'project'})
+    expect(first.drafts).toMatchObject({pendingUnmountSaves:1,failedUnmountSaves:2,sessions:[{hasAttachments:true}]})
+    expect(first.lifecycle).toEqual({scope:'observation-only',pendingRequests:null,unconfirmedOperations:null})
+    expect(JSON.stringify(first)).not.toContain(privateText);expect(JSON.stringify(first)).not.toContain('private-generated-address')
+    ;(performance as any).memory.usedJSHeapSize=NaN;ctx.get=()=>undefined
+    expect(bridge.inspection()).toMatchObject({memory:{bytes:null},sidebar:null})
+    vi.stubGlobal('__dshSshDrafts',{inspection:()=>({sessions:privateText})})
+    expect(bridge.inspection().drafts).toBeNull()
+  }finally{cleanup.forEach(fn=>fn());delete(window as any).__dshSshNavigationOwner}
+})

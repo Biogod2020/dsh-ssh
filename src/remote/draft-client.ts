@@ -50,6 +50,18 @@ export function draftClient(hostId: string, makeReplica: typeof createDraftRepli
     const e = React.createElement
     function install(ctx: Context) {
       const controllers = new Map<string, Replica>()
+      const retiring = new Set<Promise<void>>()
+      const failedRetirements = new Map<Replica, string>()
+      const retire = (sessionId: string, replica: Replica) => {
+        const finish = async (ok: boolean) => {
+          // A newer instance may have saved and unmounted before this older
+          // request settles. A bounded read checks disk without requiring a
+          // currently mounted controller, replaying a write or restoring text.
+          if (!ok && !await replica.confirmPersisted()) failedRetirements.set(replica, sessionId)
+        }
+        const closing = replica.dispose().then(finish, () => finish(false))
+        retiring.add(closing); void closing.finally(() => retiring.delete(closing))
+      }
       const empty = { status: 'loading', hadReferences: false, hadAttachments: false } as const
       const emptySnapshot = () => empty, emptySubscribe = () => () => {}
       const english = () => document.documentElement.lang.toLowerCase().startsWith('en')
@@ -69,9 +81,19 @@ export function draftClient(hostId: string, makeReplica: typeof createDraftRepli
       function DraftView(props: Props & { face: InputFace }) {
         const source = React.useMemo(() => ({ getSnapshot: () => props.face.state.getSnapshot(), subscribe: (listener: () => void) => props.face.state.subscribe(listener) }), [props.face])
         const input = React.useSyncExternalStore(source.subscribe, source.getSnapshot, source.getSnapshot)
-        const replica = React.useMemo(() => input ? makeReplica({ hostId, sessionId: props.sessionId, input,
-          seed: target.__dshSshDraftSeeds?.get(props.sessionId), restore: text => props.face.setDraft(text) }) : undefined,
-        [props.sessionId, !!input, props.face])
+        const replica = React.useMemo(() => {
+          if (!input) return undefined
+          let browserDraftExisted = true
+          try { browserDraftExisted = localStorage.getItem('dsh.conversation.' + props.sessionId) !== null } catch { /* Protect unknown browser input. */ }
+          return makeReplica({ hostId, sessionId: props.sessionId, input, browserDraftExisted,
+            // Consume only when load actually uses the seed, not during an
+            // abandoned React render. Later mounts must read current disk data.
+            get seed() {
+              const value = target.__dshSshDraftSeeds?.get(props.sessionId)
+              target.__dshSshDraftSeeds?.delete(props.sessionId); return value
+            },
+            restore: text => props.face.setDraft(text) })
+        }, [props.sessionId, !!input, props.face])
         const state = React.useSyncExternalStore(replica?.subscribe ?? emptySubscribe, replica?.getSnapshot ?? emptySnapshot, replica?.getSnapshot ?? emptySnapshot)
         React.useLayoutEffect(() => {
           if (!replica) return
@@ -82,7 +104,7 @@ export function draftClient(hostId: string, makeReplica: typeof createDraftRepli
         React.useEffect(() => {
           if (!replica) return
           controllers.set(props.sessionId, replica); void replica.load()
-          return () => { if (controllers.get(props.sessionId) === replica) controllers.delete(props.sessionId); void replica.dispose() }
+          return () => { if (controllers.get(props.sessionId) === replica) controllers.delete(props.sessionId); retire(props.sessionId, replica) }
         }, [replica])
         if (!replica || !input || state.status === 'saved' && !input.draft && !state.hadReferences && !state.hadAttachments) return null
         const t = labels(), children: import('react').ReactNode[] = []
@@ -116,6 +138,17 @@ export function draftClient(hostId: string, makeReplica: typeof createDraftRepli
         } catch { return e('p', { role: 'status' }, labels().unavailable) }
       }
       const api = {
+        inspection() {
+          const sessions = [...controllers].map(([sessionId, controller]) => ({ sessionId, ...controller.inspection() }))
+          // A new empty or different draft does not prove an old failed save
+          // was recovered. Clear only after the same text and reference flags
+          // are confirmed durable under the same Host/Session identity.
+          for (const [retired, sessionId] of failedRetirements) {
+            const current = controllers.get(sessionId)
+            if (current?.inspection().persisted && retired.preservedBy(current.getSaved())) failedRetirements.delete(retired)
+          }
+          return { sessions, pendingUnmountSaves: retiring.size, failedUnmountSaves: failedRetirements.size }
+        },
         async flush() { return (await Promise.all([...controllers.values()].map(controller => controller.beforeLeave()))).every(Boolean) },
         async prepare(sessionId: string, signal?: AbortSignal) {
           signal?.throwIfAborted()

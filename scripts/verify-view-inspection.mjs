@@ -1,0 +1,73 @@
+/** Execute a served Client contribution in a MOCK public context. This checks
+ * serialization and field boundaries; it is not renderer memory or native UI. */
+import assert from 'node:assert/strict'
+import { Script, createContext } from 'node:vm'
+
+export function verifyViewInspection(source, workspaceId, sessionId) {
+  const modules=[],cleanups=[]
+  const privateText='Generated private draft excluded from inspection'
+  const window={__ModuleLoader__:{load:value=>modules.push(value)},addEventListener(){},removeEventListener(){},
+    __dshSshDrafts:{inspection:()=>({pendingUnmountSaves:1,failedUnmountSaves:1,privateText,sessions:[{
+      sessionId,status:'saved',revision:3,persisted:true,hasReferences:false,hasAttachments:true,inputPhase:'plain',draft:privateText,
+    }]})}}
+  const sandbox=createContext({window,performance:{memory:{usedJSHeapSize:123456}},Date,
+    document:{documentElement:{setAttribute(){},removeAttribute(){}}},localStorage:{getItem:()=>null},setInterval:()=>1,clearInterval(){}})
+  new Script(source).runInContext(sandbox,{timeout:1000})
+  assert.equal(modules.length,1);assert.equal(modules[0].id,'@jay-local/dsh-ssh-navigation')
+  const ctx={uiWorkspace:{openSession(){throw Error('Inspection must not navigate')}},
+    sessions:{list:{getSnapshot:()=>({byId:{[sessionId]:{id:sessionId,retainedBy:{mainView:1}}}})}},
+    workspaces:{list:{getSnapshot:()=>({items:[{workspaceId,sessionIds:[sessionId]}]})}},
+    get:name=>name==='sidebarRight'?{openTabs:{getSnapshot:()=>[{kind:'terminal',sessionId:'inactive-generated-session'}]}}:undefined,
+    effect:fn=>cleanups.push(fn())}
+  ctx.root={inject:(_deps,apply)=>{apply(ctx);return{dispose(){for(const cleanup of cleanups.splice(0))cleanup()}}}}
+  modules[0].factory().apply(ctx)
+  try {
+    const result=JSON.parse(JSON.stringify(window.__dshSshView.inspection()))
+    assert.deepEqual(result.memory,{kind:'renderer-js-heap-estimate',bytes:123456})
+    assert.deepEqual(result.navigation,{sessionId,workspaceId})
+    assert.deepEqual(result.sidebar,{tabs:1,terminals:1})
+    assert.equal(result.drafts.pendingUnmountSaves,1);assert.equal(result.drafts.failedUnmountSaves,1)
+    assert.equal(result.drafts.sessions[0].hasAttachments,true)
+    assert.deepEqual(result.lifecycle,{scope:'observation-only',pendingRequests:null,unconfirmedOperations:null})
+    assert(!JSON.stringify(result).includes(privateText))
+    return {serializedInspectionInMockClient:true,mockHeapValueNotActualMeasurement:true,nativeUiVerified:false}
+  } finally { window.__dshSshNavigationOwner.dispose() }
+}
+
+/** Exercise the serialized Replica too, without claiming real React/browser
+ * rendering. Separate React lifecycle tests cover mount/update/unmount. */
+export async function verifyDraftInspection(source, hostId, sessionId) {
+  const modules=[],cleanups=[],reactCleanups=[]
+  let Entry
+  const input={draft:'',draftRev:0,phase:'plain',attachmentIds:[],occurrences:[]}
+  const face={state:{getSnapshot:()=>input,subscribe:()=>()=>{}},setDraft(){throw Error('Inspection must not restore or edit input')}}
+  const window={__ModuleLoader__:{load:value=>modules.push(value)},addEventListener(){},removeEventListener(){},
+    __dshSshDraftSeeds:new Map([[sessionId,{hostId,sessionId,draft:{version:1,hostId,sessionId,text:'',revision:'00000000-0000-4000-8000-000000000001',operationId:'00000000-0000-4000-8000-000000000002',hadReferences:false,hadAttachments:false,savedAt:1}}]])}
+  const react={createElement:(component,props,...children)=>typeof component==='function'?component(props):{component,props,children},
+    useMemo:fn=>fn(),useSyncExternalStore:(_subscribe,snapshot)=>snapshot(),
+    useLayoutEffect:fn=>{const cleanup=fn();if(cleanup)reactCleanups.push(cleanup)},
+    useEffect:fn=>{const cleanup=fn();if(cleanup)reactCleanups.push(cleanup)}}
+  const sandbox=createContext({window,Date,localStorage:{getItem:()=>null},document:{documentElement:{lang:'en'}},
+    fetch(){throw Error('An owned empty seed must require no request')},setTimeout,clearTimeout})
+  new Script(source).runInContext(sandbox,{timeout:1000})
+  assert.equal(modules.length,1);assert.equal(modules[0].id,'@jay-local/dsh-ssh-drafts')
+  const ctx={slots:{inject:(_name,apply)=>apply(),register:(_options,entry)=>{Entry=entry;return()=>{}}},
+    sessions:{scope:id=>id},get:name=>name==='conversation'?{input:{for:()=>face}}:undefined,effect:fn=>cleanups.push(fn())}
+  ctx.root={inject:(_deps,apply)=>{apply(ctx);return{dispose(){for(const cleanup of cleanups.splice(0))cleanup()}}}}
+  modules[0].factory(name=>{assert.equal(name,'react');return react}).apply(ctx)
+  try {
+    react.createElement(Entry,{sessionId})
+    for(let n=0;n<20;n++)await Promise.resolve()
+    const result=JSON.parse(JSON.stringify(window.__dshSshDrafts.inspection()))
+    assert.equal(result.sessions.length,1);assert.equal(result.sessions[0].sessionId,sessionId)
+    assert.equal(result.sessions[0].persisted,true);assert.equal(result.sessions[0].status,'saved')
+    assert.equal(result.pendingUnmountSaves,0);assert.equal(result.failedUnmountSaves,0)
+    assert.equal(window.__dshSshDraftSeeds.size,0)
+    assert(!('text' in result.sessions[0]));assert(!('draft' in result.sessions[0]))
+    return {serializedDraftInspectionInMockClient:true}
+  } finally {
+    for(const cleanup of reactCleanups.reverse())cleanup()
+    for(let n=0;n<20;n++)await Promise.resolve()
+    window.__dshSshDraftOwner.dispose()
+  }
+}

@@ -8,15 +8,16 @@ export function navigationClient(): void {
     sessions: { list: { getSnapshot(): Catalog }; retain?(id: string, options: { source: string }): { ready?: Promise<unknown>; release(): void } }
     workspaces: { list: { getSnapshot(): { items: Workspace[]; archivedSessionIds?: string[] } } }
     slots?: {entries(name:string):readonly {options?:{id?:string};store?:{create?():{actions?:{openSection?(id:string):void}}}}[]}
+    get?(name: string): unknown
     effect(fn: () => () => void, label: string): void
     root: { inject(deps: string[], apply: (ctx: Ctx) => void): { dispose(): unknown } }
   }
-  type Bridge = { state(): { sessionId?: string; workspaceId?: string }; open(sessionId: string): boolean | Promise<boolean>; select(workspaceId: string, sessionId: string): boolean | Promise<boolean>; settings():boolean; cancelNavigation():void }
+  type Bridge = { state(): { sessionId?: string; workspaceId?: string }; open(sessionId: string): boolean | Promise<boolean>; select(workspaceId: string, sessionId: string): boolean | Promise<boolean>; settings():boolean; cancelNavigation():void; inspection(): object }
   const target = window as unknown as {
     __ModuleLoader__?: { load(value: unknown): void }
     __dshSshView?: Bridge
     __dshSshNavigationOwner?: { dispose(): unknown }
-    __dshSshDrafts?: { prepare(sessionId: string, signal?: AbortSignal): Promise<void> }
+    __dshSshDrafts?: { prepare(sessionId: string, signal?: AbortSignal): Promise<void>; inspection?(): unknown }
   }
   target.__ModuleLoader__?.load({ id: '@jay-local/dsh-ssh-navigation', factory: () => ({
     inject: ['uiWorkspace', 'sessions', 'workspaces','slots'],
@@ -66,6 +67,46 @@ export function navigationClient(): void {
       }
       const bridge: Bridge = {
         cancelNavigation,
+        inspection() {
+          // Chromium's optional number estimates a renderer's JS heap. It
+          // excludes native/GPU memory and may include a shared realm.
+          let heap: unknown
+          try { heap = (performance as Performance & { memory?: { usedJSHeapSize?: unknown } }).memory?.usedJSHeapSize } catch { /* Keep unknown. */ }
+          let tabs: { kind: string }[] | undefined
+          try {
+            const sidebar = ctx.get?.('sidebarRight') as { openTabs?: { getSnapshot?(): unknown } } | undefined
+            const value = sidebar?.openTabs?.getSnapshot?.()
+            if (Array.isArray(value) && value.length <= 10000 && value.every(row => row && typeof row.kind === 'string')) tabs = value
+          } catch { /* Missing contracts cannot prove a view is idle. */ }
+          let drafts: object | null = null
+          try {
+            const value = target.__dshSshDrafts?.inspection?.() as any
+            const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0
+            const states = ['loading', 'saved', 'unsaved', 'saving', 'conflict', 'error']
+            if (value && count(value.pendingUnmountSaves) && count(value.failedUnmountSaves)
+              && Array.isArray(value.sessions) && value.sessions.length <= 256 && value.sessions.every((row: any) =>
+                row && typeof row.sessionId === 'string' && row.sessionId.length > 0 && row.sessionId.length <= 256
+                && states.includes(row.status) && count(row.revision) && typeof row.persisted === 'boolean'
+                && typeof row.hasReferences === 'boolean' && typeof row.hasAttachments === 'boolean')) {
+              drafts = { pendingUnmountSaves: value.pendingUnmountSaves, failedUnmountSaves: value.failedUnmountSaves,
+                sessions: value.sessions.map((row: any) => ({ sessionId: row.sessionId, status: row.status, revision: row.revision,
+                  persisted: row.persisted, hasReferences: row.hasReferences, hasAttachments: row.hasAttachments,
+                  inputPhase: ['plain', 'submitting', 'adjudicating'].includes(row.inputPhase) ? row.inputPhase : 'unknown' })) }
+            }
+          } catch { /* No draft text or extension fields enter diagnostics. */ }
+          let navigation: ReturnType<Bridge['state']> | null = null
+          try { navigation = bridge.state() } catch { /* Keep unknown. */ }
+          return {
+            version: 1, sampledAt: Date.now(), navigation,
+            memory: { kind: 'renderer-js-heap-estimate', bytes: typeof heap === 'number' && Number.isSafeInteger(heap) && heap > 0 ? heap : null },
+            // openTabs includes inactive Sessions. This never closes a tab.
+            sidebar: tabs ? { tabs: tabs.length, terminals: tabs.filter(row => row.kind === 'terminal').length } : null,
+            drafts,
+            // Sampling alone is not an atomic suspension or acknowledgement
+            // barrier. Missing operation observations remain explicitly unknown.
+            lifecycle: { scope: 'observation-only', pendingRequests: null, unconfirmedOperations: null },
+          }
+        },
         settings() {
           cancelNavigation()
           // Reach the owning remote shell's public slot/store contract only.
@@ -130,10 +171,10 @@ export function navigationManifest(): void {
   const target = window as unknown as { __DSH_BOOT__?: { entries: Row[]; batches?: Batch[] } }
   const boot = target.__DSH_BOOT__
   if (!boot || !Array.isArray(boot.entries)) return
-  const rev = 'native-navigation-5'
+  const rev = 'native-navigation-6'
   const additions: Row[] = [
     { id: '@jay-local/dsh-ssh-navigation', url: '/__dsh_remote/navigation-client.js?rev=' + rev, rev, inject: ['@deepseek-ai/dsh-client-ui-workspace', '@deepseek-ai/dsh-client-ui-slots'] },
-    { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-1', rev: 'local-drafts-1', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },
+    { id: '@jay-local/dsh-ssh-drafts', url: '/__dsh_remote/draft-client.js?rev=local-drafts-2', rev: 'local-drafts-2', inject: ['@deepseek-ai/dsh-client-ui-conversation', '@deepseek-ai/dsh-client-ui-slots'] },
   ].filter(row => !boot.entries.some(existing => existing.id === row.id))
   if (!additions.length) return
   target.__DSH_BOOT__ = { ...boot, entries: [...boot.entries, ...additions],

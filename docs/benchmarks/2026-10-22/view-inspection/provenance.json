@@ -1,0 +1,16 @@
+{
+  "archiveSha256": "ee34b5b2f7d8fbd6d0f780efe4d2864fdc63b4d71093e3b5f8a696d1e57c60b4",
+  "baseCommit": "b6e9d952f0d7d803ac9df0351f12ba8e88da937d",
+  "sourceFilesByteMatched": 96,
+  "node": "v24.16.0",
+  "fullTestFiles": 91,
+  "fullTests": 822,
+  "scope": "macOS generated Home + real loopback SSH/DSH installation; served Client serialization inspected in a MOCK public context",
+  "actualRendererMemoryMeasured": false,
+  "nativeUiVerified": false,
+  "automaticViewReleaseImplemented": false,
+  "readmeText": "The heap value in the mock Client check is synthetic and is never reported as a real memory measurement.",
+  "inspectionVerifierSha256": "abccd72f28d883a360d250cfd88bcc7d57fd43bb118e1236fb1c1faf9f25a7ca",
+  "runtimeHarnessSha256": "16d0f41458e913ecf34df66ab3d72e028b0cf1e4d9bd67c9e98dcaa20e411fb0",
+  "serializedDraftReplicaMockContextVerified": true
+}

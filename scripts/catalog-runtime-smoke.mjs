@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { TestSshd } from '../tests/helpers/sshd.ts'
 import { DEFAULT_KNOWN_HOSTS } from '../src/engine/known-hosts.ts'
+import { verifyViewInspection, verifyDraftInspection } from './verify-view-inspection.mjs'
 
 const [dsh, archive, output] = process.argv.slice(2), run = promisify(execFile)
 assert([dsh, archive, output].every(value => value && isAbsolute(value)), 'Supply absolute DSH, package and new report paths')
@@ -102,6 +103,15 @@ try {
   const selected = await api('remote/sessions?id=' + workspace.id)
   assert.equal(selected.stale, false); assert.equal(selected.sessions.find(row => row.sessionId === sessionId)?.title, title)
   assert(!selected.warning); assert.equal(new Set(selected.sessions.map(row => row.sessionId)).size, selected.sessions.length)
+  const embedded=new URL((await api('remote/open',{id:workspace.id,sessionId})).url)
+  embedded.searchParams.set('dsh-remote-view','desktop')
+  const embeddedHeaders=await auth(embedded)
+  const inspectionScript=await fetch(embedded.origin+'/__dsh_remote/navigation-client.js',{headers:embeddedHeaders,signal:AbortSignal.timeout(10000)})
+  assert.equal(inspectionScript.status,200)
+  const inspectionVerification=verifyViewInspection(await inspectionScript.text(),workspace.workspaceId,sessionId)
+  const draftInspectionScript=await fetch(embedded.origin+'/__dsh_remote/draft-client.js',{headers:embeddedHeaders,signal:AbortSignal.timeout(10000)})
+  assert.equal(draftInspectionScript.status,200)
+  const draftInspectionVerification=await verifyDraftInspection(await draftInspectionScript.text(),workspace.hostId,sessionId)
   const stats=async()=>{
     const response=await fetch(directUrl.origin+'/api/fixture/catalog-stats',{headers:directHeaders,signal:AbortSignal.timeout(5000)})
     assert.equal(response.status,200);return response.json()
@@ -122,7 +132,7 @@ try {
   assert.equal(JSON.parse(await readFile(join(remoteRoot, 'state/server.json'), 'utf8')).pid, receipt.pid)
   result = { passed: true, completed: true, runtime: version, archiveSha256: createHash('sha256').update(await readFile(archive)).digest('hex'),
     generatedMetadataSessions: created, rawSdkSessionRows: rows, rawSdkResponseBytes: bytes, largeDecodeThresholdBytes: 1024 * 1024,
-    compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
+    ...inspectionVerification, ...draftInspectionVerification, compiledGatewayCatalogRead: true, freshSelectedCatalog: true, workspaceFeedOpens: 1, repeatedCatalogReads: 101,
     pushedArchiveAndUnarchive: true, liveFeedWaitRequestedMilliseconds: 43000,
     liveFeedWaitElapsedMilliseconds: feedWaitElapsed, liveFeedWaitWallMilliseconds: feedWaitWallElapsed,
     harnessSha256: createHash('sha256').update(await readFile(new URL(import.meta.url))).digest('hex'), remotePidPreserved: true, modelRequests: 0, nativeDesktopVerified: false }

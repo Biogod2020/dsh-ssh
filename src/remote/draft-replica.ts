@@ -9,7 +9,7 @@ export interface DraftState {
 /** Self-contained so the authenticated gateway can serialize the same tested
  * implementation into the owning remote Client, without a remote installation. */
 export function createDraftReplica(options: {
-  hostId: string; sessionId: string; input: DraftInput; seed?: DraftSeed
+  hostId: string; sessionId: string; input: DraftInput; seed?: DraftSeed; browserDraftExisted?: boolean
   restore(text: string): void
 }) {
   let input = { ...options.input }, baseline: SavedDraft | undefined, ready = false, mounted = true, seeded = false
@@ -69,7 +69,7 @@ export function createDraftReplica(options: {
           if (initial?.nativeBoot) {
             // The editor was already seeded before boot. A different value
             // now is an actual local edit, including a quick explicit clear.
-          } else if (!alreadyConflicted && !initial?.browserDraftExisted && !input.draft && !began.draft && input.draftRev === began.draftRev && !['submitting', 'adjudicating'].includes(input.phase)) {
+          } else if (!alreadyConflicted && !(initial?.browserDraftExisted ?? options.browserDraftExisted ?? false) && !input.draft && !began.draft && input.draftRev === began.draftRev && !['submitting', 'adjudicating'].includes(input.phase)) {
             options.restore(baseline.text)
             // Own the imported text until the native hook publishes it. This
             // prevents an old empty render from being saved over the import.
@@ -122,9 +122,30 @@ export function createDraftReplica(options: {
     saving = commit().catch(() => { publish('error'); return false }).finally(() => { saving = undefined })
     return saving
   }
+  function preservedBy(saved: SavedDraft | undefined): boolean {
+    const current = payload()
+    return !!saved && saved.hostId === options.hostId && saved.sessionId === options.sessionId
+      && saved.text === current.text && saved.hadReferences === current.hadReferences && saved.hadAttachments === current.hadAttachments
+  }
   return {
     getSnapshot: () => state,
     getSaved: () => baseline,
+    // Only lifecycle metadata crosses the view-inspection boundary. Text,
+    // references and attachment identities remain with the draft owner.
+    preservedBy,
+    async confirmPersisted() {
+      if (mounted) return false
+      try {
+        const current = await request()
+        return current.response.ok && !current.value.issue && preservedBy(current.value.draft)
+      } catch { return false }
+    },
+    inspection: () => ({
+      status: state.status, persisted: ready && !loading && !saving && !dirty() && state.status === 'saved',
+      revision: input.draftRev, inputPhase: input.phase,
+      hasReferences: references || !!input.occurrences?.length,
+      hasAttachments: attachments || !!input.attachmentIds?.length,
+    }),
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
     load, flush,
     beforeLeave() {
