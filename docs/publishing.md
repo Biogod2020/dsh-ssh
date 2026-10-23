@@ -95,3 +95,5 @@ jay.38 的首次 CI 因旧终端连续性测试的定时器竞态失败，未执
 [发行流程 39966172605](https://github.com/Biogod2020/dsh-ssh/actions/runs/39966172605) 的 verify、OIDC publish、verify-installation 全部成功，947 项、三个运行时归档验收、历史补差/重启/回退、SSH 断线及两个源按包名安装通过。npm 与实际镜像 CDN 文件一致：1,369,537 字节，SHA-256 `a4c11489e0f2abe31a532bf378c1c71a6599d843e6da694c6d495a24ee5c4ae1`。macOS 另完成 npm 按包名隔离安装。
 
 本轮按要求在内置浏览器实际操作 `dsh web`，验证释放视图、草稿恢复、原终端保护、自动回收、即时重命名与重启后离线历史；没有操作 Desktop App。[真实截图、精确来源和 Gemini 复核决定](idle-views-and-requests-2026-10-23.md)。
+
+本机日常 Desktop 已按包名安装 `.41`，前后端与 CI 归档字节一致；新备份及安装后哈希核对确认 4,580 个配置/数据文件、42 个应用数据文件与其他 3 个插件保留。没有操作或启动 Desktop App，实际界面验收使用内置浏览器中的 `dsh web`。

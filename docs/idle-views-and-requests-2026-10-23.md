@@ -46,3 +46,5 @@
 [0.3.24-jay.41](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.41) 的 [verify、OIDC publish、verify-installation](https://github.com/Biogod2020/dsh-ssh/actions/runs/39966172605) 全部成功。npm 与实际国内镜像 CDN 的归档完整性一致，三个运行时验收和按包名安装通过；macOS 另完成 npm 按包名安装到 DSH 0.2.1-rc.2 的隔离验收。
 
 CI 归档为 1,369,537 字节，SHA-256 `a4c11489e0f2abe31a532bf378c1c71a6599d843e6da694c6d495a24ee5c4ae1`。三个运行时 JS 与 105 个源码文件均与内置浏览器实测的候选包逐字节一致。[公开文件与安装核对结果](benchmarks/2026-10-23/idle-views/published.json)。
+
+本机日常 Desktop profile 已从 npm 按包名安装精确版本 `.41`，三个运行时 JS 与 CI 归档一致。安装前正常退出并重新备份；核对原有 4,580 个配置/数据文件、42 个应用数据文件和其他 3 个插件，均无缺失或意外变化。按要求未启动或操作 Desktop App，功能交互验收使用前述 `dsh web`。

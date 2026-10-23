@@ -30,5 +30,17 @@
   "workflow": "https://github.com/Biogod2020/dsh-ssh/actions/runs/39966172605",
   "verifyPublishInstallationJobs": "success",
   "macosNpmByNameIsolatedInstall": "passed",
-  "githubReleaseArchiveMatchesCI": true
+  "githubReleaseArchiveMatchesCI": true,
+  "macosDailyInstallation": {
+    "version": "0.3.24-jay.41",
+    "installedByPackageName": true,
+    "installedJsMatchesCI": true,
+    "protectedFilesCompared": 4580,
+    "desktopUserDataFilesCompared": 42,
+    "otherPluginsPreserved": 3,
+    "unexpectedDataChanges": 0,
+    "missingPreservedFiles": 0,
+    "desktopAppLaunchedForVerification": false,
+    "verificationPassed": true
+  }
 }
