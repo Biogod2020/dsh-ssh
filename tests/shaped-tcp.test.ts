@@ -15,7 +15,7 @@ async function echo(link:ShapedTcpLink,data:Buffer){
   const socket=connect({host:'127.0.0.1',port:link.port});sockets.push(socket);socket.setNoDelay(true)
   const response=new Promise<Buffer>((resolve,reject)=>{
     const chunks:Buffer[]=[];let size=0
-    socket.on('error',reject);socket.on('data',chunk=>{chunks.push(chunk);size+=chunk.length;if(size===data.length)resolve(Buffer.concat(chunks))})
+    socket.on('error',reject);socket.on('data',chunk=>{const bytes=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);chunks.push(bytes);size+=bytes.length;if(size===data.length)resolve(Buffer.concat(chunks))})
   })
   await new Promise<void>(r=>socket.once('connect',r));const start=performance.now();socket.write(data)
   const result=await response;return{result,milliseconds:performance.now()-start,socket}
@@ -44,7 +44,7 @@ it('can cut existing connections without reconnecting or replaying queued bytes'
 it('preserves queued byte order and half-close through many overlapping high-bandwidth chunks',async()=>{
   const link=await fixture(40,1000),data=randomBytes(4*1024*1024)
   const socket=connect({host:'127.0.0.1',port:link.port});sockets.push(socket);socket.setNoDelay(true)
-  const complete=new Promise<Buffer>((resolve,reject)=>{const chunks:Buffer[]=[];socket.on('data',chunk=>chunks.push(chunk));socket.on('end',()=>resolve(Buffer.concat(chunks)));socket.on('error',reject)})
+  const complete=new Promise<Buffer>((resolve,reject)=>{const chunks:Buffer[]=[];socket.on('data',chunk=>chunks.push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk)));socket.on('end',()=>resolve(Buffer.concat(chunks)));socket.on('error',reject)})
   await new Promise<void>(r=>socket.once('connect',r));socket.end(data)
   const received=await complete,hash=(buffer:Buffer)=>createHash('sha256').update(buffer).digest('hex')
   expect(received.length).toBe(data.length);expect(hash(received)).toBe(hash(data))

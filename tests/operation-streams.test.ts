@@ -113,7 +113,7 @@ it('recognizes and restores the own descriptor when real Cordis traces method pr
   }
   new Remote()
   try {
-    const remote = ctx.get('remote') as Remote, original = Object.getOwnPropertyDescriptor(remote, 'openRemoteStream')
+    const remote = ctx.get('remote') as unknown as Remote, original = Object.getOwnPropertyDescriptor(remote, 'openRemoteStream')
     const stop = f.observer.attach(remote)
     expect(f.observer.inspection()).toMatchObject({ streamDecoratorAttached: true, answerDecoratorAttached: true })
     const stream = remote.openRemoteStream('generated/read'); expect(await stream.next()).toEqual({ done: false, value: 7 })

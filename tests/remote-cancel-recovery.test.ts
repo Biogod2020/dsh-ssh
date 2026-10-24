@@ -126,7 +126,7 @@ async function fixture(healthMisses = 2) {
   const login = await fetch(gateway.launch(), { redirect: 'manual' })
   const cookie = login.headers.getSetCookie().map(x => x.split(';')[0]).join('; ')
   cleanups.push(async () => {
-    releaseCancel?.(); manager.dispose(); gateway.dispose(); for (const value of tunnels.values()) value.stop()
+    releaseCancel?.(); await manager.dispose(); gateway.dispose(); for (const value of tunnels.values()) value.stop()
     for (const ws of wss.clients) ws.terminate()
     await new Promise<void>(resolve => wss.close(() => resolve()))
     remote.closeAllConnections(); await new Promise<void>(resolve => remote.close(() => resolve())); rmSync(root, { recursive: true, force: true })

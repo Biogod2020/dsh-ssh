@@ -113,6 +113,15 @@ export async function dispatchWorkspaceTool(ctx: Context, workspaces: SshWorkspa
     throw error
   }
   if (target && result.version) ctx.emit('fs/observed', target, { kind: 'present', version: result.version as FsVersion }, exec)
+  if (exec.name === 'bash') {
+    const schema = ctx.tools?.get('bash', exec.agent)?.output?.schema as {
+      oneOf?: Array<{ properties?: { kind?: { const?: string }; cwd?: unknown } }>
+    } | undefined
+    if (schema?.oneOf?.some(branch => branch.properties?.kind?.const === 'foreground' && branch.properties.cwd !== undefined)
+      && typeof result.value === 'object' && result.value !== null) {
+      result.value = { ...result.value, cwd: binding.remotePath }
+    }
+  }
   // The registry validates this value and applies the original tool's render/meta functions.
   return { isError: false, value: result.value as Extract<ToolExecutionResult, { isError: false }>['value'], content: [] }
 }

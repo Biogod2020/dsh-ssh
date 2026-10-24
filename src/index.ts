@@ -40,6 +40,14 @@ export const inject = ['webServer', 'tools', 'systemPrompt', 'connection']
  */
 export const SSH_SETTINGS_NAMESPACE = 'dsh-ssh' as SettingsNamespace
 
+/** Optional APIs served by older DSH settings providers before schema-derived forms. */
+interface LegacySettings {
+  installSection?(owner: Context, namespace: SettingsNamespace, schema: typeof LegacyConfig,
+    base: ReturnType<typeof configValues>, hooks: { setSource(source: () => Config): void; onChange(): void }): unknown
+  register?(namespace: SettingsNamespace, schema: typeof LegacyConfig,
+    options: { base: ReturnType<typeof configValues> }): { get?(): Config; watch?(listener: () => void): unknown }
+}
+
 /** Plugin config, validated by the same-named schemastery schema. */
 declare module '@deepseek-ai/cordis' {
   interface Events {
@@ -151,17 +159,18 @@ function applyImpl(ctx: Context, config?: Config): void {
   }
 
   ctx.inject(['settings'], (settingsCtx) => {
+    const settings = settingsCtx.get('settings') as LegacySettings | undefined
     try {
-      if (typeof settingsCtx.settings?.installSection === 'function') {
-        settingsCtx.settings.installSection(ctx, SSH_SETTINGS_NAMESPACE, LegacyConfig, configValues(config), {
+      if (typeof settings?.installSection === 'function') {
+        settings.installSection(ctx, SSH_SETTINGS_NAMESPACE, LegacyConfig, configValues(config), {
           setSource: (source) => {
             current = source
             sync()
           },
           onChange: sync,
         })
-      } else if (typeof settingsCtx.settings?.register === 'function') {
-        const scope = settingsCtx.settings.register(SSH_SETTINGS_NAMESPACE, LegacyConfig, { base: configValues(config) })
+      } else if (typeof settings?.register === 'function') {
+        const scope = settings.register(SSH_SETTINGS_NAMESPACE, LegacyConfig, { base: configValues(config) })
         current = () => scope?.get?.() ?? (config ?? {})
         scope?.watch?.(() => { sync() })
       }

@@ -1,5 +1,4 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope, SettingsScopeSpec } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { TerminalFontSource } from './panel/helpers.ts'
 
 interface TerminalSettings { terminalFontFamily?: string }
@@ -8,7 +7,8 @@ interface Form {
   subscribe(listener: () => void): () => void
 }
 interface ConfigForms { get<T>(entryId: string): Form }
-interface LegacyBinder { bind<S>(spec: SettingsScopeSpec<S>): SettingsScope<S> }
+// Newer DSH SDKs removed these legacy exports; keep only the methods used here.
+interface LegacyBinder { bind(spec: { namespace: string }): Form }
 
 /** Late settings activation never holds the SSH UI hostage on either SDK. */
 export function terminalSettings(ctx: Context): TerminalFontSource {
@@ -23,7 +23,7 @@ export function terminalSettings(ctx: Context): TerminalFontSource {
   }
   ctx.inject(['settingsScope'], provider => {
     const binder = (provider.get('webUiSettings') ?? provider.get('settingsScope')) as LegacyBinder
-    provider.effect(() => attach(binder.bind<TerminalSettings>({ namespace: 'dsh-ssh' }), 0), 'dsh-ssh: alpha terminal settings')
+    provider.effect(() => attach(binder.bind({ namespace: 'dsh-ssh' }), 0), 'dsh-ssh: alpha terminal settings')
   })
   ctx.inject(['configForms'], provider => {
     const service = provider.get('configForms') as ConfigForms

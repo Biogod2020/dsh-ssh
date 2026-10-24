@@ -81,7 +81,7 @@ describe('real SSH workspace execution', () => {
     const controller = new AbortController()
     const task = run('bash', { command: 'printf once >> count.txt; sleep 30' }, {}, controller.signal)
     const rejected = expect(task).rejects.toThrow('Not retried')
-    await vi.waitFor(() => expect(existsSync(join(remote, 'count.txt'))).toBe(true))
+    await vi.waitFor(() => expect(readFileSync(join(remote, 'count.txt'), 'utf8')).toBe('once'))
     controller.abort()
     await rejected
     expect(readFileSync(join(remote, 'count.txt'), 'utf8')).toBe('once')
@@ -138,6 +138,8 @@ describe('real SSH workspace execution', () => {
     ctx.provide('fs', { sandboxMode: undefined, resolve: local })
     ctx.provide('shell', { sandboxMode: undefined, execute: local })
     ctx.provide('shellEnv', { collect: () => ({}) })
+    // Newer DSH tools require this service even when SSH dispatch replaces their local body.
+    ctx.provide('workingDirectory', { resolve: local })
     await ctx.plugin(FsTools)
     await ctx.plugin(BashTool)
     installWorkspaceTools(ctx, workspaces, () => true, historyOnly)
