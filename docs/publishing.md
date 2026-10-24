@@ -60,7 +60,7 @@ npm 可能在接受并签名后继续处理新版本，暂时不向公开索引�
 
 发布包为 1,214,288 字节，SHA-256 `21befec6f1e0dd20cb4cf8b0eda5ba06c3e26aad7b544d52e14f11b2ff2b89d0`。官方源与实际镜像 CDN 文件的 SHA-512 均与 CI 测试归档一致；[GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.35) 附带同一归档和 SHA-256 文件。本次发布未改动日常 Desktop 安装、配置或会话。
 
-## 当前发行状态（2026-10-22，jay.37）
+## 上一发行状态（2026-10-22，jay.37）
 
 `0.3.24-jay.37` 的 [发行流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/39772494386) 三个任务全部成功：73 个文件、658 项测试、typecheck、build、产物检查、三个 DSH 版本的最终归档验收、真实 SSH 验收，以及官方源/国内镜像的实际文件完整性和按包名安装。现有 OIDC 权限直接发布，无 stage 审批或逐版 2FA。
 
@@ -97,3 +97,11 @@ jay.38 的首次 CI 因旧终端连续性测试的定时器竞态失败，未执
 本轮按要求在内置浏览器实际操作 `dsh web`，验证释放视图、草稿恢复、原终端保护、自动回收、即时重命名与重启后离线历史；没有操作 Desktop App。[真实截图、精确来源和 Gemini 复核决定](idle-views-and-requests-2026-10-23.md)。
 
 本机日常 Desktop 已按包名安装 `.41`，前后端与 CI 归档字节一致；新备份及安装后哈希核对确认 4,580 个配置/数据文件、42 个应用数据文件与其他 3 个插件保留。没有操作或启动 Desktop App，实际界面验收使用内置浏览器中的 `dsh web`。
+
+## 当前发行状态（2026-10-24，jay.42）
+
+`0.3.24-jay.42` 已由[版本标签流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/40074726388)发布；verify、publish、verify-installation 全部通过。新增 DSH `0.2.1-rc.3` 兼容、旧设置 API 类型适配及新版 Bash 结果的工作目录。保留既有远端服务版本，不为本机适配升级远端。
+
+完整测试为 102 个文件、947 项；本机另用 rc.3 SDK 跑过同一套 947 项。最终归档通过 DSH `0.2.0-rc.2`、`0.2.1-alpha.4`、`0.2.1-rc.2` 和 `0.2.1-rc.3` 安装验收，官方源及镜像按包名安装通过；macOS 使用正式 App 附带的 rc.3 CLI 从两个源重复安装验收。
+
+官方 npm、真实镜像 CDN 与 [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.42) 的归档均为 1370049 字节，SHA-256 `b6c1db4a2a98d6491cb6ac0b1b9912a9dfb504831731c59e62ea80950bdde785`，与 CI 验收文件一致。本次发布不再次更换日常 Desktop 的本地适配安装，不修改用户配置或会话。
