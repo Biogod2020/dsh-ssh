@@ -1,6 +1,7 @@
 import { lstatSync, readFileSync, writeFileSync, renameSync, unlinkSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import type { RemoteSessionCatalog } from './types.ts'
+import { isPrivateMode } from '../private-mode.ts'
 
 /** A private, replaceable navigation cache; corrupt source is kept for inspection. */
 export class RemoteSessionCache {
@@ -12,7 +13,7 @@ export class RemoteSessionCache {
     try {
       let info: ReturnType<typeof lstatSync>
       try { info = lstatSync(path) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
-      if (!info.isFile() || (info.mode & 0o077) !== 0 || info.size > 8 * 1024 * 1024) throw new Error()
+      if (!info.isFile() || !isPrivateMode(info) || info.size > 8 * 1024 * 1024) throw new Error()
       const value = JSON.parse(readFileSync(path, 'utf8'))
       if (value.version !== 1 || !value.entries || typeof value.entries !== 'object' || Array.isArray(value.entries)) throw new Error()
       for (const [id, entry] of Object.entries(value.entries)) {

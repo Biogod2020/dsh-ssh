@@ -2,6 +2,7 @@ import { constants, closeSync, fstatSync, fsyncSync, lstatSync, openSync, readFi
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { RemoteOperation, RemotePhase, RemoteWorkspace } from './types.ts'
+import { isPrivateMode } from '../private-mode.ts'
 
 export interface RemoteActivityEntry { operation: RemoteOperation; dismissed?: boolean }
 const phases = new Set<RemotePhase>(['checking', 'installing-node', 'installing-dsh', 'starting', 'connecting', 'ready', 'failed', 'disconnected'])
@@ -45,7 +46,7 @@ export class RemoteActivityStore {
   private path: string
   constructor(private root: string) {
     const info = lstatSync(root)
-    if (!info.isDirectory() || (info.mode & 0o077) !== 0 || (process.getuid && info.uid !== process.getuid())) throw new Error('Remote preparation history must use a private directory')
+    if (!info.isDirectory() || !isPrivateMode(info) || (process.getuid && info.uid !== process.getuid())) throw new Error('Remote preparation history must use a private directory')
     this.path = join(root, 'activity.json')
   }
   load(): RemoteActivityEntry[] {
@@ -55,7 +56,7 @@ export class RemoteActivityStore {
     const fd = openSync(this.path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
     try {
       const info = fstatSync(fd)
-      if (!info.isFile() || (info.mode & 0o077) !== 0 || info.size > MAX_BYTES || (process.getuid && info.uid !== process.getuid())) throw new Error('Remote preparation history must be a bounded private file')
+      if (!info.isFile() || !isPrivateMode(info) || info.size > MAX_BYTES || (process.getuid && info.uid !== process.getuid())) throw new Error('Remote preparation history must be a bounded private file')
       const value = JSON.parse(readFileSync(fd, 'utf8')) as unknown
       if (!record(value) || value.version !== 1 || !Array.isArray(value.entries) || value.entries.length > 200) throw new Error('Invalid remote preparation history')
       const entries = value.entries.map(publicEntry)

@@ -1,6 +1,7 @@
 import { lstat, opendir } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { HistoryStorageAudit } from './history-cache.ts'
+import { isPrivateMode } from '../private-mode.ts'
 
 /** Observe file sizes, never history contents. This is a read-only, bounded
  * inventory, not a deletion plan or a measurement of unique physical blocks
@@ -16,7 +17,7 @@ export async function auditHistoryFiles(root: string, references: ReadonlyMap<st
     try {
       const info = await lstat(path)
       ++visited
-      if ((info.mode & 0o077) || info.isSymbolicLink()) { ++report.skipped; report.incomplete = true; return }
+      if (!isPrivateMode(info) || info.isSymbolicLink()) { ++report.skipped; report.incomplete = true; return }
       if (info.isDirectory()) {
         const directory = await opendir(path)
         for await (const entry of directory) {

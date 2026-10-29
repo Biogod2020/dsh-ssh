@@ -17,7 +17,9 @@ export async function remoteHistoryRead(root: string, expected: { pid: number; p
     || !Number.isSafeInteger(request.afterSeq) || request.afterSeq < -1
     || request.throughSeq !== undefined && (!Number.isSafeInteger(request.throughSeq) || request.throughSeq < request.afterSeq)) throw new Error('Invalid history request')
   const path = join(root, 'state/server.json'), info = await lstat(path)
-  if (!info.isFile() || (info.mode & 0o077)) throw new Error('Unsafe remote server receipt')
+  // This function is serialized and executed on the remote Node. Keep the
+  // platform check inline so it does not depend on a local module closure.
+  if (!info.isFile() || (process.platform !== 'win32' && (info.mode & 0o077) !== 0)) throw new Error('Unsafe remote server receipt')
   const receipt = JSON.parse(await readFile(path, 'utf8'))
   if (receipt.protocol !== 1 || receipt.root !== root || receipt.pid !== expected.pid || receipt.port !== expected.port) throw new Error('Remote server identity changed')
   const login = new URL(receipt.url)
