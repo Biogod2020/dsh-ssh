@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, lstat, open, rename, unlink, link } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isPrivateMode } from '../private-mode.ts'
 
 export interface SavedDraft {
   version: 1; hostId: string; sessionId: string; revision: string; operationId: string
@@ -35,7 +36,7 @@ export class LocalDraftStore {
     this.ready = (async () => {
       await mkdir(root, { recursive: true, mode: 0o700 })
       const info = await lstat(root)
-      if (!info.isDirectory() || info.mode & 0o077) throw new Error('Draft directory must be private')
+      if (!info.isDirectory() || !isPrivateMode(info)) throw new Error('Draft directory must be private')
     })()
     // Lazy consumers still observe the original rejection, without an unused
     // store producing an unhandled process-level rejection before first use.
@@ -48,7 +49,7 @@ export class LocalDraftStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
     try {
       const info = await file.stat()
-      if (!info.isFile() || info.mode & 0o077 || info.size > 64 * 1024 * 1024) throw new Error('Unsafe or oversized saved draft')
+      if (!info.isFile() || !isPrivateMode(info) || info.size > 64 * 1024 * 1024) throw new Error('Unsafe or oversized saved draft')
       return await file.readFile()
     } finally { await file.close() }
   }

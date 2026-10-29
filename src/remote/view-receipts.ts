@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { mkdir, lstat, open, link, unlink, opendir } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
+import { isPrivateMode } from '../private-mode.ts'
 
 /** This is a local observation id, not a replayable command or remote RPC id. */
 export interface ViewReceiptInput {
@@ -106,7 +107,7 @@ export class ViewReceiptStore {
   }
   private async checkDirectory(path: string): Promise<void> {
     const info = await lstat(path)
-    if (!info.isDirectory() || info.isSymbolicLink() || info.mode & 0o077) throw new Error('Receipt directory must be private')
+    if (!info.isDirectory() || info.isSymbolicLink() || !isPrivateMode(info)) throw new Error('Receipt directory must be private')
   }
   private async directory(hostId: string, create = true): Promise<string | undefined> {
     host(hostId); await this.ready; await this.checkDirectory(this.root)
@@ -115,7 +116,7 @@ export class ViewReceiptStore {
     else {
       let info
       try { info = await lstat(path) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
-      if (!info.isDirectory() || info.isSymbolicLink() || info.mode & 0o077) throw new Error('Receipt directory must be private')
+      if (!info.isDirectory() || info.isSymbolicLink() || !isPrivateMode(info)) throw new Error('Receipt directory must be private')
     }
     return path
   }
@@ -129,7 +130,7 @@ export class ViewReceiptStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
     try {
       const info = await fd.stat()
-      if (!info.isFile() || info.mode & 0o077 || info.size > max) throw new Error('Unsafe receipt file')
+      if (!info.isFile() || !isPrivateMode(info) || info.size > max) throw new Error('Unsafe receipt file')
       const bytes = Buffer.alloc(max + 1), result = await fd.read(bytes, 0, bytes.length, 0), after = await fd.stat()
       if (result.bytesRead > max || result.bytesRead !== info.size || after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error('Receipt file changed during read')
       return bytes.subarray(0, result.bytesRead)

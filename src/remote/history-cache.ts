@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, lstat, readFile, open, rename, unlink, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isPrivateMode } from '../private-mode.ts'
 
 export interface HistoryRecord { type: 'event'; event: { seq: number; type: string; [key: string]: unknown } }
 export interface HistoryMeta {
@@ -62,14 +63,14 @@ export class RemoteHistoryCache {
   private issue?: string
   constructor(private root: string) { this.ready = this.load() }
   private async privateFile(path: string): Promise<boolean> {
-    try { const info = await lstat(path); if (!info.isFile() || (info.mode & 0o077)) throw new Error('Unsafe cache file'); return true }
+    try { const info = await lstat(path); if (!info.isFile() || !isPrivateMode(info)) throw new Error('Unsafe cache file'); return true }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
   }
   private async load(): Promise<void> {
     try {
       await mkdir(this.root, { recursive: true, mode: 0o700 })
       const info = await lstat(this.root)
-      if (!info.isDirectory() || (info.mode & 0o077)) throw new Error('Unsafe cache directory')
+      if (!info.isDirectory() || !isPrivateMode(info)) throw new Error('Unsafe cache directory')
       const path = join(this.root, 'index.json')
       if (await this.privateFile(path)) {
         const value = JSON.parse(await readFile(path, 'utf8'))

@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync, lstatSy
 import { join, posix } from 'node:path'
 import type { SshEngine } from '../engine.ts'
 import { dshHome } from '../dsh-home.ts'
+import { isPrivateMode } from '../private-mode.ts'
 import { RemoteGateway } from './gateway.ts'
 import { RemoteFailureError, remoteErrorCode } from './errors.ts'
 import { RemoteActivityStore } from './activity-store.ts'
@@ -79,7 +80,7 @@ export class RemoteWorkspaces {
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
     }
     const keyInfo = lstatSync(keyPath)
-    if (!keyInfo.isFile() || (keyInfo.mode & 0o077) !== 0) throw new Error('Remote recovery key must be a private file')
+    if (!keyInfo.isFile() || !isPrivateMode(keyInfo)) throw new Error('Remote recovery key must be a private file')
     this.recoveryKey = readFileSync(keyPath)
     if (this.recoveryKey.length !== 32) throw new Error('Invalid remote recovery key')
     if (existsSync(this.path)) {

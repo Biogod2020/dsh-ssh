@@ -5,6 +5,7 @@ import type { SshEngine } from '../engine.ts'
 import type { RemoteReceipt } from './types.ts'
 import type { HistoryRecord } from './history-cache.ts'
 import { remoteScript, shellQuote } from './transport.ts'
+import { isPrivateMode } from '../private-mode.ts'
 
 export interface HistoryDelta { cursor: number; throughSeq: number; records: HistoryRecord[] }
 interface Request { sessionId: string; afterSeq: number; throughSeq?: number }
@@ -17,7 +18,7 @@ export async function remoteHistoryRead(root: string, expected: { pid: number; p
     || !Number.isSafeInteger(request.afterSeq) || request.afterSeq < -1
     || request.throughSeq !== undefined && (!Number.isSafeInteger(request.throughSeq) || request.throughSeq < request.afterSeq)) throw new Error('Invalid history request')
   const path = join(root, 'state/server.json'), info = await lstat(path)
-  if (!info.isFile() || (info.mode & 0o077)) throw new Error('Unsafe remote server receipt')
+  if (!info.isFile() || !isPrivateMode(info)) throw new Error('Unsafe remote server receipt')
   const receipt = JSON.parse(await readFile(path, 'utf8'))
   if (receipt.protocol !== 1 || receipt.root !== root || receipt.pid !== expected.pid || receipt.port !== expected.port) throw new Error('Remote server identity changed')
   const login = new URL(receipt.url)

@@ -4,6 +4,7 @@ import { mkdir, lstat, open, rename, unlink, readdir, rm, link } from 'node:fs/p
 import { join } from 'node:path'
 import { historyKey, validHistory, validMeta, type HistoryMeta, type HistoryRecord, type HistoryDocument, type HistoryInput, type HistoryStore, type HistoryToken, type HistoryStorageAudit } from './history-cache.ts'
 import { auditHistoryFiles } from './history-storage-audit.ts'
+import { isPrivateMode } from '../private-mode.ts'
 export { historyKey } from './history-cache.ts'
 
 interface Segment { file: string; first: number; last: number; count: number; bytes: number; sha256: string; eventType?:string }
@@ -65,17 +66,17 @@ export class SegmentedHistoryCache implements HistoryStore {
   private async directory(path: string): Promise<void> {
     await mkdir(path, { recursive: true, mode: 0o700 })
     const info = await lstat(path)
-    if (!info.isDirectory() || (info.mode & 0o077)) throw new Error('Unsafe history directory')
+    if (!info.isDirectory() || !isPrivateMode(info)) throw new Error('Unsafe history directory')
   }
   private async exists(path: string): Promise<boolean> {
-    try { const s = await lstat(path); if (!s.isFile() || (s.mode & 0o077)) throw new Error('Unsafe history file'); return true }
+    try { const s = await lstat(path); if (!s.isFile() || !isPrivateMode(s)) throw new Error('Unsafe history file'); return true }
     catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e }
   }
   private async bytes(path: string, budget = 256 * 1024 * 1024): Promise<Buffer> {
     const f = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW)
     try {
       const s = await f.stat()
-      if (!s.isFile() || (s.mode & 0o077) || s.size > budget) throw new Error('Unsafe or oversized history file')
+      if (!s.isFile() || !isPrivateMode(s) || s.size > budget) throw new Error('Unsafe or oversized history file')
       return await f.readFile()
     } finally { await f.close() }
   }
@@ -93,7 +94,7 @@ export class SegmentedHistoryCache implements HistoryStore {
     const buffer=Buffer.alloc(raw.indexBytes)
     try {
       const info=await file.stat()
-      if(!info.isFile()||(info.mode&0o077)||info.size<raw.indexBytes)throw new Error('Invalid committed history index')
+      if(!info.isFile()||!isPrivateMode(info)||info.size<raw.indexBytes)throw new Error('Invalid committed history index')
       let offset=0
       while(offset<buffer.length){const {bytesRead}=await file.read(buffer,offset,buffer.length-offset,offset);if(!bytesRead)throw new Error('History index was truncated');offset+=bytesRead}
     } finally {await file.close()}
@@ -404,7 +405,7 @@ export class SegmentedHistoryCache implements HistoryStore {
       const file=await open(path,constants.O_WRONLY|constants.O_APPEND|constants.O_CREAT|constants.O_NOFOLLOW|(previous?0:constants.O_EXCL),0o600)
       try{
         const info=await file.stat()
-        if(!info.isFile()||(info.mode&0o077)||info.size<indexBytes)throw new Error('History index was changed or truncated')
+        if(!info.isFile()||!isPrivateMode(info)||info.size<indexBytes)throw new Error('History index was changed or truncated')
         // Only bytes beyond the committed root are abandoned transaction data.
         // Previously committed descriptor bytes and history segments never change.
         if(info.size>indexBytes)await file.truncate(indexBytes)
@@ -504,7 +505,7 @@ export class SegmentedHistoryCache implements HistoryStore {
   private async remove(key: string): Promise<void> {
     const path=join(this.root,key+'.json'); if (await this.exists(path)) await unlink(path)
     const directory=join(this.store,key)
-    try { const s=await lstat(directory); if (!s.isDirectory() || (s.mode&0o077)) throw new Error('Unsafe history directory'); await rm(directory,{recursive:true}) }
+    try { const s=await lstat(directory); if (!s.isDirectory() || !isPrivateMode(s)) throw new Error('Unsafe history directory'); await rm(directory,{recursive:true}) }
     catch(e) { if ((e as NodeJS.ErrnoException).code!=='ENOENT') throw e }
     this.entries.delete(key); this.manifests.delete(key); this.issues.delete(key)
     await this.syncDirectory(this.root); await this.syncDirectory(this.store)
