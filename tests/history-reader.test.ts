@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdir, mkdtemp, rm, writeFile, readFile, lstat } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile, readFile, lstat, chmod } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { tmpdir } from 'node:os'
 import { join, isAbsolute } from 'node:path'
 import { remoteHistoryRead } from '../src/remote/history-reader.ts'
@@ -61,4 +63,23 @@ it('fails closed for changed remote identity, rewind, and malformed cursor witho
 
 it('serializes a standalone remote program without bundler closure dependencies', () => {
   expect(remoteHistoryRead.toString()).not.toMatch(/__vite|__name|__import/)
+})
+
+it('reads history from the serialized program in a fresh Node process', async () => {
+  const f = await fixture(), request = { sessionId: 'session', afterSeq: 1100 }
+  const source = `const {readFile,lstat}=await import('node:fs/promises');
+const {join,isAbsolute}=await import('node:path');
+const result=await (${remoteHistoryRead.toString()})(process.argv[1],JSON.parse(process.argv[2]),JSON.parse(process.argv[3]),{readFile,lstat,join,isAbsolute});
+process.stdout.write(JSON.stringify(result));`
+  const { stdout } = await promisify(execFile)(process.execPath,
+    ['--input-type=module', '-e', source, f.root, JSON.stringify(f.expected), JSON.stringify(request)], { timeout: 10000 })
+  expect(JSON.parse(stdout)).toEqual({ cursor: 1103, throughSeq: 1103, records: f.records.slice(1101) })
+  expect(f.calls.map(x => x.method)).toEqual(['session/projections', 'session/page'])
+})
+
+it.skipIf(process.platform === 'win32')('rejects a remote receipt with group or other access', async () => {
+  const f = await fixture()
+  await chmod(join(f.root, 'state/server.json'), 0o644)
+  await expect(read(f.root, f.expected, { sessionId: 'session', afterSeq: 1100 })).rejects.toThrow('Unsafe remote server receipt')
+  expect(f.calls).toHaveLength(0)
 })
