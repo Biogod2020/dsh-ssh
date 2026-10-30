@@ -98,10 +98,18 @@ jay.38 的首次 CI 因旧终端连续性测试的定时器竞态失败，未执
 
 本机日常 Desktop 已按包名安装 `.41`，前后端与 CI 归档字节一致；新备份及安装后哈希核对确认 4,580 个配置/数据文件、42 个应用数据文件与其他 3 个插件保留。没有操作或启动 Desktop App，实际界面验收使用内置浏览器中的 `dsh web`。
 
-## 当前发行状态（2026-10-24，jay.42）
+## 2026-10-24 发行状态（jay.42）
 
 `0.3.24-jay.42` 已由[版本标签流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/40074726388)发布；verify、publish、verify-installation 全部通过。新增 DSH `0.2.1-rc.3` 兼容、旧设置 API 类型适配及新版 Bash 结果的工作目录。保留既有远端服务版本，不为本机适配升级远端。
 
 完整测试为 102 个文件、947 项；本机另用 rc.3 SDK 跑过同一套 947 项。最终归档通过 DSH `0.2.0-rc.2`、`0.2.1-alpha.4`、`0.2.1-rc.2` 和 `0.2.1-rc.3` 安装验收，官方源及镜像按包名安装通过；macOS 使用正式 App 附带的 rc.3 CLI 从两个源重复安装验收。
 
 官方 npm、真实镜像 CDN 与 [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.42) 的归档均为 1370049 字节，SHA-256 `b6c1db4a2a98d6491cb6ac0b1b9912a9dfb504831731c59e62ea80950bdde785`，与 CI 验收文件一致。本次发布不再次更换日常 Desktop 的本地适配安装，不修改用户配置或会话。
+
+## 当前发行状态（2026-10-29，jay.67）
+
+`0.3.24-jay.67` 已由[匹配版本标签的流水线](https://github.com/Biogod2020/dsh-ssh/actions/runs/40990490874)通过已有 OIDC 权限直接发布，verify、publish 和 verify-installation 全部成功。128 个文件、1,160 项测试，四个 DSH 运行时、旧历史回退、历史补差/控制器重启、SSH 断线及官方源/镜像源按包名安装全部通过。未发布的 jay.66 标签保留；其降级夹具解包清单遗漏已修正，没有移动或重用旧标签。
+
+npm 和国内镜像的 latest 均为 jay.67。官方源、实际 `cdn.npmmirror.com` 与 [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.67) 均匹配同一 CI 文件：1,498,633 字节，SHA-256 `8ba0bdca32a08f8e9788e5397c55f9d63bb0d554a37323b4e713d5111ab0527f`。macOS 独立构建的整个归档也相同，按精确 npm 版本的隔离 RC3 安装再次核对了前后端字节。
+
+额外验证发现 pnpm 的新包等待策略会使刚发布时的 `@latest` 安装仍选择旧版。安装说明使用经过实测的精确版本；只在生成的隔离 profile 为该精确版本增加 age 例外后，`@latest` 也选择新版。未修改用户日常 profile、全局包管理策略或常驻服务。源码 PR 保留所有者审核，未绕过 main 的保护规则。

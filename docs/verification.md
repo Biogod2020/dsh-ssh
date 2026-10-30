@@ -1,6 +1,18 @@
 # SSH 插件验收记录
 
-验收日期：2026-10-15（America/Los_Angeles）。
+各次验收日期按小节列出，时区为 America/Los_Angeles。
+
+## 2026-10-29 — jay.67: native remote Session actions and shortcut targets
+
+The [release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/40990490874) completed verify, npm OIDC publish and verify-installation successfully. All 128 files / 1,160 tests, typecheck, build, archive checks, four declared DSH runtime installations, offline downgrade with a real jay.39 consumer, installed incremental history/controller restart and SSH-disconnect acceptance passed. npm and the actual mainland mirror CDN serve the exact tested archive and advertise jay.67 as latest; all four package-name installations passed. macOS separately accepted the pinned npm version in DSH RC3 and matched its installed Host/client bytes.
+
+The archive is 1,498,633 bytes, SHA-256 `8ba0bdca32a08f8e9788e5397c55f9d63bb0d554a37323b4e713d5111ab0527f`. The [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.67) carries the same CI archive and checksum. The independently built macOS archive is also byte-identical.
+
+Generated loopback SSH and built-in-browser acceptance verified parent-window remote new/rename/fork/archive shortcuts, native message copying, archive restore and parked local draft preservation without a model request. Installed-SDK contract tests cover the Desktop keyboard/native-menu bridge; this is not a new native Desktop GUI acceptance claim. The temporary shortcut seam requires reviewed RC2/RC3 resolver implementations; see [the adapter boundary](native-session-adapter-2026-10-29.md).
+
+jay.66 stopped before publication because its downgrade fixture's selective extraction omitted a shared helper already present in the archive. Local test attempts that expired during maintenance sleep were retained; the successful full run is reported above. No failed run is counted as a pass.
+
+The additional macOS `@latest` test selected jay.42 under pnpm's new-package waiting policy even after the public tag had advanced. The pinned jay.67 installation passed; adding only an exact-version age exception in a generated profile made `@latest` select jay.67. User profiles and global policy were unchanged. Daily Web/Desktop services were not updated or restarted, and [PR #3](https://github.com/Biogod2020/dsh-ssh/pull/3) retains owner review.
 
 ## 2026-10-27 — local.2: restore the native Add workspace flow
 
