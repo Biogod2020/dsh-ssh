@@ -7,7 +7,7 @@ import { RemoteGateway } from './gateway.ts'
 import { RemoteFailureError, remoteErrorCode } from './errors.ts'
 import { RemoteActivityStore } from './activity-store.ts'
 import { remoteScript, shellQuote } from './transport.ts'
-import type { RemoteOperation, RemotePhase, RemoteReceipt, RemoteWorkspace, RemoteSessionCatalog } from './types.ts'
+import type { RemoteOperation, RemotePhase, RemoteReceipt, RemoteWorkspace, RemoteSessionCatalog, RemoteForkResult } from './types.ts'
 import { RemoteSessionCache } from './session-catalog.ts'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS, compatibleRemoteVersion } from './types.ts'
 import { historyKey } from './history-cache.ts'
@@ -15,18 +15,21 @@ import { SegmentedHistoryCache } from './history-store.ts'
 import { RemoteHistoryService } from './history-service.ts'
 import { readHistoryDelta } from './history-reader.ts'
 import { LocalDraftStore } from './draft-store.ts'
-import { CatalogReadError } from './catalog-json.ts'
+import { CatalogReadError, type CatalogReadPriority } from './catalog-json.ts'
+import { BootAssetCache } from './boot-assets.ts'
+import { readBootArtifact } from './boot-reader.ts'
+import { GatewayOrigins } from './gateway-origins.ts'
 import { ViewReceiptStore } from './view-receipts.ts'
 
 interface Installed { node: string; dsh: string; root: string; version: string }
 interface SessionSummary { sessionId: string; updatedAt: number; running: boolean; blank: boolean; origin?: string; projections?: { values?: { title?: unknown } } }
 interface HostCatalog { workspaces: Awaited<ReturnType<RemoteGateway['workspaceCatalogSnapshot']>>; sessions: { items: SessionSummary[] }; checkedAt: number; revision: number }
-interface Runtime { node: string; gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; health?:{healthy:boolean;checkedAt:number};healthRead?:Promise<boolean>; catalogRevision?: number; catalog?: { read: Promise<HostCatalog>; expiresAt: number } }
+interface Runtime { node: string; dsh?: string; gateway: RemoteGateway; tunnelId: string; hostId: string; alias: string; updatedAt: number; retryAt: number; failures: number; healthMisses?: number; repairing?: boolean; health?:{healthy:boolean;checkedAt:number};healthRead?:Promise<boolean>; catalogRevision?: number; catalog?: { read: Promise<HostCatalog>; expiresAt: number; priority: CatalogReadPriority } }
 class SupersededCatalogError extends Error {
   constructor() { super('Remote catalog changed during this read'); this.name = 'SupersededCatalogError' }
 }
 interface ManagerOptions {
-  installer: string; bootstrap: string; root?: string; remoteRoot?: string; returnUrl: () => string
+  installer: string; bootstrap: string; pluginUpdate?: string; modelBridge?: string; accountService?: string; accountBridge?: string; root?: string; remoteRoot?: string; returnUrl: () => string
   legacy?: () => Array<{ alias: string; remotePath: string; title: string }>
 }
 const messages: Record<RemotePhase, string> = {
@@ -36,6 +39,7 @@ const messages: Record<RemotePhase, string> = {
 
 /** Host ownership is separate from workspace identity; no local cwd stands in for a remote directory. */
 export class RemoteWorkspaces {
+  onModelsConnected?: (alias: string, updatedAt: number) => Promise<void>
   private workspaces = new Map<string, RemoteWorkspace>()
   private operations = new Map<string, RemoteOperation>()
   private dismissed = new Set<string>()
@@ -55,9 +59,13 @@ export class RemoteWorkspaces {
   private epoch = 0
   private recovery: ReturnType<typeof setInterval>
   private refreshingHistory=false
+  private bootAssets: BootAssetCache
+  private gatewayOrigins: GatewayOrigins
   constructor(readonly engine: SshEngine, private options: ManagerOptions) {
     const root = options.root ?? join(dshHome(), 'remote-workspaces')
     mkdirSync(root, { recursive: true, mode: 0o700 }); this.path = join(root, 'workspaces.json')
+    this.bootAssets = new BootAssetCache(join(root, 'boot-assets'))
+    this.gatewayOrigins = new GatewayOrigins(join(root, 'gateway-origins'))
     this.drafts = new LocalDraftStore(join(root, 'drafts'))
     this.viewReceipts = new ViewReceiptStore(join(root, 'view-observations'))
     this.sessionCache = new RemoteSessionCache(join(root, 'session-catalog.json'))
@@ -118,6 +126,81 @@ export class RemoteWorkspaces {
     return createHash('sha256').update(JSON.stringify([alias, host.host, host.port, host.user])).digest('hex').slice(0, 24)
   }
   list(): RemoteWorkspace[] { return [...this.workspaces.values()].map(x => ({ ...x })) }
+  /** An explicit plugin-management action may use an existing carrier only.
+   * Never starts/restarts a daemon or imports credentials to obtain access. */
+  pluginAccess(alias: string, expectedUpdatedAt: number) {
+    const epoch = this.epoch, hostId = this.hostId(alias), runtime = this.runtimes.get(hostId)
+    if (!runtime) throw new Error('Remote DSH is disconnected. Open an SSH workspace on this host first.')
+    const check = () => {
+      this.assertActive(epoch)
+      this.assertOwner(alias, hostId, expectedUpdatedAt)
+      if (runtime.updatedAt !== expectedUpdatedAt || this.runtimes.get(hostId) !== runtime)
+        throw new Error('Remote connection changed; compare plugins again')
+    }
+    check()
+    const stageUpdate = async (name: string, version: string, expectedVersion: string, expectedEnabled: boolean, requestId: string) => {
+      check()
+      if (!runtime.dsh || !this.options.pluginUpdate) return { application: 'failed', error: { code: 'reconnect-required' } }
+      const input = { root: runtime.gateway.receipt.root, node: runtime.node, dsh: runtime.dsh, name, version, expectedVersion, expectedEnabled, requestId }
+      const source = this.options.pluginUpdate
+        + `\ntry { console.log('DSH_PLUGIN_RESULT:' + JSON.stringify(await stagePluginUpdate(${JSON.stringify(input)}))) } catch { console.log('DSH_ERROR: Plugin update result is unconfirmed. Inspect its private receipt before another update.'); process.exitCode=1 }\n`
+      let result: { application: string; error?: { code: string }; version?: string } | undefined
+      await remoteScript(this.engine, alias, `${shellQuote(runtime.node)} --input-type=module`, source, line => {
+        check()
+        if (line.startsWith('DSH_PLUGIN_RESULT:')) result = JSON.parse(line.slice('DSH_PLUGIN_RESULT:'.length))
+      }, 600000, expectedUpdatedAt)
+      check()
+      if (!result) throw new Error('Plugin update result unconfirmed; not replayed')
+      return result
+    }
+    return { hostId, version: runtime.gateway.receipt.version, gateway: runtime.gateway, check, stageUpdate }
+  }
+  connectedModelHosts() {
+    return [...this.runtimes.values()].filter(row => this.enabled && !this.disposed && !this.carrierBroken(row) && this.ownerMatches(row.alias, row.hostId, row.updatedAt))
+      .map(row => ({ alias: row.alias, updatedAt: row.updatedAt }))
+  }
+  modelIdentity(alias: string, expectedUpdatedAt: number) {
+    const hostId = this.hostId(alias)
+    this.assertOwner(alias, hostId, expectedUpdatedAt)
+    return { hostId }
+  }
+  modelAccess(alias: string, expectedUpdatedAt: number) {
+    const access = this.pluginAccess(alias, expectedUpdatedAt), runtime = this.runtimes.get(access.hostId)!
+    if (this.carrierBroken(runtime)) throw new Error('Remote DSH is disconnected. Open the workspace before syncing models.')
+    return { ...access, open: () => { access.check(); return runtime.gateway.launch() }, stageBridge: async () => {
+      access.check()
+      const source = this.options.modelBridge
+      if (!source || !this.options.pluginUpdate) throw new Error('Model bridge source is unavailable')
+      const hash = createHash('sha256').update(source).digest('hex'), version = `0.0.0-${hash.slice(0, 16)}`
+      const name = `@jay-local/dsh-ssh-model-bridge-${hash.slice(0, 16)}`
+      const root = runtime.gateway.receipt.root
+      const files = {
+        'index.mjs': source,
+        'package.json': JSON.stringify({ name, version, type: 'module', main: 'index.mjs', dsh: { bundle: { patch: './cordis.patch.yml' } } }),
+        'cordis.patch.yml': `- insert:\n    - id: ssh-model-bridge-${hash.slice(0, 16)}\n      name: "${name}"\n`,
+      }
+      const script = `import {mkdir,open,readFile,lstat} from 'node:fs/promises';import {join} from 'node:path';
+const root=${JSON.stringify(root)},hash=${JSON.stringify(hash)},files=${JSON.stringify(files)};
+try{const dir=join(root,'model-bridge','bundles-v2',hash);await mkdir(dir,{recursive:true,mode:0o700});
+if((await lstat(dir)).isSymbolicLink())throw Error();
+for(const [name,value] of Object.entries(files)){const path=join(dir,name);try{const f=await open(path,'wx',0o600);try{await f.writeFile(value)}finally{await f.close()}}catch(e){if(e.code!=='EEXIST'||!(await lstat(path)).isFile()||await readFile(path,'utf8')!==value)throw Error()}}
+console.log('DSH_MODEL_BUNDLE:'+JSON.stringify({spec:'link:'+dir,version:${JSON.stringify(version)}}));}catch{console.log('DSH_ERROR: Private model helper staging is unconfirmed; not replayed.');process.exitCode=1}`
+      let bundle: { spec: string; version: string } | undefined
+      await remoteScript(this.engine, alias, `${shellQuote(runtime.node)} --input-type=module`, script, line => {
+        if (line.startsWith('DSH_MODEL_BUNDLE:')) bundle = JSON.parse(line.slice('DSH_MODEL_BUNDLE:'.length))
+      }, 30000, expectedUpdatedAt)
+      access.check()
+      if (!bundle || !bundle.spec.startsWith(`link:${root}/model-bridge/`) || bundle.version !== version) throw new Error('Model helper staging was not confirmed')
+      let staged: { application: string; version?: string } | undefined
+      const prepare = `${this.options.pluginUpdate}\ntry{console.log('DSH_MODEL_PREPARED:'+JSON.stringify(await stageModelBridge(${JSON.stringify({ root, node: runtime.node, dsh: runtime.dsh, hash })})))}catch{console.log('DSH_ERROR: Model helper preparation is unconfirmed; inspect its private receipt. No command was replayed.');process.exitCode=1}`
+      await remoteScript(this.engine, alias, `${shellQuote(runtime.node)} --input-type=module`, prepare, line => {
+        if (line.startsWith('DSH_MODEL_PREPARED:')) staged = JSON.parse(line.slice('DSH_MODEL_PREPARED:'.length))
+      }, 600000, expectedUpdatedAt)
+      access.check()
+      if (staged?.application !== 'staged' || staged.version !== version) throw new Error('Model helper CLI preparation failed; inspect its private receipt')
+      return { ...bundle, name, staged: true }
+    } }
+  }
   historyCopies() { return this.historyCache.status() }
   viewObservationPresence() { return this.viewReceipts.available() }
   async viewObservationHosts(after = '') {
@@ -237,11 +320,11 @@ export class RemoteWorkspaces {
       let replacement: string | undefined
       try {
         this.assertOwner(runtime.alias, runtime.hostId, runtime.updatedAt)
-        const healthy = await this.probeHealth(runtime)
+        const broken = this.carrierBroken(runtime)
+        const healthy = !broken && await this.probeHealth(runtime)
         if (this.disposed || !this.enabled || this.runtimes.get(runtime.hostId) !== runtime) return
         if (healthy) { runtime.failures = 0; runtime.healthMisses = 0; return }
         runtime.healthMisses = (runtime.healthMisses ?? 0) + 1
-        const broken = this.carrierBroken(runtime)
         // A slow HTTP response is not proof that a live terminal or SSH
         // transport failed. Only consecutive failed recovery rounds count.
         if (!broken && runtime.healthMisses < 3) return
@@ -360,7 +443,7 @@ export class RemoteWorkspaces {
         || !compatibleRemoteVersion(installed.version)) throw new Error('Remote installer did not return a compatible installation')
       this.phase(operation, 'starting')
       let receipt: RemoteReceipt | undefined
-      const source = `${this.options.bootstrap}\ntry { console.log('DSH_RECEIPT:' + JSON.stringify(await bootstrapRemote(${JSON.stringify({ ...installed, directory: remotePath, supportedVersions: REMOTE_DSH_VERSIONS })}))) } catch { console.log('DSH_ERROR: Remote DSH startup failed. Inspect the private state/server.log and state/server.json; no restart was attempted.'); process.exitCode=1 }\n`
+      const source = `${this.options.bootstrap}\ntry { console.log('DSH_RECEIPT:' + JSON.stringify(await bootstrapRemote(${JSON.stringify({ ...installed, directory: remotePath, supportedVersions: REMOTE_DSH_VERSIONS, ...(this.options.accountService && this.options.accountBridge ? { account: { serviceSource: this.options.accountService, bridgeSource: this.options.accountBridge, ...(this.options.remoteRoot ? { home: posix.join(installed.root, 'data'), installEntry: false, port: 0 } : {}) } } : {}) })}))) } catch { console.log('DSH_ERROR: Remote DSH startup failed. Inspect the private state/server.log and state/server.json; no restart was attempted.'); process.exitCode=1 }\n`
       await remoteScript(this.engine, alias, `${shellQuote(installed.node)} --input-type=module`, source, line => {
         if (line.startsWith('DSH_RECEIPT:')) receipt = JSON.parse(line.slice(12)) as RemoteReceipt
       }, 100000, updatedAt)
@@ -371,10 +454,15 @@ export class RemoteWorkspaces {
       if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || Number(target.port) !== receipt.port || !target.searchParams.get('token')) throw new Error('Invalid remote DSH address')
       check()
       const tunnel = await this.engine.startWorkspaceTunnel(alias, receipt.port, updatedAt)
-      const gateway = new RemoteGateway(tunnel.localPort, receipt, alias, this.options.returnUrl(), hostId, this.recoveryProof(hostId), this.drafts, this.viewReceipts)
-      try { await gateway.start() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
+      const installedNode = installed.node, ownerReceipt = receipt
+      const gateway = new RemoteGateway(tunnel.localPort, receipt, alias, this.options.returnUrl(), hostId, this.recoveryProof(hostId), this.drafts, this.viewReceipts, this.bootAssets,
+        async input => { check(); const value = await readBootArtifact(this.engine, alias, installedNode, ownerReceipt, input, updatedAt); check(); return value })
+      try {
+        await gateway.start(await this.gatewayOrigins.preferred(hostId, this.options.returnUrl()))
+        await this.gatewayOrigins.remember(hostId, this.options.returnUrl(), Number(new URL(gateway.origin).port))
+      } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
       try { check() } catch (error) { gateway.dispose(); this.engine.stopWorkspaceTunnel(tunnel.id); throw error }
-      runtime = { node: installed.node, gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0,health:{healthy:true,checkedAt:Date.now()} }; this.runtimes.set(hostId, runtime)
+      runtime = { node: installed.node, dsh: installed.dsh, gateway, tunnelId: tunnel.id, hostId, alias, updatedAt, retryAt: 0, failures: 0,health:{healthy:true,checkedAt:Date.now()} }; this.runtimes.set(hostId, runtime)
       const owner = runtime
       gateway.onCatalogChange = () => {
         if (this.runtimes.get(hostId) !== owner) return
@@ -383,6 +471,8 @@ export class RemoteWorkspaces {
       remotePath = receipt.directory
     }
     this.phase(operation, 'connecting')
+    check()
+    if (this.onModelsConnected) await this.onModelsConnected(alias, updatedAt)
     check()
     if (remotePath === '~') remotePath = runtime.gateway.receipt.userHome
     else if (remotePath.startsWith('~/')) remotePath = posix.join(runtime.gateway.receipt.userHome, remotePath.slice(2))
@@ -417,27 +507,32 @@ export class RemoteWorkspaces {
    * carrier; never retry transport errors, writes or changed Host ownership.
    * Consume synchronously under the final revision check, with no await gap
    * between validation and installing a Session list or history source. */
-  private async withCatalog<T>(runtime: Runtime, consume: (catalog: HostCatalog) => T): Promise<T> {
+  private async withCatalog<T>(runtime: Runtime, consume: (catalog: HostCatalog) => T, foreground = false): Promise<T> {
     for (let attempt = 0; ; attempt++) {
       if (this.disposed || !this.enabled || this.runtimes.get(runtime.hostId) !== runtime
         || !this.ownerMatches(runtime.alias, runtime.hostId, runtime.updatedAt)) throw new Error('Remote connection changed')
       try {
-        const catalog = await this.hostCatalog(runtime)
+        const catalog = await this.hostCatalog(runtime, foreground)
         this.assertCatalogCurrent(runtime, catalog)
         return consume(catalog)
       } catch (error) {
-        if (!(error instanceof SupersededCatalogError) || attempt >= 1) throw error
+        const interrupted = foreground && error instanceof CatalogReadError && error.code === 'transport'
+        if (!(error instanceof SupersededCatalogError) && !interrupted || attempt >= 1) throw error
       }
     }
   }
   /** Metadata reads use an existing carrier only; opening the sidebar never starts SSH. */
-  private hostCatalog(runtime: Runtime): Promise<HostCatalog> {
-    if (runtime.catalog && runtime.catalog.expiresAt > Date.now()) return runtime.catalog.read
+  private hostCatalog(runtime: Runtime, foreground = false): Promise<HostCatalog> {
+    if (runtime.catalog && runtime.catalog.expiresAt > Date.now()) {
+      if (foreground) { runtime.catalog.priority.foreground = true; runtime.gateway.prioritizeCatalog() }
+      return runtime.catalog.read
+    }
     // All projects on a Host share the same remote workspace/session lists.
     // Coalesce concurrent reads and short bursts; retain no Session content.
     const revision = runtime.catalogRevision ?? 0
-    const entry: NonNullable<Runtime['catalog']> = { expiresAt: Infinity, read: Promise.all([
-      runtime.gateway.workspaceCatalogSnapshot(), runtime.gateway.rpc<HostCatalog['sessions']>('session/list', { _request: {} }),
+    const priority = { foreground }
+    const entry: NonNullable<Runtime['catalog']> = { expiresAt: Infinity, priority, read: Promise.all([
+      runtime.gateway.workspaceCatalogSnapshot(priority), runtime.gateway.rpc<HostCatalog['sessions']>('session/list', { _request: {} }, 30000, priority),
     ])
       .then(([workspaces, sessions]) => {
         if (!Array.isArray(workspaces.items) || !Array.isArray(workspaces.archivedSessionIds) || !Array.isArray(sessions.items)) throw new Error('Remote catalog is incompatible')
@@ -447,7 +542,13 @@ export class RemoteWorkspaces {
         const catalog = { workspaces, sessions, checkedAt, revision }
         this.assertCatalogCurrent(runtime, catalog)
         return catalog
-      }).catch(error => { if (runtime.catalog === entry) runtime.catalog = undefined; throw error }) }
+      }).catch(error => {
+        if (runtime.catalog === entry) runtime.catalog = undefined
+        // A carrier replacement invalidates failed reads as well as late
+        // successful replies. Continue the read on the current carrier once.
+        if (revision !== (runtime.catalogRevision ?? 0) && (!(error instanceof CatalogReadError) || error.code === 'transport')) throw new SupersededCatalogError()
+        throw error
+      }) }
     runtime.catalog = entry
     return entry.read
   }
@@ -492,10 +593,21 @@ export class RemoteWorkspaces {
     } finally { this.invalidateCatalog(runtime) }
   }
   /** Explicit metadata mutations use the owning connected Host once. No retry. */
-  async sessionAction(id: string, sessionId: string, action: string, title?: string, stopActivity = false, expectedHostId?: string): Promise<void> {
-    const methods: Record<string, string> = { pin: 'workspace/pinSession', unpin: 'workspace/unpinSession', archive: 'workspace/archiveSession', unarchive: 'workspace/unarchiveSession', rename: 'session/rename' }
+  async sessionAction(id: string, sessionId: string, action: string, title?: string, stopActivity = false, expectedHostId?: string): Promise<RemoteForkResult | void> {
+    const methods: Record<string, string> = { pin: 'workspace/pinSession', unpin: 'workspace/unpinSession', archive: 'workspace/archiveSession', unarchive: 'workspace/unarchiveSession', rename: 'session/rename', fork: 'session/fork' }
     if (!Object.hasOwn(methods, action) || !sessionId || sessionId.length > 256 || /[\u0000-\u001f\u007f]/.test(sessionId)
-      || action === 'rename' && (typeof title !== 'string' || !title.trim() || title.length > 1024)) throw new Error('Invalid remote Session action')
+      || action === 'rename' && (typeof title !== 'string' || !title.trim() || title.length > 1024)
+      || action === 'fork' && title !== undefined && title.length > 1024) throw new Error('Invalid remote Session action')
+    const forkTitle = title?.trim() ? title : undefined
+    let childTitle: string | undefined
+    if (action === 'fork' && forkTitle !== undefined) {
+      const numbered = /^(.*?)(\(|（)(\d+)(\)|）)$/u.exec(forkTitle)
+      const candidate = numbered && (numbered[2] === '(' ? numbered[4] === ')' : numbered[4] === '）')
+        ? `${numbered[1]}${numbered[2]}${BigInt(numbered[3]!) + 1n}${numbered[4]}` : `${forkTitle} (1)`
+      // Keep the inherited name when incrementing it cannot fit. Decide before
+      // creating a child so a display limit never turns success into a failure.
+      if (candidate.length <= 1024) childTitle = candidate
+    }
     const { item, runtime, check } = await this.connectedWorkspace(id)
     if (expectedHostId !== undefined && item.hostId !== expectedHostId) throw new Error('Remote Host identity changed')
     await this.withCatalog(runtime, catalog => {
@@ -504,9 +616,19 @@ export class RemoteWorkspaces {
     })
     check(); this.invalidateCatalog(runtime)
     try {
-      await runtime.gateway.rpc(methods[action]!, { request: { sessionId,
+      const result = await runtime.gateway.rpc<{ sessionId: string }>(methods[action]!, { request: { sessionId,
         ...(action === 'rename' ? { title: title!.trim() } : {}), ...(action === 'archive' && stopActivity ? { stopActivity: true } : {}) } })
       check()
+      if (action === 'fork') {
+        if (typeof result?.sessionId !== 'string' || !result.sessionId || result.sessionId === sessionId) throw new Error('Remote fork acknowledgement is unconfirmed; inspect the remote Session list before another action')
+        let titleUnconfirmed: true | undefined
+        if (childTitle !== undefined) {
+          try { await runtime.gateway.rpc('session/rename', { request: { sessionId: result.sessionId, title: childTitle } }) }
+          catch { titleUnconfirmed = true } // The child is known; never fork it again to recover its title.
+          check()
+        }
+        return { sessionId: result.sessionId, ...(titleUnconfirmed ? { titleUnconfirmed } : {}) }
+      }
     } finally { this.invalidateCatalog(runtime) }
   }
   private async connectedWorkspace(id: string) {
@@ -532,7 +654,7 @@ export class RemoteWorkspaces {
       if(!workspace)throw new Error('Remote workspace is no longer available')
       if(preferredSessionId&&!workspace.sessionIds.includes(preferredSessionId))throw new Error('Session does not belong to this remote workspace')
       return workspace.sessionIds
-    })
+    }, true)
     let sessionId = preferredSessionId ?? members.at(-1)
     if (!sessionId) {
       this.invalidateCatalog(runtime)

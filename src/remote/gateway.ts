@@ -1,10 +1,11 @@
 import { createServer, request, type IncomingMessage, type ServerResponse, type Server } from 'node:http'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { RemoteReceipt } from './types.ts'
 import { remotePage } from './page.ts'
 import { RemoteFailureError } from './errors.ts'
+import { parseSessionActivity } from './session-activity.ts'
 import { WebSocket } from 'ws'
 import { navigationClient } from './navigation-client.ts'
 import type { HistoryRecord } from './history-cache.ts'
@@ -14,13 +15,39 @@ import { draftClient, seedDraft, type DraftSeed } from './draft-client.ts'
 import { createDraftReplica } from './draft-replica.ts'
 import { watchCatalogPulse } from './catalog-pulse.ts'
 import { WorkspaceDirectoryProjection, type WorkspaceDirectory } from './workspace-directory.ts'
-import { CatalogReadError, catalogJsonLimit, catalogJsonReader, readCatalogJson, runCatalogRead } from './catalog-json.ts'
+import { CatalogReadError, catalogJsonLimit, catalogJsonReader, readCatalogJson, runCatalogRead, type CatalogReadPriority } from './catalog-json.ts'
 import { ViewReceiptStore, type ViewReceiptInput } from './view-receipts.ts'
 import { operationClient } from './operation-client.ts'
+import { bootAssetPath, BootAssetCache, bootAssetEntryLimit } from './boot-assets.ts'
+import type { BootArtifact, BootRead } from './boot-reader.ts'
+import { gunzipSync } from 'node:zlib'
+
+export const modelCatalogReadTimeoutMs = 15000
+
+/** Immutable version URLs can be revalidated locally. Browser reload headers
+ * must not force the native multi-megabyte representation across SSH again. */
+function bootNotModified(req: IncomingMessage, etag?: string): boolean {
+  const value = req.headers['if-none-match']
+  if (typeof value !== 'string') return false
+  return (value.match(/(?:W\/)?"[^"]*"|\*/g) ?? []).some(tag => tag === '*' || !!etag && tag.replace(/^W\//, '') === etag.replace(/^W\//, ''))
+}
 
 export interface HistoryOpening { type: 'snapshot'; cursor: number; records: HistoryRecord[]; hasMore: boolean; header: { id: string } }
 const catalogMutation = (method: string) => /^(?:session\/(?:create|rename|fork|delete|prompt|cancel|command)|workspace\/)/.test(method)
 interface BrowserSession { expires:number; sessionId?:string; embedded?:boolean; origin:string; pending?:number; channel?:string; unsafeSockets?:number; frozen?:string; freezeTimer?:ReturnType<typeof setTimeout>; uplinks?:Set<Duplex> }
+
+/** The only upstream error detail allowed across the SSH plugin boundary. */
+function archiveActivity(method: string, args: object, error: unknown) {
+  if (method !== 'workspace/archiveSession') return undefined
+  const request = args !== null && typeof args === 'object' && !Array.isArray(args) ? (args as { request?: unknown }).request : undefined
+  if (request === null || typeof request !== 'object' || Array.isArray(request)) return undefined
+  const { sessionId, stopActivity } = request as { sessionId?: unknown; stopActivity?: unknown }
+  if (typeof sessionId !== 'string' || stopActivity === true || error === null || typeof error !== 'object' || Array.isArray(error)) return undefined
+  const { code, details } = error as { code?: unknown; details?: unknown }
+  if (code !== 'workspace/session-active' || details === null || typeof details !== 'object' || Array.isArray(details)) return undefined
+  const { sessionId: refusedSessionId, activity } = details as { sessionId?: unknown; activity?: unknown }
+  return refusedSessionId === sessionId ? parseSessionActivity(activity) : undefined
+}
 
 /** One isolated browser origin per remote Host. All native and plugin HTTP/WS traffic shares it. */
 export class RemoteGateway {
@@ -36,26 +63,39 @@ export class RemoteGateway {
   private healthRead?: { port: number; controller: AbortController; promise: Promise<boolean> }
   private healthSnapshot?: {port:number;at:number}
   private disposed = false
+  private bootReads = new Map<string, Promise<BootArtifact>>()
+  private bootActive = 0
+  private bootWaiters: Array<() => void> = []
   private catalogLifetime = new AbortController()
-  private workspaceFollower?: { projection: WorkspaceDirectoryProjection; first: Promise<WorkspaceDirectory>; lifetime: AbortController }
+  private workspaceFollower?: { projection: WorkspaceDirectoryProjection; first: Promise<WorkspaceDirectory>; lifetime: AbortController; priority: CatalogReadPriority }
   origin = ''
   onCatalogChange: () => void = () => {}
   get upstreamOrigin(): string { return `http://127.0.0.1:${this.localPort}` }
   constructor(public localPort: number, readonly receipt: RemoteReceipt, readonly alias: string, readonly returnUrl: string,
-    readonly hostId: string, readonly recoveryProof: string, private readonly drafts?: LocalDraftStore, private readonly viewReceipts?: ViewReceiptStore) {
-    this.server = createServer((req, res) => { void this.handle(req, res).catch(() => {
-      if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain' })
+    readonly hostId: string, readonly recoveryProof: string, private readonly drafts?: LocalDraftStore, private readonly viewReceipts?: ViewReceiptStore,
+    private readonly bootAssets?: BootAssetCache, private readonly readBoot?: (input: BootRead) => Promise<BootArtifact>) {
+    // Browser cookies are scoped to a hostname, not a port. Native DSH
+    // sessions on other loopback ports therefore accompany this gateway's
+    // own cookie. Leave bounded room for them plus the official batched
+    // plugin URL; the default 16 KiB parser limit can reject that batch
+    // before authentication/routing and force dozens of serial fallbacks.
+    this.server = createServer({ maxHeaderSize: 64 * 1024 }, (req, res) => { void this.handle(req, res).catch(() => {
+      if (res.headersSent) { res.destroy(); return }
+      res.writeHead(502, { 'content-type': 'text/plain' })
       res.end('Remote DSH is unavailable. The request was not replayed.')
     }) })
     this.server.on('connection', socket => { this.sockets.add(socket); socket.once('close', () => this.sockets.delete(socket)) })
     this.server.on('upgrade', (req, socket, head) => this.upgrade(req, socket, head))
   }
-  async start(): Promise<void> {
+  async start(preferredPort?: number): Promise<void> {
+    if (preferredPort !== undefined && (!Number.isInteger(preferredPort) || preferredPort < 1024 || preferredPort > 65535)) throw Error('Invalid saved gateway port')
     await this.replaceTunnel(this.localPort)
-    await new Promise<void>((resolve, reject) => {
+    const listen = (port: number) => new Promise<void>((resolve, reject) => {
       this.server.once('error', reject)
-      this.server.listen(0, '127.0.0.1', () => { this.server.off('error', reject); resolve() })
+      this.server.listen(port, '127.0.0.1', () => { this.server.off('error', reject); resolve() })
     })
+    try { await listen(preferredPort ?? 0) }
+    catch (error) { if (preferredPort === undefined || (error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error; await listen(0) }
     const address = this.server.address()
     if (!address || typeof address === 'string') throw new Error('Remote gateway did not start')
     this.origin = `http://127.0.0.1:${address.port}`
@@ -143,6 +183,14 @@ export class RemoteGateway {
     for (const map of [this.tickets, this.sessions]) for (const [key, item] of map) if (item.expires < Date.now()) map.delete(key)
   }
   private cookieName(): string { return `dsh-remote-${new URL(this.origin).port}` }
+  private async prepareBoot(input: BootRead): Promise<BootArtifact> {
+    await new Promise<void>(resolve => {
+      const begin = () => { this.bootActive++; resolve() }
+      if (this.bootActive < 2) begin(); else this.bootWaiters.push(begin)
+    })
+    try { if (this.disposed) throw Error('Static view released'); return await this.readBoot!(input) }
+    finally { this.bootActive--; this.bootWaiters.shift()?.() }
+  }
   private requestOrigin(req: IncomingMessage): string | undefined {
     const target = new URL(this.origin)
     if (req.headers.host === target.host) return target.origin
@@ -166,28 +214,57 @@ export class RemoteGateway {
     delete headers['forwarded']; delete headers['x-forwarded-host']; delete headers['x-forwarded-for']
     return headers
   }
-  async rpc<T>(method: string, args: object): Promise<T> {
-    if (method === 'session/list') return runCatalogRead(this.hostId, this.catalogLifetime.signal, () => this.rpcRequest<T>(method, args))
-    return this.rpcRequest<T>(method, args)
+  async rpc<T>(method: string, args: object, timeoutMs = 30000, priority: boolean | CatalogReadPriority = false): Promise<T> {
+    if (method === 'session/list') return runCatalogRead(this.hostId, this.catalogLifetime.signal, () => this.rpcRequest<T>(method, args).catch(error => {
+      if (error instanceof TypeError) throw new CatalogReadError('transport')
+      throw error
+    }), priority)
+    return this.rpcRequest<T>(method, args, timeoutMs)
   }
-  private async rpcRequest<T>(method: string, args: object): Promise<T> {
+  private async rpcRequest<T>(method: string, args: object, timeoutMs = 30000): Promise<T> {
     const port = this.localPort, release = this.retainRequest(port)
     const changesCatalog = catalogMutation(method)
     if (changesCatalog) this.onCatalogChange()
     try {
       const rpcId = randomUUID()
       const readOnlyCatalog = method === 'session/list'
-      const signal = readOnlyCatalog ? AbortSignal.any([this.catalogLifetime.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000)
+      const signal = readOnlyCatalog ? AbortSignal.any([this.catalogLifetime.signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(timeoutMs)
       const response = await fetch(`http://127.0.0.1:${port}/api/${method}`, {
         method: 'POST', headers: { Host: new URL(this.upstreamOrigin).host, Origin: this.upstreamOrigin, Cookie: this.upstreamCookie, 'content-type': 'application/json' },
         body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }), signal,
       })
-      if (!response.ok) throw new Error(`Remote DSH ${method} returned HTTP ${response.status}; not replayed`)
-      const body = (readOnlyCatalog ? await readCatalogJson(response, signal) : await response.json()) as { rpcId?: string; result?: { ok: boolean; value?: T; error?: { message?: string; code?: string } } }
+      if (!response.ok) {
+        await response.body?.cancel()
+        if (readOnlyCatalog && [401,403].includes(response.status)) throw new CatalogReadError('auth')
+        if (readOnlyCatalog && [502,503,504].includes(response.status)) throw new CatalogReadError('transport')
+        throw new Error(`Remote DSH ${method} returned HTTP ${response.status}; not replayed`)
+      }
+      const body = (readOnlyCatalog ? await readCatalogJson(response, signal) : await response.json()) as { rpcId?: string; result?: { ok: boolean; value?: T; error?: { message?: string; code?: string; details?: unknown } } }
       if (body.rpcId !== rpcId || !body.result) throw new Error('Remote DSH returned an incompatible RPC response')
-      if (!body.result.ok) throw new RemoteFailureError(body.result.error?.message ?? `Remote ${method} failed`, body.result.error?.code)
+      if (!body.result.ok) {
+        const activity = archiveActivity(method, args, body.result.error)
+        throw new RemoteFailureError(body.result.error?.message ?? `Remote ${method} failed`, body.result.error?.code, activity)
+      }
+      this.noteTraffic(port)
       return body.result.value as T
     } finally { if (changesCatalog) this.onCatalogChange(); release() }
+  }
+  /** Model secrets cross this private SSH carrier only; errors never echo bodies. */
+  async modelBridge<T>(payload: object): Promise<T> {
+    const port = this.localPort, release = this.retainRequest(port)
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/api/dsh-ssh-model-follow`, {
+        method: 'POST', headers: { Host: this.upstreamOrigin.slice(7), Origin: this.upstreamOrigin, Cookie: this.upstreamCookie, 'content-type': 'application/json' },
+        body: JSON.stringify(payload), redirect: 'error', signal: AbortSignal.timeout(60000),
+      })
+      if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error('Model bridge request was not confirmed'), { status: response.status }) }
+      const body = await response.text()
+      if (body.length > 512 * 1024) throw new Error('Invalid model sync response')
+      return JSON.parse(body) as T
+    } finally { release() }
+  }
+  private noteTraffic(port: number): void {
+    if (!this.disposed && this.localPort === port) this.healthSnapshot = { port, at: Date.now() }
   }
   healthy(): Promise<boolean> {
     if (this.disposed) return Promise.resolve(false)
@@ -195,14 +272,16 @@ export class RemoteGateway {
     if(this.healthSnapshot?.port===port&&Date.now()-this.healthSnapshot.at<2500)return Promise.resolve(true)
     if (this.healthRead?.port === port) return this.healthRead.promise
     const controller = new AbortController()
+    const started = Date.now()
+    const trafficDuringProbe = () => !this.disposed && this.localPort === port && this.healthSnapshot?.port === port && this.healthSnapshot.at >= started
     const read = { port, controller, promise: undefined as unknown as Promise<boolean> }
     read.promise = (async () => {
       try {
         const response = await fetch(`http://127.0.0.1:${port}/`, { headers: { Host: `127.0.0.1:${port}`, Cookie: this.upstreamCookie }, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]), redirect: 'manual' })
         await response.body?.cancel()
-        if(response.status===200&&!this.disposed&&this.localPort===port)this.healthSnapshot={port,at:Date.now()}
-        return response.status === 200
-      } catch { return false }
+        if(response.status===200)this.noteTraffic(port)
+        return response.status === 200 || trafficDuringProbe()
+      } catch { return trafficDuringProbe() }
       finally { if (this.healthRead === read) this.healthRead = undefined }
     })()
     this.healthRead = read; return read.promise
@@ -214,12 +293,13 @@ export class RemoteGateway {
   }
   /** One read-only live membership feed per Host. The read lane is released
    * after its baseline, while later snapshots reuse ordered increments. */
-  workspaceCatalogSnapshot(): Promise<WorkspaceDirectory> {
+  prioritizeCatalog(): void { if (this.workspaceFollower) this.workspaceFollower.priority.foreground = true }
+  workspaceCatalogSnapshot(priority: CatalogReadPriority = { foreground: false }): Promise<WorkspaceDirectory> {
     if (this.disposed) return Promise.reject(new DOMException('Remote gateway was disposed', 'AbortError'))
     const current = this.workspaceFollower
-    if (current) return current.projection.snapshot() ? Promise.resolve(current.projection.snapshot()!) : current.first
+    if (current) { if (priority.foreground) current.priority.foreground = true; return current.projection.snapshot() ? Promise.resolve(current.projection.snapshot()!) : current.first }
     const lifetime = new AbortController(), projection = new WorkspaceDirectoryProjection()
-    const follower = { projection, lifetime, first: undefined as unknown as Promise<WorkspaceDirectory> }
+    const follower = { projection, lifetime, priority, first: undefined as unknown as Promise<WorkspaceDirectory> }
     this.workspaceFollower = follower
     const signal = AbortSignal.any([lifetime.signal, this.catalogLifetime.signal])
     const closed = () => {
@@ -229,7 +309,7 @@ export class RemoteGateway {
     }
     follower.first = runCatalogRead(this.hostId, signal, () => this.baselineRequest('workspace/follow', {}, frame => projection.accept(frame), {
       signal, changed: () => { if (this.workspaceFollower === follower) this.onCatalogChange() }, closed,
-    })).catch(error => { closed(); throw error })
+    }), priority).catch(error => { closed(); throw error })
     return follower.first
   }
   /** Cold-safe history reads never start an Agent or replay an operation. */
@@ -285,6 +365,7 @@ export class RemoteGateway {
           if (frame.streamId !== streamId) continue
           const value = frame.type === 'item' ? read(frame.value) : undefined
           if (value !== undefined) {
+            this.noteTraffic(port)
             if (!follow) finish(undefined, value)
             else if (!delivered) { delivered = true; clearTimeout(deadline); stopPulse = watchCatalogPulse(socket, error => finish(error)); resolve(value) }
             else follow.changed()
@@ -304,12 +385,16 @@ export class RemoteGateway {
         socket.pause()
         void decode()
       })
-      socket.once('error', () => { release(); finish(new Error('Remote workspace catalog is unavailable')) })
-      socket.once('close', () => { release(); finish(new Error('Remote workspace catalog disconnected')) })
+      socket.once('unexpected-response', (_request, response) => {
+        response.resume(); release(); socket.terminate()
+        finish(new CatalogReadError([401,403].includes(response.statusCode ?? 0) ? 'auth' : 'transport'))
+      })
+      socket.once('error', () => { release(); finish(new CatalogReadError('transport')) })
+      socket.once('close', () => { release(); finish(new CatalogReadError('transport')) })
       if (signal.aborted) disposed()
     })
   }
-  private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handle(req: IncomingMessage, res: ServerResponse, bootRecovery = 0): Promise<void> {
     const origin = this.origin && this.requestOrigin(req)
     if (!origin) { res.writeHead(403); res.end(); return }
     const url = new URL(req.url ?? '/', origin)
@@ -325,6 +410,50 @@ export class RemoteGateway {
     }
     const session = this.authenticated(req)
     if (!session) { res.writeHead(401); res.end('Reopen this remote workspace from the local DSH window.'); return }
+    const assetRead = req.method === 'GET' && !req.headers.range && !req.headers['if-match'] && !req.headers['if-unmodified-since'] && bootAssetPath(url)
+    const assetScope = `${this.hostId}:${this.receipt.version}:compact-images-1`, assetEncoding = String(req.headers['accept-encoding'] ?? '')
+    if (assetRead && this.bootAssets) {
+      const asset = await this.bootAssets.read(assetScope, url, assetEncoding)
+      if (asset) {
+        const headers = { ...asset.headers, 'x-content-type-options': 'nosniff' }
+        if (bootNotModified(req, asset.headers.etag)) { res.writeHead(304, headers); res.end() }
+        else { res.writeHead(200, { ...headers, 'content-length': asset.body.length }); res.end(asset.body) }
+        return
+      }
+    }
+    const image = /^\/__dsh_remote\/boot-image\/([a-f0-9]{64})\.png$/.exec(url.pathname)
+    if (this.readBoot && req.method === 'GET' && (image || assetRead && url.pathname === '/plugins/' && url.search.includes('/dsh-client-ui-settings-account/client.js'))) {
+      let input: BootRead | undefined
+      if (image) {
+        const encoded = url.searchParams.get('source') ?? '', path = Buffer.from(encoded, 'base64url').toString('utf8'), source = new URL(path, this.origin)
+        if (/^[A-Za-z0-9_-]{1,12000}$/.test(encoded) && url.searchParams.size === 1 && bootAssetPath(source) && source.pathname === '/plugins/' && path === source.pathname + source.search) input = { source: path, image: image[1] }
+      } else input = { source: url.pathname + url.search }
+      if (!input) { res.writeHead(400); res.end(); return }
+      const key = JSON.stringify(input)
+      let read = this.bootReads.get(key)
+      if (!read && this.bootReads.size < 32) { read = this.prepareBoot(input); this.bootReads.set(key, read) }
+      try {
+        if (!read) throw Error('Static read limit')
+        const artifact = await read
+        let bytes = Buffer.from(artifact.body, 'base64')
+        if (bytes.length > bootAssetEntryLimit || artifact.kind !== (image ? 'image' : 'code') || artifact.mime !== (image ? 'image/png' : 'text/javascript; charset=utf-8')) throw Error('Invalid static artifact')
+        const raw = image ? bytes : gunzipSync(bytes, { maxOutputLength: 24 * 1024 * 1024 })
+        if (raw.length !== artifact.rawBytes || createHash('sha256').update(raw).digest('hex') !== artifact.hash || image && artifact.hash !== image[1]) throw Error('Static artifact integrity mismatch')
+        const gzip = !image && /(?:^|[,\s])gzip(?:[,\s;]|$)/.test(assetEncoding)
+        if (!image && !gzip) bytes = raw
+        const headers = { 'content-type': artifact.mime, 'cache-control': 'public, max-age=31536000, immutable', vary: 'Accept-Encoding', etag: `"${artifact.hash}"`, ...(gzip ? { 'content-encoding': 'gzip' } : {}) }
+        if (bootNotModified(req, headers.etag)) { res.writeHead(304, { ...headers, 'x-content-type-options': 'nosniff' }); res.end() }
+        else { res.writeHead(200, { ...headers, 'content-length': bytes.length, 'x-content-type-options': 'nosniff' }); res.end(bytes) }
+        if (!image) void this.bootAssets?.save(assetScope, url, assetEncoding, headers, bytes)
+        return
+      } catch (error) {
+        if (error instanceof RemoteFailureError) throw error
+        if (this.disposed || res.destroyed) return
+        if (image) { res.writeHead(502, { 'cache-control': 'no-store' }); res.end('The native illustration could not be read.'); return }
+        // A failed, one-shot export is not replayed. The ordinary native GET
+        // remains available for compatibility with an unsupported runtime.
+      }
+    }
     if (url.pathname === '/__dsh_remote/release') {
       res.setHeader('content-type', 'application/json'); res.setHeader('cache-control', 'no-store')
       if (!session.embedded || req.method !== 'POST') { res.writeHead(403); res.end('{}'); return }
@@ -412,10 +541,12 @@ export class RemoteGateway {
     const upstreamOrigin = `http://127.0.0.1:${port}`
     const changesCatalog = req.method === 'POST' && catalogMutation(url.pathname.replace(/^\/api\//, ''))
     if (changesCatalog) this.onCatalogChange()
+    let readDeadline: ReturnType<typeof setTimeout> | undefined
     try {
       await new Promise<void>((resolve, reject) => {
         const upstream = request({ hostname: '127.0.0.1', port, path: req.url, method: req.method, headers: this.headers(req, url.pathname === '/' && req.method === 'GET') }, incoming => {
           const headers = { ...incoming.headers }; delete headers['set-cookie']
+          if (incoming.statusCode && incoming.statusCode >= 200 && incoming.statusCode < 400) this.noteTraffic(port)
           // The official hot-module graph is a perpetual read-only SSE feed,
           // not a dispatched operation. Recognize its exact method/path/type;
           // all other HTTP (including unknown streams) remains protected.
@@ -430,7 +561,20 @@ export class RemoteGateway {
           headers['referrer-policy'] = 'no-referrer'
           if (headers.location?.startsWith(upstreamOrigin)) headers.location = headers.location.slice(upstreamOrigin.length) || '/'
           const html = url.pathname === '/' && req.method === 'GET' && incoming.statusCode === 200 && String(headers['content-type']).includes('text/html')
-          if (!html) { res.writeHead(incoming.statusCode ?? 502, headers); incoming.pipe(res); incoming.once('end', resolve); incoming.once('error', reject); return }
+          if (!html) {
+            let assetChunks: Buffer[] | undefined = assetRead && this.bootAssets && incoming.statusCode === 200 && this.bootAssets.storable(incoming.headers) ? [] : undefined
+            let assetBytes = 0
+            if (assetChunks) incoming.on('data', (chunk: Buffer) => {
+              assetBytes += chunk.length
+              if (assetBytes > bootAssetEntryLimit) assetChunks = undefined
+              else assetChunks?.push(chunk)
+            })
+            res.writeHead(incoming.statusCode ?? 502, headers); incoming.pipe(res)
+            incoming.once('end', () => {
+              if (assetChunks && incoming.complete) void this.bootAssets!.save(assetScope, url, assetEncoding, incoming.headers, Buffer.concat(assetChunks))
+              resolve()
+            }); incoming.once('error', reject); return
+          }
           const chunks: Buffer[] = []; let size = 0
           incoming.on('data', (chunk: Buffer) => { size += chunk.length; if (size > 8 * 1024 * 1024) incoming.destroy(new Error('Remote HTML exceeded limit')); else chunks.push(chunk) })
           incoming.once('error', reject)
@@ -451,11 +595,32 @@ export class RemoteGateway {
           })
         })
         upstream.once('error', reject)
+        // This exact endpoint only reads provider/model metadata. A stalled
+        // carrier must settle the native UI's Promise so its existing error
+        // and Retry action replace Loading models. Never retry it here.
+        if (req.method === 'POST' && url.pathname === '/api/session/modelCatalog') {
+          readDeadline = setTimeout(() => upstream.destroy(Object.assign(new Error('Remote model list read timed out'), { code: 'DSH_MODEL_CATALOG_TIMEOUT' })), modelCatalogReadTimeoutMs)
+        }
         req.once('aborted', () => { upstream.destroy(); resolve() })
         res.once('close', () => { upstream.destroy(); resolve() })
         req.pipe(upstream)
       })
-    } finally { finishBrowserRequest(); if (changesCatalog) this.onCatalogChange(); release() }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === 'DSH_MODEL_CATALOG_TIMEOUT') {
+        if (!res.headersSent && !res.destroyed) { res.writeHead(504, { 'content-type': 'text/plain', 'cache-control': 'no-store' }); res.end('The remote model list did not respond in time. Retry the model list; no request was replayed.') }
+        else res.destroy()
+        return
+      }
+      // A replacement carrier may close an initial JS/CSS read before any
+      // bytes reached the browser. Only immutable hashed boot assets can
+      // continue once on the new carrier. API calls, uploads, downloads and
+      // writes are never replayed; partial responses are never concatenated.
+      const bootAsset = req.method === 'GET' && !url.search && /^\/assets\/[^/]+[-.][A-Za-z0-9_-]{8,}\.(?:js|css)$/.test(url.pathname)
+      if (!bootRecovery && bootAsset && port !== this.localPort && !res.headersSent && !res.destroyed && !req.aborted) {
+        await this.handle(req, res, 1); return
+      }
+      throw error
+    } finally { clearTimeout(readDeadline); finishBrowserRequest(); if (changesCatalog) this.onCatalogChange(); release() }
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const session = this.authenticated(req)
@@ -484,6 +649,8 @@ export class RemoteGateway {
   }
   dispose(): void {
     this.disposed = true; this.healthRead?.controller.abort()
+    for (const begin of this.bootWaiters.splice(0)) begin()
+    this.bootReads.clear()
     for (const session of this.sessions.values()) clearTimeout(session.freezeTimer)
     this.catalogLifetime.abort()
     this.server.close(); for (const socket of this.sockets) socket.destroy()

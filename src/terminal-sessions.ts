@@ -26,6 +26,9 @@ export class TerminalSessions {
   constructor(private engine: SshEngine, private store: HostStore,
     private limits = { outputBytes: TERMINAL_OUTPUT_BYTES, detachedMs: TERMINAL_DETACHED_MS, maxSessions: MAX_SESSIONS }) {}
 
+  hasActive(): boolean {
+    return [...this.entries.values()].some(entry => ['connecting', 'connected'].includes(entry.info.phase))
+  }
   list(owner: string): TerminalSessionInfo[] {
     return [...this.entries.values()].filter(entry => entry.owner === owner).map(entry => structuredClone(entry.info))
   }

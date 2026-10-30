@@ -42,8 +42,10 @@ export async function startTunnel(
   }
   const entry = engine.store.find(alias)
   if (entry === undefined) throw new Error('alias \'' + alias + '\' not found — add it first')
+  const reviewedUpdatedAt = expectedUpdatedAt ?? entry.updatedAt
   const checkOwner = () => {
-    if (expectedUpdatedAt !== undefined && engine.store.find(alias)?.updatedAt !== expectedUpdatedAt) throw new Error('Host settings changed; no workspace tunnel was opened')
+    if (engine.disposed) throw new Error('SSH engine is closed; no tunnel was opened')
+    if (engine.store.find(alias)?.updatedAt !== reviewedUpdatedAt) throw new Error('Host settings changed; no tunnel was opened')
   }
   checkOwner()
   const remoteHost = options.remoteHost ?? '127.0.0.1'
@@ -68,6 +70,7 @@ export async function startTunnel(
   const client = record.client
   const sockets = new Set<Socket>()
   const server = createServer((socket) => {
+    socket.setNoDelay(true)
     sockets.add(socket)
     let channel: ClientChannel | undefined
     const destroy = (): void => {
@@ -94,6 +97,13 @@ export async function startTunnel(
       destroy()
     }
   })
+  const closeListener = (): void => {
+    try { server.close() } catch { /* not listening or already closed */ }
+    for (const socket of sockets) {
+      try { socket.destroy() } catch { /* already closed */ }
+    }
+    sockets.clear()
+  }
   try {
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject)
@@ -102,7 +112,12 @@ export async function startTunnel(
         resolve()
       })
     })
+    // Binding is asynchronous. Disposal, host edits or record replacement can
+    // occur while this listener is not yet registered in engine.tunnels.
+    checkOwner()
+    if (record.broken || engine.pool.get(alias) !== record) throw new Error('SSH connection changed while opening tunnel; no tunnel was opened')
   } catch (error) {
+    closeListener()
     // Roll back: never leave an unpinned orphan connection behind.
     if (!record.pinned && record.inFlight === 0) disposeRecord(engine, alias, record)
     throw error

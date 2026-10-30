@@ -1,7 +1,8 @@
-import { createElement, type ComponentType } from 'react'
+import { createElement, type ComponentType, type ReactElement } from 'react'
 import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 
 type Props = Record<string, unknown>
+export type ProjectedChildRenderer = (sourceSlotName: string, entry: StoredEntry, props: Props) => ReactElement | null
 interface Slots {
   entries(name: string): readonly StoredEntry[]
   subscribe(name: string, listener: () => void): () => void
@@ -11,7 +12,8 @@ let serial = 0
 
 /** Preserve native child outlets without redeclaring another plugin's slots. */
 export function projectEntry(slots: Slots, name: string, entry: StoredEntry,
-  render: (props: Props) => ReturnType<typeof createElement>, priority = entry.options.priority,
+  render: (props: Props) => ReactElement | null, priority = entry.options.priority,
+  renderChild?: ProjectedChildRenderer,
 ): { component: ComponentType<Props>; dispose: () => void } {
   const aliases = new Map(Object.keys(entry.children ?? {}).map(key => [key, `dsh.ssh.guard.${++serial}`]))
   const children = Object.fromEntries([...aliases].map(([key, alias]) => [alias, entry.children![key]]))
@@ -39,7 +41,8 @@ export function projectEntry(slots: Slots, name: string, entry: StoredEntry,
         }
         for (const original of entries) {
           if (!copies.has(original)) copies.set(original, projectEntry(slots, alias, original,
-            props => createElement(original.component as ComponentType<Props>, props)).dispose)
+            props => renderChild ? renderChild(source, original, props) : createElement(original.component as ComponentType<Props>, props),
+            original.options.priority, renderChild).dispose)
         }
       }
       const unsubscribe = slots.subscribe(source, sync)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type { SshApi } from './api.ts'
@@ -12,7 +12,7 @@ import { RemoteErrorNotice } from './RemoteErrorNotice.tsx'
 import { HostPicker } from './HostPicker.tsx'
 import { rememberWorkspaceHost } from './host-picker-history.ts'
 
-export type WorkspaceFlowProps = DirectoryFlowOwnerProps & { api: SshApi; pickLocal: () => Promise<string | null> }
+export type WorkspaceFlowProps = DirectoryFlowOwnerProps & { api: SshApi; renderLocal: (owner: DirectoryFlowOwnerProps) => ReactNode }
 
 /** A trailing slash means "show this directory"; a partial last segment filters its parent. */
 function suggestionQuery(value: string): { path: string; prefix: string } {
@@ -26,8 +26,8 @@ function childPath(parent: string, name: string): string { return (parent === '/
 function parentPath(path: string): string { return path === '/' ? '/' : path.slice(0, path.lastIndexOf('/')) || '/' }
 
 /** Occupies the official directory-flow slot used by both Add workspace controls. */
-export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }: WorkspaceFlowProps) {
-  const [mode, setMode] = useState<'choose' | 'ssh'>('choose')
+export function WorkspaceFlow({ open, busy, onPicked, onCancel, onError, api, renderLocal }: WorkspaceFlowProps) {
+  const [mode, setMode] = useState<'choose' | 'local' | 'ssh'>('choose')
   const [hosts, setHosts] = useState<SshHostSummary[]>([])
   const [hostsLoading, setHostsLoading] = useState(false)
   const [hostChoosing, setHostChoosing] = useState(true)
@@ -52,9 +52,10 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
   const locked = busy || pending
   useEffect(() => {
     const request = ++generation.current
+    setMode('choose')
     if (!open) return
     const controller = new AbortController(); lifetime.current = controller
-    setMode('choose'); setAlias(''); setHosts([]); setImporting(false); setError(null); setBrowseError(null); setPending(false); setConnecting(false); setAddingHost(false); setEditingHost(null); setProgress(''); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false)
+    setAlias(''); setHosts([]); setImporting(false); setError(null); setBrowseError(null); setPending(false); setConnecting(false); setAddingHost(false); setEditingHost(null); setProgress(''); setRemotePath('~'); setSelectedPath(null); setBrowseOpen(false)
     setHostsLoading(true)
     setHostChoosing(true)
     void api.listHosts().then(value => {
@@ -89,6 +90,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
   }, [api, open, mode, browseOpen, alias, remotePath, selectedPath, selectedHostVersion])
 
   if (!open) return null
+  if (mode === 'local') return <>{renderLocal({ open, busy, onPicked, onCancel, onError })}</>
 
   const action = async (run: (active: () => boolean) => Promise<void>): Promise<void> => {
     if (locked) return
@@ -118,10 +120,7 @@ export function WorkspaceFlow({ open, busy, onPicked, onCancel, api, pickLocal }
         }}>
         <h3 className={css.modalTitle}>{tt('workspace.add')}</h3>
         <div className={css.formRow}>
-          <button type="button" className={css.ghostButton} disabled={locked} onClick={() => { void action(async active => {
-            const path = await pickLocal()
-            if (path !== null && active()) onPicked(path)
-          }) }}>{tt('workspace.local')}</button>
+          <button type="button" className={css.ghostButton} disabled={locked} onClick={() => setMode('local')}>{tt('workspace.local')}</button>
           <button type="button" className={css.primaryButton} disabled={locked} onClick={() => { setMode('ssh') }}>{tt('workspace.ssh')}</button>
         </div>
         {mode === 'ssh' && <>

@@ -3,7 +3,8 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { mountDesktopWorkspaces } from '../src/client/desktop-workspace.ts'
 import { openRemoteWorkspace } from '../src/client/remote-workspaces.ts'
 import type { RemoteWorkspace } from '../src/remote/types.ts'
-import { remotePresentation } from '../src/client/remote-presentation.ts'
+import { remotePresentation, remoteSelection } from '../src/client/remote-presentation.ts'
+import { remoteNavigation } from '../src/client/remote-navigation.ts'
 
 const workspace: RemoteWorkspace = { id: 'fixture', hostId: 'a'.repeat(24), alias: 'fixture', remotePath: '/work', title: 'work', workspaceId: 'remote-work' }
 let dispose: (() => void) | undefined
@@ -112,6 +113,34 @@ it('reselects a retained Session even when its remote shell cleared selection af
   expect(first.guest.loadURL).toHaveBeenCalledOnce()
 })
 
+it('clears only the archived selection without a close prompt or releasing its retained Host guest', async () => {
+  const f = fixture(), first = await f.start()
+  first.guest.dispatchEvent(new Event('dom-ready')); await first.promise
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+  const surface = document.querySelector<HTMLElement>('[data-dsh-remote-desktop]')!
+  await remotePresentation()!.archived!({ ...workspace, hostId: 'b'.repeat(24) }, 'first')
+  expect(surface.hidden).toBe(false)
+  await remotePresentation()!.archived!(workspace, 'another-session')
+  expect(surface.hidden).toBe(false)
+  await remotePresentation()!.archived!(workspace, 'first')
+  expect(surface.hidden).toBe(true); expect(confirm).not.toHaveBeenCalled()
+  expect(first.guest.isConnected).toBe(true); expect(f.bridge.release).not.toHaveBeenCalled()
+  await openRemoteWorkspace(workspace, 'next')
+  expect(surface.hidden).toBe(false); expect(first.guest.loadURL).toHaveBeenCalledOnce()
+})
+
+it('hides an unsupported embedded view and retains its guest/draft without exposing a remote selection to local commands', async () => {
+  const f = fixture(), view = await f.start()
+  view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
+  const presentation = remotePresentation()!
+  expect(remoteSelection()?.workspaceId).toBe(workspace.id)
+  presentation.suspend!()
+  expect(remotePresentation()).toBeUndefined(); expect(remoteSelection()).toBeUndefined()
+  expect(document.querySelector<HTMLElement>('[data-dsh-remote-desktop]')!.hidden).toBe(true)
+  expect(view.guest.isConnected).toBe(true); expect(f.bridge.release).not.toHaveBeenCalled()
+  await expect(presentation.resume(workspace, 'first')).resolves.toBe(false)
+})
+
 it('cancels a pending view without leaking its lease, replaying setup, or disclosing the launch ticket', async () => {
   const f = fixture(), controller = new AbortController()
   const { promise, guest } = await f.start(workspace, controller.signal)
@@ -182,7 +211,13 @@ it('shows a saved disk history in the same panel without SSH, and a late preview
   const surface = document.querySelector<HTMLElement>('[data-dsh-remote-desktop]')!
   expect(surface.hidden).toBe(false); expect(surface.textContent).toContain('History survives a restart')
   remotePresentation()!.previewFailed!(workspace)
-  expect(surface.textContent).toContain('remote host is unavailable')
+  expect(surface.textContent).toContain('live conversation is not connected')
+  remotePresentation()!.previewFailed!(workspace, new Error('Remote catalog queue wait timed out'))
+  expect(surface.textContent).toContain('Remote catalog queue wait timed out')
+  expect(surface.textContent).not.toContain('remote host is unavailable')
+  const open = vi.spyOn(remoteNavigation, 'open').mockImplementation(() => {})
+  ;[...surface.querySelectorAll('button')].find(button => button.textContent === 'Resume live conversation')!.click()
+  expect(open).toHaveBeenCalledExactlyOnceWith(workspace, 'cached')
   expect(f.bridge.acquire).not.toHaveBeenCalled(); expect(f.guests).toHaveLength(0)
   let resolve!: (value: any) => void
   f.fetch.mockImplementationOnce(async () => new Promise(value => { resolve = value }))
@@ -190,6 +225,63 @@ it('shows a saved disk history in the same panel without SSH, and a late preview
   ;[...surface.querySelectorAll('button')].find(x => x.textContent === 'Return to local')!.click()
   resolve({ ok: true, json: async () => ({ copy }) }); await pending
   expect(surface.hidden).toBe(true)
+})
+
+function savedCopy(sessionId = 'cached') {
+  return { meta: { hostId: workspace.hostId, workspaceId: workspace.workspaceId, sessionId, title: 'Generated saved conversation', savedAt: 1, complete: true },
+    records: [{ type: 'event', event: { seq: 0, type: 'user/message', data: { content: [{ type: 'text', text: 'Generated cached message during remote startup' }] } } }] }
+}
+
+it('shows a cache read that finishes after the remote loading panel has opened', async () => {
+  const f = fixture()
+  let resolve!: (value: any) => void
+  f.fetch.mockImplementationOnce(async () => new Promise(value => { resolve = value }))
+  const view = await f.start(workspace, undefined, 'cached')
+  expect(view.guest.isConnected).toBe(true)
+  resolve({ ok: true, json: async () => ({ copy: savedCopy() }) })
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Saved remote history"]')).not.toBeNull())
+  const surface = document.querySelector<HTMLElement>('[data-dsh-remote-desktop]')!
+  expect(surface.textContent).toContain('Generated cached message during remote startup')
+  expect(view.guest.parentElement!.hidden).toBe(false)
+  expect(view.guest.inert).toBe(true)
+  view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
+  expect(surface.querySelector('[aria-label="Saved remote history"]')).toBeNull()
+  expect(view.guest.inert).toBe(false)
+})
+
+it('keeps the guest in layout behind an early saved preview until its native client is ready', async () => {
+  const f = fixture()
+  f.fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ copy: savedCopy() }) } as any)
+  const view = await f.start(workspace, undefined, 'cached')
+  const saved = document.querySelector<HTMLElement>('[aria-label="Saved remote history"]')!
+  expect(saved).not.toBeNull(); expect(saved.parentElement!.hidden).toBe(false)
+  expect(view.guest.parentElement!.hidden).toBe(false)
+  expect(view.guest.hidden).toBe(false); expect(view.guest.style.display).toBe('flex')
+  view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
+  expect(saved.isConnected).toBe(false)
+})
+
+it('does not replace a ready conversation when its initial disk read finishes late', async () => {
+  const f = fixture()
+  let resolve!: (value: any) => void
+  f.fetch.mockImplementationOnce(async () => new Promise(value => { resolve = value }))
+  const view = await f.start(workspace, undefined, 'cached')
+  view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
+  resolve({ ok: true, json: async () => ({ copy: savedCopy() }) })
+  for (let n = 0; n < 8; n++) await Promise.resolve()
+  expect(document.querySelector('[aria-label="Saved remote history"]')).toBeNull()
+  expect(view.guest.inert).toBe(false)
+})
+
+it('rejects another session preview after a different remote view takes ownership', async () => {
+  const f = fixture()
+  let resolve!: (value: any) => void
+  f.fetch.mockImplementationOnce(async () => new Promise(value => { resolve = value }))
+  const pending = remotePresentation()!.preview!(workspace, 'cached')
+  const view = await f.start({ ...workspace, id: 'other-workspace', workspaceId: 'other-remote-work' }, undefined, 'other-session')
+  resolve({ ok: true, json: async () => ({ copy: savedCopy() }) }); await pending
+  expect(document.querySelector('[aria-label="Saved remote history"]')).toBeNull()
+  view.guest.dispatchEvent(new Event('dom-ready')); await view.promise
 })
 
 it('requires draft-loss confirmation before releasing a Host view without any remote operation', async () => {

@@ -3,14 +3,61 @@ import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { isLoopbackRequest } from '../loopback.ts'
 import { readJsonBody, writeJson } from '../http.ts'
 import type { RemoteWorkspaces } from './manager.ts'
-import { remoteErrorCode } from './errors.ts'
+import { remoteErrorActivity, remoteErrorCode } from './errors.ts'
+import type { ServerPlugins } from './plugins.ts'
+import type { ServerModels } from './models.ts'
+import type { ModelFollowPolicyChange } from './model-types.ts'
+import { CatalogReadError } from './catalog-json.ts'
 
-export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: IncomingMessage) => 401 | 403 | undefined): WebRoute[] {
+export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: IncomingMessage) => 401 | 403 | undefined, plugins?: ServerPlugins, models?: ServerModels): WebRoute[] {
   return [{ kind: 'prefix', path: '/api/dsh-ssh/remote', handler: async (req, res) => {
     const denied = rejection(req)
     if (denied || !isLoopbackRequest(req)) { writeJson(res, denied ?? 403, { error: 'Remote workspace access denied' }); return }
     const url = new URL(req.url ?? '/', 'http://localhost')
     try {
+      if (url.pathname.startsWith('/api/dsh-ssh/remote/models')) {
+        res.setHeader('Cache-Control', 'no-store')
+        if (!models) { writeJson(res, 503, { error: 'Server model management is unavailable' }); return }
+        if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/models') {
+          const alias = url.searchParams.get('alias'), updatedAt = Number(url.searchParams.get('hostUpdatedAt'))
+          if (!alias || !Number.isSafeInteger(updatedAt) || updatedAt <= 0) throw Error('Choose a configured SSH host')
+          writeJson(res, 200, models.view(alias, updatedAt)); return
+        }
+        if (req.method === 'POST') {
+          const body = await readJsonBody(req, { maxBytes: 2048 }) as { alias?: unknown; hostUpdatedAt?: unknown; change?: ModelFollowPolicyChange }
+          if (typeof body.alias !== 'string' || !Number.isSafeInteger(body.hostUpdatedAt) || Number(body.hostUpdatedAt) <= 0) throw Error('Choose a configured SSH host')
+          const updatedAt = body.hostUpdatedAt as number
+          if (url.pathname === '/api/dsh-ssh/remote/models/policy') {
+            if (!body.change || typeof body.change !== 'object') throw Error('A model policy is required')
+            writeJson(res, 200, await models.setPolicy(body.alias, updatedAt, body.change)); return
+          }
+          if (url.pathname === '/api/dsh-ssh/remote/models/check') {
+            await models.sync(body.alias, updatedAt); writeJson(res, 200, models.view(body.alias, updatedAt)); return
+          }
+          if (url.pathname === '/api/dsh-ssh/remote/models/open') { writeJson(res, 200, models.open(body.alias, updatedAt)); return }
+        }
+        writeJson(res, 405, { error: 'Unsupported server model operation' }); return
+      }
+      if (url.pathname.startsWith('/api/dsh-ssh/remote/plugins')) {
+        res.setHeader('Cache-Control', 'no-store')
+        if (!plugins) { writeJson(res, 503, { error: 'Server plugin management is unavailable' }); return }
+        if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/plugins') {
+          const alias = url.searchParams.get('alias'), version = Number(url.searchParams.get('hostUpdatedAt'))
+          if (!alias || !Number.isSafeInteger(version) || version <= 0) throw new Error('Choose a configured host before comparing plugins')
+          writeJson(res, 200, await plugins.compare(alias, version)); return
+        }
+        if (req.method === 'GET' && url.pathname === '/api/dsh-ssh/remote/plugins/job') {
+          const job = plugins.job(url.searchParams.get('id') ?? '')
+          writeJson(res, job ? 200 : 404, job ?? { error: 'Sync outcome unavailable. Inspect remote plugins before another sync.' }); return
+        }
+        if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/plugins/sync') {
+          const body = await readJsonBody(req, { maxBytes: 16384 }) as { planId?: unknown; names?: unknown; requestId?: unknown }
+          if (typeof body?.planId !== 'string' || typeof body.requestId !== 'string' || !Array.isArray(body.names)
+            || body.names.some(name => typeof name !== 'string')) throw new Error('Invalid plugin sync selection')
+          writeJson(res, 202, await plugins.start(body.planId, body.names, body.requestId)); return
+        }
+        writeJson(res, 405, { error: 'Unsupported server plugin operation' }); return
+      }
       if (url.pathname.startsWith('/api/dsh-ssh/remote/view-observations')) {
         res.setHeader('Cache-Control', 'no-store')
         try {
@@ -92,8 +139,8 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
         if (typeof body.id !== 'string' || typeof body.sessionId !== 'string' || typeof body.action !== 'string'
           || typeof body.expectedHostId !== 'string' || !/^[a-f0-9]{24}$/.test(body.expectedHostId)
           || body.title !== undefined && typeof body.title !== 'string' || body.stopActivity !== undefined && typeof body.stopActivity !== 'boolean') throw new Error('Invalid remote Session action')
-        await manager.sessionAction(body.id, body.sessionId, body.action, body.title as string | undefined, body.stopActivity === true, body.expectedHostId)
-        writeJson(res, 200, { ok: true }); return
+        const result = await manager.sessionAction(body.id, body.sessionId, body.action, body.title as string | undefined, body.stopActivity === true, body.expectedHostId)
+        writeJson(res, 200, { ok: true, ...result }); return
       }
       if (req.method === 'POST' && url.pathname === '/api/dsh-ssh/remote/connect') {
         const body = await readJsonBody(req) as { alias?: unknown; remotePath?: unknown; expectedHostId?: unknown }
@@ -120,6 +167,14 @@ export function remoteRoutes(manager: RemoteWorkspaces, rejection: (req: Incomin
         manager.dismiss(body.id); writeJson(res, 200, { ok: true }); return
       }
       writeJson(res, 404, { error: 'Unknown remote workspace route or method' })
-    } catch (error) { writeJson(res, 400, { error: error instanceof Error ? error.message : 'Remote workspace operation failed', errorCode: remoteErrorCode(error) }) }
+    } catch (error) {
+      const errorCode = error instanceof CatalogReadError ? 'catalog/' + error.code : remoteErrorCode(error)
+      const activity = errorCode === 'workspace/session-active' ? remoteErrorActivity(error) : undefined
+      writeJson(res, 400, {
+        error: error instanceof Error ? error.message : 'Remote workspace operation failed',
+        errorCode,
+        ...(activity === undefined ? {} : { activity }),
+      })
+    }
   } }]
 }

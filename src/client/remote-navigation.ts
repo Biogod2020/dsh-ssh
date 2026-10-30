@@ -8,7 +8,7 @@ export interface RemoteNavigationSnapshot {
 }
 let snapshot: RemoteNavigationSnapshot = { workspaces: [], catalogs: new Map(), native: false }
 const listeners = new Set<() => void>()
-let open: ((workspace: RemoteWorkspace, sessionId?: string, create?: boolean) => void) | undefined
+let open: ((workspace: RemoteWorkspace, sessionId?: string, create?: boolean, connectOnly?: boolean) => void) | undefined
 let cancel: (() => void) | undefined
 let intent = 0
 const pending = new Map<string, AbortController>()
@@ -24,6 +24,7 @@ export const remoteNavigation = {
   update(workspaces: readonly RemoteWorkspace[], hosts: readonly { hostId: string; phase: RemotePhase }[] = []) { publish({ ...snapshot, workspaces, hosts: new Map(hosts.map(host => [host.hostId, host.phase])) }) },
   stale() { publish({ ...snapshot, hosts: new Map(), catalogs: new Map([...snapshot.catalogs].map(([id, catalog]) => [id, { ...catalog, stale: true }])) }) },
   open(workspace: RemoteWorkspace, sessionId?: string, create?: boolean) { ++intent; open?.(workspace, sessionId, create) },
+  reconnect(workspace: RemoteWorkspace) { ++intent; open?.(workspace, undefined, false, true) },
   invalidate(workspace: RemoteWorkspace) {
     pending.get(workspace.id)?.abort(); pending.delete(workspace.id)
     if (!snapshot.workspaces.some(row => row.id === workspace.id && row.hostId === workspace.hostId)) return

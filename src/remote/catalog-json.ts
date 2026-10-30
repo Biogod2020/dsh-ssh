@@ -12,6 +12,8 @@ const readErrors = {
   'projection-size': 'Remote workspace directory exceeds its retained row, reference or byte budget; saved lists were preserved',
   'stream-timeout': 'Remote catalog observer stopped responding; saved lists were preserved',
   backlog: 'Remote catalog observer exceeded its backlog budget; saved lists were preserved',
+  transport: 'The connection was interrupted while reading the conversation directory; saved lists were preserved',
+  auth: 'Remote directory authentication was refused; reconnect the workspace',
 } as const
 /** Only these local, fixed messages may be shown with a saved directory.
  * Arbitrary remote errors and JSON content never enter this diagnostic. */
@@ -155,28 +157,42 @@ export class CatalogJsonReader {
 export const catalogJsonReader = new CatalogJsonReader()
 const catalogReads = new HistoryReadScheduler()
 let pendingReads = 0
+export interface CatalogReadPriority { foreground: boolean }
 
 /** Limit reception as well as CPU work: two reads globally and one per Host.
  * Only explicitly read-only calls use this lane. A cancelled queued observer
  * never dispatches, and active requests retain their existing protocol deadline. */
-export async function runCatalogRead<T>(hostId: string, signal: AbortSignal, read: () => Promise<T>, foreground = false): Promise<T> {
+export async function runCatalogRead<T>(hostId: string, signal: AbortSignal, read: () => Promise<T>, foreground: boolean | CatalogReadPriority = false): Promise<T> {
   if (signal.aborted) throw cancelled()
-  if (pendingReads >= 10) throw new CatalogReadError('queue')
+  const priority = () => typeof foreground === 'boolean' ? foreground : foreground.foreground
+  // Leave two observation slots for an explicit open's directory/list pair.
+  // Active reception remains bounded to two globally and one per Host.
+  if (pendingReads >= 10 || !priority() && pendingReads >= 8) throw new CatalogReadError('queue')
   const key = 'catalog-' + randomUUID()
-  let dispatched = false
   pendingReads++
   const abort = () => catalogReads.cancel(key, cancelled())
-  const deadline = setTimeout(() => { if (!dispatched) catalogReads.cancel(key, new CatalogReadError('queue-timeout')) }, 10000)
   signal.addEventListener('abort', abort, { once: true })
   try {
-    const result = catalogReads.run({ key, hostId, foreground }, async () => {
-      dispatched = true; clearTimeout(deadline)
-      if (signal.aborted) throw cancelled()
-      return read()
-    })
-    if (signal.aborted) abort()
-    return await result
-  } finally { pendingReads--; clearTimeout(deadline); signal.removeEventListener('abort', abort) }
+    for (let attempt = 0; ; attempt++) {
+      let dispatched = false
+      const deadline = setTimeout(() => { if (!dispatched) catalogReads.cancel(key, new CatalogReadError('queue-timeout')) }, 10000)
+      try {
+        // A user opening a conversation can promote an already shared,
+        // queued directory read without dispatching a duplicate.
+        const result = catalogReads.run({ key, hostId, get foreground() { return priority() } }, async () => {
+          dispatched = true; clearTimeout(deadline)
+          if (signal.aborted) throw cancelled()
+          return read()
+        })
+        if (signal.aborted) abort()
+        return await result
+      } catch (error) {
+        // Only a foreground read which never left this local queue gets one
+        // more admission window. Never repeat a dispatched read or mutation.
+        if (dispatched || signal.aborted || !priority() || attempt >= 1 || !(error instanceof CatalogReadError) || error.code !== 'queue-timeout') throw error
+      } finally { clearTimeout(deadline) }
+    }
+  } finally { pendingReads--; signal.removeEventListener('abort', abort) }
 }
 
 /** Count decompressed response bytes before decoding; Content-Length is not a
