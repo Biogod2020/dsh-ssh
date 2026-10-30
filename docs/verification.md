@@ -2,6 +2,16 @@
 
 验收日期：2026-10-15（America/Los_Angeles）。
 
+## 2026-10-27 — local.2: restore the native Add workspace flow
+
+In an isolated DSH 0.2.1-rc.3 Web instance using the official browse backend, Add workspace → Local folder failed with `directoryPicker.pick needs the native capability; the composed picker serves "browse"`. The SSH extension had replaced both official directory-flow occupants and called `uiWorkspace.pickDirectory()` directly. This also bypassed the Desktop occupant's own picker bridge.
+
+The extension now projects the current original occupant, retaining its injected services, store, locale and child outlets, and renders that occupant when the user chooses Local folder. It follows late/replaced occupants and restores the original registrations on unload. Closing the flow resets the choice before a later open, avoiding an accidental extra native-picker launch.
+
+Web acceptance exercised the sidebar and hero entries, created a generated `web-local-project` directory through the official browser, adopted it into the original sidebar, cancelled/reopened the browser and reopened the SSH flow without connecting a host. Regression tests cover both slots, browse outcomes, the Desktop picker bridge, busy state, cancellation/reopening and occupant replacement/unload. Tests use a private disposable home; the daily profile, real hosts, credentials and models are not involved in browser acceptance.
+
+The verified local archive passed 106 suites / 968 tests, typecheck, build, artifact checks and isolated rc.3 installed-runtime acceptance. The private development workspace passed 78 suites / 693 tests, typecheck, build and artifact checks after the focused fix was applied. The archive was installed into the daily Desktop profile; installed host/client bundles match it. All 4,650 protected files, bundle order and other dependency specifications were preserved. Desktop restart is left to the user after saving work. No npm/GitHub publication was performed for this local revision.
+
 ## 2026-10-22 — jay.39: cursor-based disk history deltas
 
 History validation now uses the actual Session event cursor rather than the list activity timestamp, which advances primarily on user messages and can miss assistant/tool events. Complete disk copies are reused: unchanged validation returns no events and does not read or rewrite the full local history document. New records are filtered on the remote machine and gzip/base64 encoded before SSH transport. This read-only helper uses the installer's existing Node and the running DSH's public projections/page APIs; it installs no remote plugin, changes no model settings, and does not restart the remote service.

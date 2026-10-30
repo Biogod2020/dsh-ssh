@@ -43,6 +43,19 @@ it('keeps the parked local blank Session addressable when the remote view owns t
   expect(local.byId.draft.blank).toBe(true)
   expect(local.byId.draft.retainedBy.mainView).toBe(1)
 })
+
+it('shortens only the matching generated remote suffix without changing host identity or stored titles', () => {
+  const a = { id: 'a', hostId: 'a'.repeat(24), alias: 'macbook', title: 'file-search [SSH:macbook]', remotePath: '/a', workspaceId: 'same' }
+  const b = { ...a, id: 'b', hostId: 'b'.repeat(24), alias: 'headcw', title: 'file-search [SSH:headcw]' }
+  const local = { workspaceId: 'local', path: '/local', title: a.title, sessionIds: [] }
+  const before = JSON.stringify({ a, b, local })
+  const remote = { native: true, workspaces: [a, b], catalogs: new Map() }
+  const combined = combineNavigation({ ids: [], byId: {} }, { items: [local] }, remote)
+  expect(combined.workspaces.items.map(item => item.title)).toEqual([a.title, 'file-search', 'file-search'])
+  expect(combined.workspaces.items.map(item => item.workspaceId)).toEqual(['local', remoteWorkspaceKey(a), remoteWorkspaceKey(b)])
+  expect(resolveRemoteNavigation(remoteWorkspaceKey(b), remote)?.workspace).toBe(b)
+  expect(JSON.stringify({ a, b, local })).toBe(before)
+})
 it('projects remote pin and archive flags into native filters without changing local ids',()=>{
   const workspace={id:'one',hostId:'a'.repeat(24),alias:'a',title:'Remote',remotePath:'/a',workspaceId:'project'}
   const entry={sessionId:'same',title:'Remote',running:false,blank:false,updatedAt:1,pinned:true}

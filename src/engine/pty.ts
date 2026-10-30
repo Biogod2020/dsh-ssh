@@ -48,23 +48,45 @@ export async function openShell(
   return await new Promise<ShellSession>((resolve, reject) => {
     let settled = false, tornDown = false
     let session: ShellSession | undefined
+    const cleanupOpening = (): void => {
+      clearTimeout(openingTimer)
+      client.off('close', disconnected)
+      client.off('error', openingError)
+    }
     const teardown = (): void => {
       if (tornDown) return
       tornDown = true
+      cleanupOpening()
       signal?.removeEventListener('abort', cancel)
       try { client.destroy() } catch { /* closed */ }
       for (const hop of hops) { try { hop.destroy() } catch { /* closed */ } }
     }
+    const failOpening = (error: Error): void => {
+      if (settled) return
+      settled = true; teardown(); reject(error)
+    }
+    const disconnected = (): void => failOpening(new Error('SSH disconnected while opening terminal; remote shell startup is unconfirmed; outcome unknown; not retried'))
+    const openingError = (): void => failOpening(new Error('SSH failed while opening terminal; remote shell startup is unconfirmed; outcome unknown; not retried'))
+    // Authentication has already completed. Bound only the PTY/shell request,
+    // without shortening human authentication or the lifetime of a ready shell.
+    const openingTimer = setTimeout(() => failOpening(new Error('Terminal opening timed out after ' + engine.opts.connectTimeoutMs
+      + ' ms; remote shell startup is unconfirmed; outcome unknown; not retried')), engine.opts.connectTimeoutMs)
     const cancel = (): void => {
       if (!settled) { settled = true; reject(signal?.reason ?? new Error('Terminal connection cancelled')) }
       session?.close(); teardown()
     }
     signal?.addEventListener('abort', cancel, { once: true })
     if (signal?.aborted) { cancel(); return }
+    client.once('close', disconnected)
+    client.once('error', openingError)
     try { client.shell({ term: 'xterm-256color', cols: size.cols, rows: size.rows }, (error, stream) => {
-      if (settled || signal?.aborted) { stream?.destroy(); teardown(); return }
+      if (settled || signal?.aborted) {
+        stream?.on('error', () => {})
+        stream?.destroy(); teardown(); return
+      }
       if (error !== undefined) { settled = true; teardown(); reject(error); return }
       settled = true
+      cleanupOpening()
       session = {
         target: terminalTargetOf(entry),
         send: (data) => { try { stream.write(data) } catch { /* channel gone */ } },

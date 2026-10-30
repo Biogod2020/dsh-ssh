@@ -45,7 +45,7 @@ After a local DSH restart, an old gateway port and its browser cookie cannot be 
 ## Migration and limits
 
 - New entries have `hostId`, `remotePath` and the remote `workspaceId`; they have no `localPath`. Changing a host's address/account changes its identity and cannot silently retarget an old workspace.
-- Old local workspace conversations remain locally readable. Their tools are blocked; their remote paths appear in the new catalog for explicit connection. History and model credentials are not imported.
+- Old local workspace conversations remain locally readable. Their tools are blocked; their remote paths appear in the new catalog for explicit connection. Legacy history is not imported. API-key model settings use the separate follow/independent policy; browser login grants are not imported.
 - The initial remote profile is independent. Configure a model and install remote plugins through its native UI. A local-only model endpoint requires a separately configured route reachable from the remote host.
 - Plugin backends using `node:fs` now run beside their files. Plugins using desktop-native dialogs, platform-specific renderers or special browser cookie/auth flows may still need adaptation. Runtime installation does not promise arbitrary plugin compatibility.
 - Desktop presents local and remote projects/conversations in the same outer sidebar. A native keyed main panel seats retained isolated guests without detaching their DOM; each remote conversation keeps its Host's complete client composition. This unifies navigation, while archives, credentials and client contexts remain on their original Hosts.
@@ -85,3 +85,11 @@ The native main seat measures only the content rectangle; local Files/Terminal p
 The local controller reads `workspace/follow`'s first baseline and `session/list` over an existing authenticated carrier; these reads do not activate Agents, create Workspaces, dispatch commands, or reconnect SSH. It filters by the recorded remote Workspace membership and archive set. A private atomic `session-catalog.json` stores only navigation metadata for disconnected display. Stale lists never claim a running state. An unsafe or corrupt cache is preserved and reported. Explicit session creation uses `session/create` once; opening a selected session verifies its Workspace membership. No uncertain creation or operation is automatically retried.
 
 The desktop's standard guest policy blocks page downloads and native privileges. Local SSH transfer tools remain available after returning to local. This presentation does not merge local model settings or local/remote session archives. Browser deployments retain top-level in-tab navigation; a Desktop shell without the guest API reports an update requirement instead of automatically opening a browser.
+
+## Shared account default
+
+New connections stage the shipped account-service helper and a native Cordis activity/receipt component. `~/.dsh` and the compatibility `root/data` path resolve to one physical directory. Existing live, authenticated services are adopted; a live unready process is retained. Existing distinct homes require a private backed-up merge rather than silent replacement. An explicit isolated root in test fixtures never changes the real account entry.
+
+The entry at `~/.local/bin/dsh` retains the original core launcher in the same directory. Non-Web commands use that core and the same default home; explicit other `DSH_HOME` values pass through. `dsh web` discovers or starts one detached service, guarded by a private owner lock and receipt. A supervisor retains it independently of SSH. Native activity checks fence explicit stop/restart, including attached terminals. Uncertain operations are not replayed. Installing a helper retains the existing account core pin.
+
+`dsh service status` reports public process/origin metadata. Authentication URLs stay in mode-0600 receipts and logs; an interactive terminal may display the account login link. Source files are immutable by content hash, profile patch changes retain existing YAML expressions, and legacy SSH controllers receive a compatibility receipt for the same process.

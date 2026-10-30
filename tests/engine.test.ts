@@ -18,6 +18,7 @@ import type { HostPayload } from '../src/protocol.ts'
 import { TEST_PASSWORD, TEST_USER, TestSshServer } from './helpers/ssh-server.ts'
 import { TestSshd } from './helpers/sshd.ts'
 import { EventEmitter } from 'node:events'
+import { randomBytes } from 'node:crypto'
 
 let server: TestSshServer
 let store: HostStore
@@ -378,6 +379,21 @@ describe('shell', () => {
 })
 
 describe('tunnel', () => {
+  it('preserves a bulk byte stream and an interactive read on the same pooled SSH connection', async () => {
+    addHost('bulk-and-control')
+    const before = server.connectCount, tunnel = await engine.startTunnel('bulk-and-control', { remotePort: server.echoPort })
+    const exchange = (bytes: Buffer) => new Promise<Buffer>((resolve, reject) => {
+      const socket = connect(tunnel.localPort, '127.0.0.1'), chunks: Buffer[] = []; let size = 0
+      const timer = setTimeout(() => { socket.destroy(); reject(Error('multiplexed tunnel timed out')) }, 4000)
+      socket.once('connect', () => socket.write(bytes))
+      socket.on('data', (chunk: Buffer) => { chunks.push(chunk); size += chunk.length; if (size === bytes.length) { clearTimeout(timer); socket.destroy(); resolve(Buffer.concat(chunks)) } })
+      socket.once('error', error => { clearTimeout(timer); reject(error) })
+    })
+    const bulk = randomBytes(512 * 1024), small = Buffer.from('small-control-read')
+    const [copied, control, command] = await Promise.all([exchange(bulk), exchange(small), engine.exec('bulk-and-control', 'echo hello')])
+    expect(copied).toEqual(bulk); expect(control).toEqual(small); expect(command.stdout).toBe('hello\n'); expect(server.connectCount).toBe(before + 1)
+    engine.stopTunnel(tunnel.id)
+  })
   it('forwards a local port to the remote echo server', async () => {
     addHost('tunnel-host')
     const tunnel = await engine.startTunnel('tunnel-host', { remotePort: server.echoPort })

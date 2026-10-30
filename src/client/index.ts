@@ -26,7 +26,7 @@ import { PanelController } from './panel/controller.ts'
 import { setRuntimeTranslate } from './panel/helpers.ts'
 import { mountSidebarEntry } from './sidebar-entry.ts'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
-import { WorkspaceFlow } from './WorkspaceFlow.tsx'
+import { mountWorkspaceFlows } from './workspace-flow.tsx'
 import { mountWorkspaceStatus } from './workspace-status.ts'
 import { guardWorkspaceSurfaces } from './workspace-surfaces.tsx'
 import { mountRemoteWorkspaces } from './remote-workspaces.ts'
@@ -34,6 +34,8 @@ import { terminalSettings } from './terminal-settings.ts'
 import { mountNativeSshPanel } from './native-panel.tsx'
 import { mountDesktopWorkspaces } from './desktop-workspace.ts'
 import { mountNativeWorkspaces, mountNativeSessionControls } from './native-workspaces.tsx'
+import { NativeSessionAdapter } from './native-session-adapter.tsx'
+import { mountRemoteShortcutRouting } from './shortcut-routing.ts'
 
 /** Locale namespace this plugin owns. */
 const NS = 'dsh-ssh'
@@ -80,12 +82,6 @@ export function apply(ctx: ClientContext): void {
 
   const controller = new PanelController()
   const api = new SshApi()
-  const injected = () => ({ api, pickLocal: () => ctx.uiWorkspace.pickDirectory() })
-  ctx.slots.inject('conversation.hero.workspace.directoryFlow', () =>
-    ctx.slots.inject('sidebar.workspaces.directoryFlow', function* () {
-      yield ctx.slots.register({ name: 'conversation.hero.workspace.directoryFlow', priority: -100, inject: injected }, WorkspaceFlow)
-      yield ctx.slots.register({ name: 'sidebar.workspaces.directoryFlow', priority: -100, inject: injected }, WorkspaceFlow)
-    }))
   // Live terminal-font preference (issue #577): the settings namespace is
   // edited by the host-registered GUI section; the panel re-applies changes
   // to open terminals without a reconnect.
@@ -93,9 +89,14 @@ export function apply(ctx: ClientContext): void {
   guardWorkspaceSurfaces(ctx, () => controller.open(), api, terminalFont)
   const disposers: Array<() => void> = []
   try {
-    const desktop = mountDesktopWorkspaces(ctx.locale, ctx)
+    disposers.push(mountWorkspaceFlows(ctx, api))
+    const sessionAdapter = new NativeSessionAdapter(), shortcutRouting = mountRemoteShortcutRouting(ctx, sessionAdapter)
+    disposers.push(shortcutRouting.dispose)
+    // Unsupported SDKs keep SSH tools and standalone remote Web navigation;
+    // never embed a remote selection under unsafe parent-window commands.
+    const desktop = shortcutRouting.supported ? mountDesktopWorkspaces(ctx.locale, ctx) : undefined
     if (desktop) disposers.push(desktop)
-    disposers.push(mountNativeWorkspaces(ctx))
+    disposers.push(mountNativeWorkspaces(ctx, sessionAdapter))
     if (desktop) disposers.push(mountNativeSessionControls(ctx))
     const native = mountNativeSshPanel(ctx, controller, api, terminalFont, ctx.locale)
     if (native) disposers.push(native)

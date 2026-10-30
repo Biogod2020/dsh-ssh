@@ -770,10 +770,11 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 :global(html[data-platform="darwin"]) .desktopWorkspaceToolbar { padding-left: 96px; }
 .desktopWorkspaceToolbar button { -webkit-app-region: no-drag; }
 .desktopWorkspaceTitle { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.desktopWorkspaceViewport { position: relative; flex: 1; min-height: 0; display: flex; }
 .desktopWorkspaceBody { flex: 1; min-height: 0; display: flex; }
 .desktopWorkspaceGuest { width: 100%; height: 100%; flex: 1; min-width: 0; border: 0; }
 .desktopPoolStatus { margin: 0; padding: 4px 12px; font-size: 11.5px; color: var(--dsw-alias-label-secondary); }
-.desktopHistory { flex: 1; min-height: 0; overflow: auto; padding: 20px; }
+.desktopHistory { position: absolute; inset: 0; z-index: 1; overflow: auto; padding: 20px; background: var(--dsw-alias-bg-base, #141414); }
 .desktopHistory[hidden], .desktopWorkspaceBody[hidden] { display: none; }
 .savedHistory { max-width: 1000px; margin: 0 auto; }
 .savedHistory article { padding: 16px 0; border-bottom: 1px solid var(--dsw-alias-border-l2, #444); }
@@ -1335,3 +1336,49 @@ html[data-dsh-ssh-active]:not([data-dsh-taskboard-active]) [class*='centerCol'] 
 .remoteErrorDetails summary { cursor: pointer; padding: 6px 0; }
 .remoteErrorDetails summary:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
 .remoteErrorDetails pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; max-height: 160px; overflow-y: auto; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+/* Server package comparison stays usable in narrow SSH panes. */
+.serverPlugins { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.serverPlugins h3, .serverPlugins p { margin: 0; }
+.serverPlugins select { max-width: 100%; padding: 6px; color: inherit; background: var(--dsw-alias-bg-layer-1, transparent); border: 1px solid var(--dsw-alias-border-l3, #666); border-radius: 6px; }
+.serverPlugins code { overflow-wrap: anywhere; }
+.serverPlugins td { vertical-align: top; }
+.serverPlugins [role=alert] { color: var(--dsw-alias-state-error-primary, #dc5454); }
+
+/* Remote identity stays visible while long project names can shrink. */
+.workspaceRemoteText {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.workspaceRemoteText > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspaceHostBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 1 auto;
+  min-width: 14px;
+  max-width: 44%;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.workspaceHostBadge > svg { flex: 0 0 14px; }
+.workspaceHostBadge > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* Historical failures stay readable without presenting old errors as live status. */
+.remotePreviousFailures { min-width: 0; color: var(--dsw-alias-label-secondary); font-size: 11px; }
+.remotePreviousFailures > summary { cursor: pointer; padding: 4px 0; overflow-wrap: anywhere; }
+.remotePreviousFailures > summary:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }
+.remotePreviousFailures > .hint { margin: 4px 0 8px; font-size: 11px; }
+.remotePreviousFailureRows { display: flex; flex-direction: column; gap: 6px; }
+.remotePreviousFailureRows .remoteWorkspacePath { display: block; margin-top: 4px; }

@@ -22,7 +22,7 @@ function fixture() {
     workspaceCatalogSnapshot: vi.fn(async () => ({ items: [{ workspaceId: 'first', sessionIds: ['one'] }, { workspaceId: 'second', sessionIds: ['two'] }], archivedSessionIds: [] })),
     rpc: vi.fn(async (method: string) => method === 'session/list' ? { items: [...rows] } : method === 'workspace/create'
       ? { workspace: { sessionIds: ['one'] } } : { sessionId: 'created' }),
-    healthy: vi.fn(async () => true), dispose: vi.fn(), launch: vi.fn(() => 'http://127.0.0.1:1/'),
+    healthy: vi.fn(async () => true), dispose: vi.fn(), launch: vi.fn(() => 'http://127.0.0.1:1/'), prioritizeCatalog: vi.fn(),
   }
   const runtime = { gateway, hostId, alias: 'fixture', updatedAt: host.updatedAt, tunnelId: 'fixture', retryAt: 0, failures: 0 }
   ;(manager as any).runtimes.set(hostId, runtime)
@@ -33,6 +33,57 @@ function fixture() {
   cleanups.push(async () => { await manager.dispose(); rmSync(root, { recursive: true, force: true }) })
   return { manager, store, gateway, hostId, rows, runtime, first: 'a'.repeat(24), second: 'b'.repeat(24) }
 }
+it('promotes an existing shared background directory read when the user opens a conversation', async () => {
+  const f = fixture()
+  let finish!: (value: any) => void
+  f.gateway.rpc.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const background = f.manager.sessions(f.first)
+  for (let n = 0; n < 8; n++) await Promise.resolve()
+  const priority = (f.runtime as any).catalog.priority
+  expect(priority.foreground).toBe(false)
+  const opened = f.manager.open(f.first, 'one')
+  for (let n = 0; n < 8; n++) await Promise.resolve()
+  expect(priority.foreground).toBe(true)
+  expect(f.gateway.prioritizeCatalog).toHaveBeenCalled()
+  expect(f.gateway.rpc).toHaveBeenCalledOnce()
+  finish({ items: f.rows }); await Promise.all([background, opened])
+  expect(f.gateway.rpc).toHaveBeenCalledOnce()
+})
+
+it('continues an interrupted read on the current carrier instead of leaving a saved preview failed', async () => {
+  const f = fixture()
+  let rejectOld!: (reason: Error) => void
+  f.gateway.rpc.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject }))
+  const previous = f.manager.sessions(f.first)
+  for (let n = 0; n < 8; n++) await Promise.resolve()
+  ;(f.manager as any).invalidateCatalog(f.runtime)
+  rejectOld(new CatalogReadError('transport'))
+  const recovered = await previous
+  expect(recovered.stale).toBe(false); expect(recovered.warning).toBeUndefined()
+  expect(recovered.sessions.map(row => row.sessionId)).toEqual(['one'])
+  expect(f.gateway.rpc.mock.calls.filter(row => row[0] === 'session/list')).toHaveLength(2)
+})
+
+it('retries one foreground directory interruption but never retries authentication refusal or a write', async () => {
+  const f = fixture()
+  f.gateway.workspaceCatalogSnapshot.mockRejectedValueOnce(new CatalogReadError('transport'))
+  await f.manager.open(f.first, 'one')
+  expect(f.gateway.workspaceCatalogSnapshot).toHaveBeenCalledTimes(2)
+  expect(f.gateway.rpc.mock.calls.every(row => row[0] === 'session/list')).toBe(true)
+  ;(f.manager as any).invalidateCatalog(f.runtime)
+  f.gateway.workspaceCatalogSnapshot.mockRejectedValue(new CatalogReadError('auth'))
+  const reads = f.gateway.workspaceCatalogSnapshot.mock.calls.length
+  await expect(f.manager.open(f.first, 'one')).rejects.toMatchObject({ code: 'auth' })
+  expect(f.gateway.workspaceCatalogSnapshot).toHaveBeenCalledTimes(reads + 1)
+})
+
+it('bounds repeated foreground directory interruptions to two read attempts', async () => {
+  const f = fixture()
+  f.gateway.workspaceCatalogSnapshot.mockRejectedValue(new CatalogReadError('transport'))
+  await expect(f.manager.open(f.first, 'one')).rejects.toMatchObject({ code: 'transport' })
+  expect(f.gateway.workspaceCatalogSnapshot).toHaveBeenCalledTimes(2)
+  expect(f.gateway.launch).not.toHaveBeenCalled()
+})
 it('shares one remote catalog across projects and short bursts, with original freshness and bounded expiry', async () => {
   vi.useFakeTimers(); vi.setSystemTime(100000)
   const f = fixture()

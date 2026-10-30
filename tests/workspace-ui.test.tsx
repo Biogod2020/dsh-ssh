@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { act } from 'react'
+import { act, type ReactNode } from 'react'
+import type { DirectoryFlowOwnerProps } from '@deepseek-ai/dsh-client-ui-workspace/client'
 import { createRoot } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkspaceFlow } from '../src/client/WorkspaceFlow.tsx'
@@ -48,12 +49,13 @@ const makeApi = () => ({
 const button = (text: string) => [...document.querySelectorAll('button')].find(item => item.textContent === text)!
 
 describe('Add workspace', () => {
-  async function mount(api: ReturnType<typeof makeApi>, pickLocal = vi.fn(async () => '/local/project')) {
+  async function mount(api: ReturnType<typeof makeApi>, renderLocal = vi.fn<(owner: DirectoryFlowOwnerProps) => ReactNode>(
+    owner => <button onClick={() => owner.onPicked('/local/project')}>Native local folder</button>)) {
     const container = document.createElement('div'); document.body.append(container)
     const root = createRoot(container); disposers.push(() => root.unmount())
     const onPicked = vi.fn(), onCancel = vi.fn()
-    await act(async () => root.render(<WorkspaceFlow open busy={false} api={api as unknown as SshApi} pickLocal={pickLocal} onPicked={onPicked} onCancel={onCancel} onError={vi.fn()} />))
-    return { onPicked, onCancel, pickLocal }
+    await act(async () => root.render(<WorkspaceFlow open busy={false} api={api as unknown as SshApi} renderLocal={renderLocal} onPicked={onPicked} onCancel={onCancel} onError={vi.fn()} />))
+    return { onPicked, onCancel, renderLocal }
   }
   async function chooseHost(alias = 'fixture') {
     if (!document.querySelector('[role="combobox"]')) await act(async () => button('更换主机').click())
@@ -116,12 +118,19 @@ describe('Add workspace', () => {
     expect(api.browseDirectories).not.toHaveBeenCalled()
     expect(connectRemoteWorkspace).not.toHaveBeenCalled()
   })
-  it('preserves the local picker and opens the remote runtime without creating a local session', async () => {
+  it('delegates local selection to the original host interaction', async () => {
+    const api = makeApi(), view = await mount(api)
+    expect(view.renderLocal).not.toHaveBeenCalled()
+    await act(async () => button('本地文件夹').click())
+    expect(view.onPicked).not.toHaveBeenCalled()
+    await act(async () => button('Native local folder').click())
+    expect(view.onPicked).toHaveBeenCalledExactlyOnceWith('/local/project')
+    expect(api.createWorkspace).not.toHaveBeenCalled()
+    expect(connectRemoteWorkspace).not.toHaveBeenCalled()
+  })
+  it('opens the remote runtime without creating a local session', async () => {
     vi.mocked(connectRemoteWorkspace).mockResolvedValue({ id: 'remote', hostId: 'host', alias: 'fixture', title: 'remote', remotePath: '/remote/project', workspaceId: 'remote-workspace' })
     const api = makeApi(), view = await mount(api)
-    await act(async () => button('本地文件夹').click())
-    expect(view.onPicked).toHaveBeenCalledWith('/local/project')
-    expect(api.createWorkspace).not.toHaveBeenCalled()
     await act(async () => button('SSH 远程工作区').click())
     await chooseHost()
     expect(document.querySelector('[data-selected-host]')?.getAttribute('data-selected-host')).toBe('fixture')
@@ -130,7 +139,8 @@ describe('Add workspace', () => {
     expect(connectRemoteWorkspace).toHaveBeenCalledWith('fixture', '~', expect.any(Function), { signal: expect.any(AbortSignal) })
     expect(openRemoteWorkspace).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ workspaceId: 'remote-workspace' }), undefined, { signal: expect.any(AbortSignal) })
     expect(api.createWorkspace).not.toHaveBeenCalled()
-    expect(view.onPicked).toHaveBeenCalledTimes(1)
+    expect(view.onPicked).not.toHaveBeenCalled()
+    expect(view.renderLocal).not.toHaveBeenCalled()
     expect(readRecentHostIds()).toEqual([hostHistoryId(fixtureHost)])
   })
   it('keeps failed SSH creation visible without adopting a local workspace or retrying', async () => {
@@ -143,7 +153,7 @@ describe('Add workspace', () => {
     expect(view.onPicked).not.toHaveBeenCalled()
     expect(connectRemoteWorkspace).toHaveBeenCalledTimes(1)
     expect(openRemoteWorkspace).not.toHaveBeenCalled()
-    expect(view.pickLocal).not.toHaveBeenCalled()
+    expect(view.renderLocal).not.toHaveBeenCalled()
     expect(readRecentHostIds()).toEqual([])
   })
   it('disables old-host actions while replacing a selection and Escape keeps that selection', async () => {

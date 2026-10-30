@@ -5,10 +5,12 @@ export interface RemotePresentation {
   open(workspace: RemoteWorkspace, url: string, signal?: AbortSignal, sessionId?: string): Promise<void>
   beforeLeave?(): Promise<void>
   close?(workspace: RemoteWorkspace): void | Promise<void>
+  archived?(workspace: RemoteWorkspace, sessionId: string): void | Promise<void>
+  suspend?(): void
   settings?(workspace:RemoteWorkspace):boolean|Promise<boolean>
   reclaim?():Promise<void>
   preview?(workspace: RemoteWorkspace, sessionId: string, signal?: AbortSignal): Promise<void>
-  previewFailed?(workspace: RemoteWorkspace): void
+  previewFailed?(workspace: RemoteWorkspace, error?: unknown): void
 }
 
 let current: RemotePresentation | undefined

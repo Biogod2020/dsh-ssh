@@ -86,6 +86,16 @@ it('serves observation only for an authenticated embedded owner and composes its
   const ordinary=await(await fetch(standalone.gateway.origin,{headers:standalone.headers})).text()
   expect(ordinary).not.toContain('partial-client-observation')
 })
+it('serves authenticated draft persistence without adding native preference or queue controls',async()=>{
+  const f=await fixture(),owner=await f.create('a'.repeat(24),true),plain=await f.create('a'.repeat(24))
+  const path='/__dsh_remote/draft-client.js?rev=local-drafts-5'
+  expect((await fetch(owner.gateway.origin+path)).status).toBe(401)
+  const response=await fetch(owner.gateway.origin+path,{headers:owner.headers}),code=await response.text()
+  expect(response.status).toBe(200);expect(response.headers.get('cache-control')).toBe('no-store')
+  expect(code).toContain('__dshSshDrafts');expect(code).not.toContain('busyEnter');expect(code).not.toContain('updateQueue');expect(code).not.toContain('session/prompt')
+  expect((await fetch(plain.gateway.origin+path,{headers:plain.headers})).status).toBe(503)
+  expect(f.forwarded()).toBe(1)
+})
 it('returns a conflict for a late pre-clear write and keeps local failures out of the remote API', async () => {
   const f = await fixture(), a = await f.create('a'.repeat(24)), operationId = randomUUID()
   const original = (await (await a.write('old', null, operationId)).json()).draft

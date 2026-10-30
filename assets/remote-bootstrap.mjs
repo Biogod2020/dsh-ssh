@@ -5,7 +5,7 @@ import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 import { setTimeout as delay } from 'node:timers/promises'
 
-export async function bootstrapRemote({ root, dsh, node, directory, version, supportedVersions, timeoutMs = 90000 }) {
+async function bootstrapLegacyRemote({ root, dsh, node, directory, version, supportedVersions, timeoutMs = 90000 }) {
   if (![root, dsh, node].every(isAbsolute)) throw new Error('Remote executable and install paths must be absolute')
   if (!Array.isArray(supportedVersions) || !supportedVersions.includes(version)) throw new Error('Unsupported remote DSH version')
   directory = directory === '~' ? homedir() : directory.startsWith('~/') ? join(homedir(), directory.slice(2)) : directory
@@ -78,7 +78,10 @@ export async function bootstrapRemote({ root, dsh, node, directory, version, sup
     let child
     try {
       child = spawn(dsh, ['web', '--host', '127.0.0.1', '--port', '0', '--no-open'], {
-        cwd: directory, env: { ...process.env, PATH: `${node.slice(0, node.lastIndexOf('/'))}:${process.env.PATH ?? ''}`, DSH_HOME: home },
+        // One daemon serves every workspace on this account. A repository's
+        // .env must not decide how that shared process starts or reaches the
+        // network. Workspace ownership is established by workspace/create.
+        cwd: home, env: { ...process.env, PATH: `${node.slice(0, node.lastIndexOf('/'))}:${join(root, 'tools/pnpm-11.20.0/node_modules/.bin')}:${process.env.PATH ?? ''}`, DSH_HOME: home },
         detached: true, stdio: ['ignore', log.fd, log.fd],
       })
       await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
@@ -102,4 +105,29 @@ export async function bootstrapRemote({ root, dsh, node, directory, version, sup
     process.off('SIGHUP', ignoreHangup)
     await unlink(join(lockPath, 'pid')); await rmdir(lockPath)
   }
+}
+
+/** New default: terminal and SSH select one account home and service. Explicit
+ * test/isolated roots keep their own home and never rewrite the user's entry. */
+export async function bootstrapRemote(input) {
+  if (!input.account) return bootstrapLegacyRemote(input)
+  const { root, node, dsh, version, supportedVersions, account } = input
+  if (![root, node, dsh].every(isAbsolute) || !supportedVersions.includes(version)) throw Error('Unsupported account runtime')
+  let directory = input.directory === '~' ? homedir() : input.directory.startsWith('~/') ? join(homedir(), input.directory.slice(2)) : input.directory
+  directory = await realpath(directory)
+  if (!(await stat(directory)).isDirectory()) throw Error('Remote workspace is not a directory')
+  const { createHash } = await import('node:crypto')
+  const { pathToFileURL } = await import('node:url')
+  const { writeFile } = await import('node:fs/promises')
+  const hash = createHash('sha256').update(account.serviceSource).update(account.bridgeSource).digest('hex')
+  const stage = join(root, 'tools/account-web', hash), module = join(stage, 'account-service.mjs')
+  await mkdir(stage, { recursive: true, mode: 0o700 })
+  if ((await lstat(stage)).isSymbolicLink()) throw Error('Unsafe account service source directory')
+  try { await writeFile(module, account.serviceSource, { mode: 0o600, flag: 'wx' }) }
+  catch (error) { if (error.code !== 'EEXIST') throw error; if ((await lstat(module)).isSymbolicLink() || await readFile(module, 'utf8') !== account.serviceSource) throw Error('Account service source mismatch') }
+  const service = await import(pathToFileURL(module).href)
+  const prepared = await service.stageAccountService({ root, node, dsh, version, ...account })
+  const receipt = await service.ensureAccountWeb({ ...prepared.config, timeoutMs: input.timeoutMs })
+  await service.ensureSupervisor(prepared.config, prepared.configPath)
+  return { ...receipt, directory, userHome: homedir() }
 }

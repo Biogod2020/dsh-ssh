@@ -5,6 +5,11 @@ export function viewLifecycle(parentOrigin: string): void {
   let preparing = false
   let generation=0
   let reason=''
+  let bootAssetFailed = false
+  window.addEventListener('error', event => {
+    const node = event.target
+    if (node instanceof HTMLScriptElement && /^\/assets\/[^/]+\.(?:js|css)$/.test(new URL(node.src, location.href).pathname)) bootAssetFailed = true
+  }, true)
   const gateway = async (action:string, token?:string) => {
     const response = await fetch('/__dsh_remote/release', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({action,token}), signal:AbortSignal.timeout(3000) })
     return response.json()
@@ -61,7 +66,11 @@ export function viewLifecycle(parentOrigin: string): void {
     cancel,
     async command(method:string, args:unknown[] = []) {
       switch(method) {
-        case 'ready': return !!target.__dshSshView && !!document.querySelector('#root [class*=centerCol]')
+        case 'ready': {
+          const ready = !!target.__dshSshView && !!document.querySelector('#root [class*=centerCol]')
+          if (!ready && bootAssetFailed) throw Object.assign(new Error('Remote interface resources failed'), { code: 'boot/assets-failed' })
+          return ready
+        }
         case 'state': return target.__dshSshView?.state()
         case 'inspect': return target.__dshSshView?.inspection()
         case 'flush': target.__dshSshView?.cancelNavigation(); return target.__dshSshDrafts ? target.__dshSshDrafts.flush() : false
@@ -90,6 +99,7 @@ export function viewLifecycle(parentOrigin: string): void {
       || !Array.isArray(request.args) || request.args.length > 2) return
     void api.command(request.method,request.args).then(value => {
       window.parent.postMessage({type:'dsh-ssh-reply',id:request.id,value},parentOrigin)
-    }, () => window.parent.postMessage({type:'dsh-ssh-reply',id:request.id,error:'View control could not finish'},parentOrigin))
+    }, cause => window.parent.postMessage({type:'dsh-ssh-reply',id:request.id,error:'View control could not finish',
+      ...(cause?.code === 'boot/assets-failed' ? {errorCode:'boot/assets-failed'} : {})},parentOrigin))
   })
 }

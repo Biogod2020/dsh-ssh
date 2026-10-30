@@ -1,5 +1,5 @@
 /**
- * The SSH operations panel shell: a header with a close control, a five-tab
+ * The SSH operations panel shell: a header with a close control, a six-tab
  * bar, and the active tab's content. Visited tabs remain mounted, preserving
  * terminal connections, drafts and transfer progress across navigation.
  * The hosts tab's connect action switches here to the terminal
@@ -14,10 +14,12 @@ import { HostsTab } from './HostsTab.tsx'
 import { TerminalSessions } from './TerminalSessions.tsx'
 import { TransferTab } from './TransferTab.tsx'
 import { TunnelsTab } from './TunnelsTab.tsx'
+import { ServerPluginsTab } from './ServerPluginsTab.tsx'
+import { ServerModelsTab } from './ServerModelsTab.tsx'
 import css from './panel.module.css'
 
 /** The panel's tab identifiers. */
-export type SshTab = 'hosts' | 'terminal' | 'transfer' | 'tunnels' | 'cluster'
+export type SshTab = 'hosts' | 'terminal' | 'transfer' | 'tunnels' | 'cluster' | 'plugins' | 'models'
 
 /** Panel shell props. */
 export interface SshPanelProps {
@@ -36,6 +38,8 @@ const TABS: ReadonlyArray<{ id: SshTab; label: () => string }> = [
   { id: 'transfer', label: () => tt('tab.transfer') },
   { id: 'tunnels', label: () => tt('tab.tunnels') },
   { id: 'cluster', label: () => tt('tab.cluster') },
+  { id: 'plugins', label: () => tt('tab.plugins') },
+  { id: 'models', label: () => tt('models.title') },
 ]
 
 /** A pending "connect this host" request handed to the terminal tab. */
@@ -114,6 +118,8 @@ export function SshPanel({ controller, api, terminalFont }: SshPanelProps) {
           {tab.id === 'transfer' && <TransferTab api={api} active={panelOpen && activeTab === 'transfer'} />}
           {tab.id === 'tunnels' && <TunnelsTab api={api} active={panelOpen && activeTab === 'tunnels'} />}
           {tab.id === 'cluster' && <ClusterTab api={api} active={panelOpen && activeTab === 'cluster'} />}
+          {tab.id === 'plugins' && <ServerPluginsTab api={api} active={panelOpen && activeTab === 'plugins'} />}
+          {tab.id === 'models' && <ServerModelsTab api={api} active={panelOpen && activeTab === 'models'} />}
         </section>)}
       </div>
     </div>

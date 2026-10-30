@@ -2,7 +2,7 @@
 import { afterEach, expect, it, vi } from 'vitest'
 import { viewLifecycle } from '../src/remote/view-lifecycle.ts'
 
-afterEach(()=>{vi.unstubAllGlobals();delete (window as any).__dshSshView;delete (window as any).__dshSshDrafts;delete (window as any).__dshSshOperations;delete (window as any).__dshSshRelease})
+afterEach(()=>{vi.unstubAllGlobals();document.body.replaceChildren();delete (window as any).__dshSshView;delete (window as any).__dshSshDrafts;delete (window as any).__dshSshOperations;delete (window as any).__dshSshRelease})
 function fixture(){
   const state={sidebar:{terminals:0,tabs:0},drafts:{pendingUnmountSaves:0,failedUnmountSaves:0,sessions:[{status:'saved',persisted:true,inputPhase:'plain',hasReferences:false,hasAttachments:false}]}}
   const operations={freeze:vi.fn(async()=> 'operation-owner'),thaw:vi.fn(),commit:vi.fn(()=>true)}
@@ -48,4 +48,13 @@ it('honors cancellation while preparation is awaiting the client barrier',async(
 it('never thaws an already committed operation',async()=>{
   const f=fixture(),prepared=await f.api.prepare();expect(await f.api.commit(prepared.token)).toBe(true)
   await f.api.cancel();expect(f.operations.thaw).not.toHaveBeenCalled();expect(f.calls).toEqual(['freeze','check'])
+})
+
+it('reports a failed core script during boot but keeps an already usable conversation ready', async () => {
+  const f = fixture(), script = document.createElement('script'); script.src = '/assets/vendor-abcdefgh.js'; document.head.append(script)
+  script.dispatchEvent(new Event('error'))
+  await expect(f.api.command('ready')).rejects.toMatchObject({ code: 'boot/assets-failed' })
+  document.body.innerHTML = '<div id="root"><main class="fixture_centerCol"></main></div>'
+  expect(await f.api.command('ready')).toBe(true)
+  script.remove()
 })

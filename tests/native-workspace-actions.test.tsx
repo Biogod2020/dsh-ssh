@@ -12,7 +12,7 @@ vi.mock('@deepseek-ai/dsh-client-ui-primitives',async()=>{
   const {createElement}=await import('react')
   const icon=()=>createElement('svg')
   return{MenuItemButton:({children,disabled,onSelect}:any)=>createElement('button',{type:'button',role:'menuitem',disabled,onClick:onSelect},children),
-    IconArchiveOutlineRegular:icon,IconUnarchiveOutlineRegular:icon,IconPinFillRegular:icon,IconPinOutlineRegular:icon,
+    IconArchiveOutlineRegular:icon,IconUnarchiveOutlineRegular:icon,IconPinFillRegular:icon,IconPinOutlineRegular:icon,IconEditOutlineRegular:icon,IconBranchOutlineRegular:icon,IconCopyOutlineRegular:icon,
     Button:({children,...props}:any)=>createElement('button',props,children),Modal:({children,footer}:any)=>createElement('div',{role:'dialog'},children,footer)}
 })
 
@@ -24,31 +24,34 @@ function NativeMenuOwner(props:any){
     {props.renderSlot('sidebar.workspaces.session.menu.item',{sessionId:props.fixtureSessionKey},{hookContext:[open,setOpen]})}
   </div>}{props.renderSlot('sidebar.workspaces.session.row.action',{sessionId:props.fixtureSessionKey})}<button onClick={()=>props.open('local-fixture')}>Open local fixture</button><button onClick={()=>props.open(props.fixtureSessionKey)}>Open remote fixture</button></>
 }
-async function fixture(ok=true){
+const menuItem=(label:string)=>[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(row=>row.textContent===label)!
+async function hostMenu(){await act(async()=>{menuItem('Remote host…').click()})}
+async function fixture(ok=true,hostPage=true){
   document.documentElement.lang='en';(globalThis as any).IS_REACT_ACT_ENVIRONMENT=true
   vi.stubGlobal('ResizeObserver',class{observe(){}unobserve(){}disconnect(){}})
   const first={id:'first',hostId:'a'.repeat(24),workspaceId:'project',alias:'first',remotePath:'/generated',title:'First'}
   const second={...first,id:'second',hostId:'b'.repeat(24),alias:'second',title:'Second'}
   vi.stubGlobal('fetch',vi.fn(async()=>({ok:true,json:async()=>({workspaceId:'project',stale:false,sessions:[{sessionId:'same',title:'Saved',running:false,blank:false,updatedAt:1}]})})))
   remoteNavigation.update([first,second]);await remoteNavigation.refresh(first);await remoteNavigation.refresh(second)
-  const settings=vi.fn(async()=>ok),local=vi.fn()
+  const settings=vi.fn(async()=>ok),local=vi.fn(),renderNative=vi.fn((_name:string,..._args:any[])=>createElement('span',{'data-native-entries':''}))
   release=registerRemotePresentation({resume:()=>false,open:async()=>{},settings})
   const parent=document.createElement('div');document.body.append(parent);root=createRoot(parent)
   await act(async()=>{root!.render(createElement(NativeWorkspaces,{
     original:NativeMenuOwner,fixtureSessionKey:remoteSessionKey(second,'same'),
     useSessions:(select:any)=>select({ids:[],byId:{}}),useWorkspaces:(select:any)=>select({items:[]}),
     usePanelInfo:(select:any)=>select({activePanelId:null}),useSessionStatus:(select:any)=>select(new Map()),
-    renderSlot:local,open:local,startSession:local,requestSessionRename:local,
+    renderSlot:renderNative,open:local,startSession:local,requestSessionRename:local,
   }))})
   await act(async()=>{document.querySelector<HTMLButtonElement>('button')!.click()})
-  return{settings,local,second}
+  if(hostPage)await hostMenu()
+  return{settings,local,second,renderNative}
 }
 it('routes equal Session ids through the menu to their owning Host only and closes the owning menu',async()=>{
   const f=await fixture()
   const buttons=[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
   expect(buttons.some(button=>button.textContent==='Close remote view')).toBe(true)
-  expect(buttons[1]?.textContent).toBe('Model settings on this host')
-  await act(async()=>{buttons[1]!.click()})
+  expect(buttons.some(button=>button.textContent==='Model settings on this host')).toBe(true)
+  await act(async()=>{menuItem('Model settings on this host').click()})
   expect(f.settings).toHaveBeenCalledExactlyOnceWith(f.second);expect(f.local).not.toHaveBeenCalled()
   expect(document.querySelector('[role="menu"]')).toBeNull()
 })
@@ -61,7 +64,7 @@ it('keeps a failed settings entry understandable without falling back to local s
 })
 it('clears the previous error when the menu is reopened',async()=>{
   await fixture(false)
-  await act(async()=>{document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!.click()})
+  await act(async()=>{menuItem('Model settings on this host').click()})
   expect(document.querySelector('[role="alert"]')).not.toBeNull()
   await act(async()=>{document.querySelector<HTMLButtonElement>('button')!.click()})
   await act(async()=>{document.querySelector<HTMLButtonElement>('button')!.click()})
@@ -72,13 +75,14 @@ it('does not close a newly opened menu when the previous opening finishes late',
   const f=await fixture()
   let finish!:(value:boolean)=>void
   f.settings.mockImplementationOnce(()=>new Promise<boolean>(resolve=>{finish=resolve}))
-  await act(async()=>{document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!.click()})
-  expect(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!.disabled).toBe(true)
+  await act(async()=>{menuItem('Model settings on this host').click()})
+  expect(menuItem('Model settings on this host').disabled).toBe(true)
   await act(async()=>{document.querySelector<HTMLButtonElement>('button')!.click()})
   await act(async()=>{document.querySelector<HTMLButtonElement>('button')!.click()})
   await act(async()=>{finish(true)})
   expect(document.querySelector('[role="menu"]')).not.toBeNull()
-  expect(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')[1]!.disabled).toBe(false)
+  await hostMenu()
+  expect(menuItem('Model settings on this host').disabled).toBe(false)
   expect(f.settings).toHaveBeenCalledTimes(1)
 })
 it('keeps the current view when local navigation cannot confirm its remote draft save',async()=>{
@@ -117,23 +121,19 @@ it('keeps a blocked close in the owning menu and explains the unsaved draft',asy
   expect(document.querySelector('[role="alert"]')?.textContent).toContain('draft')
 })
 
-it('routes the visible pin button to the owning Host once without opening its conversation',async()=>{
-  const f=await fixture(),requests=vi.mocked(fetch);requests.mockClear()
-  requests.mockImplementation(async(_url,options)=>({ok:true,json:async()=>options?.method==='POST'?{ok:true}:{workspaceId:'project',stale:false,sessions:[{sessionId:'same',title:'Saved',running:false,blank:false,updatedAt:1,pinned:true}]}}) as Response)
-  await act(async()=>{document.querySelector<HTMLButtonElement>('[aria-label="Pin session"]')!.click()})
-  const writes=requests.mock.calls.filter(([,options])=>options?.method==='POST')
-  expect(writes).toHaveLength(1);expect(JSON.parse(String(writes[0]![1]!.body))).toEqual({id:f.second.id,expectedHostId:f.second.hostId,sessionId:'same',action:'pin'})
-  expect(f.local).not.toHaveBeenCalled();expect(f.settings).not.toHaveBeenCalled()
-  expect(document.querySelector('[aria-label="Unpin session"]')).not.toBeNull()
+
+it('delegates remote menu and row actions to the mirrored runtime entries',async()=>{
+  const f=await fixture(true,false)
+  expect(f.renderNative.mock.calls.map(call=>call[0])).toContain('sidebar.workspaces.session.menu.item')
+  expect(f.renderNative.mock.calls.map(call=>call[0])).toContain('sidebar.workspaces.session.row.action')
+  expect(document.querySelector('[data-native-entries]')).not.toBeNull()
+  expect(f.local).not.toHaveBeenCalled()
 })
-it('renames from the owning remote dialog without sending a synthetic id to the local Host',async()=>{
-  const f=await fixture(),requests=vi.mocked(fetch);requests.mockClear()
-  requests.mockImplementation(async(_url,options)=>({ok:true,json:async()=>options?.method==='POST'?{ok:true}:{workspaceId:'project',stale:false,sessions:[{sessionId:'same',title:'Saved',running:false,blank:false,updatedAt:1}]}}) as Response)
-  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(button=>button.textContent==='Rename session')!.click()})
-  const input=document.querySelector<HTMLInputElement>('[aria-label="Session name"]')!
-  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value')!.set!.call(input,'New remote title');input.dispatchEvent(new Event('input',{bubbles:true}))})
-  await act(async()=>{[...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(button=>button.textContent==='Save')!.click()})
-  const writes=requests.mock.calls.filter(([,options])=>options?.method==='POST')
-  expect(writes).toHaveLength(1);expect(JSON.parse(String(writes[0]![1]!.body))).toMatchObject({id:f.second.id,sessionId:'same',action:'rename',title:'New remote title'})
-  expect(f.local).not.toHaveBeenCalled();expect(document.querySelector('[role="dialog"]')).toBeNull()
+
+it('explains disconnected actions and offers a connection without opening or creating a Session',async()=>{
+  const f=await fixture(true,false),opened=vi.fn();unbind=remoteNavigation.bind(opened)
+  expect(document.querySelector('[role="status"]')?.textContent).toContain('Connect')
+  await act(async()=>{menuItem('Connect to remote host').click()})
+  expect(opened).toHaveBeenCalledExactlyOnceWith(f.second,undefined,false,true)
+  expect(f.local).not.toHaveBeenCalled()
 })

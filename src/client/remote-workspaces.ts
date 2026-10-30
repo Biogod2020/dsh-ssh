@@ -10,6 +10,7 @@ import { remoteSessionRows } from './remote-session-rows.ts'
 import { remoteNavigation } from './remote-navigation.ts'
 import { mountHistoryCache, warmHistoryCopy, markHistoryRequested } from './history-cache.ts'
 import { mountViewObservations } from './view-observations.ts'
+import { createRemoteHostBadge, remoteWorkspaceName, updateRemoteHostBadge } from './workspace-label.ts'
 
 const base = '/api/dsh-ssh/remote/'
 interface RequestOptions { signal?: AbortSignal; expectedHostId?: string }
@@ -112,6 +113,11 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   const historyWarning = document.createElement('p'); historyWarning.className = css.hint; historyWarning.setAttribute('role', 'alert')
   const rows = document.createElement('div'); rows.className = css.remoteWorkspaceRows
   const activity = document.createElement('div'); activity.className = css.remoteWorkspaceActivity
+  const previousFailures = document.createElement('details'); previousFailures.className = css.remotePreviousFailures; previousFailures.dataset.dshPreviousFailures = ''
+  const previousSummary = document.createElement('summary')
+  const previousHelp = document.createElement('p'); previousHelp.className = css.hint
+  const previousRows = document.createElement('div'); previousRows.className = css.remotePreviousFailureRows
+  previousFailures.append(previousSummary, previousHelp, previousRows)
   const feedback = document.createElement('div'); feedback.className = css.remoteWorkspaceFeedback
   const target = document.createElement('div'); target.className = css.remoteWorkspaceTarget
   const message = document.createElement('p'); message.setAttribute('role', 'status'); message.setAttribute('aria-live', 'polite')
@@ -122,8 +128,8 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   const detail = document.createElement('details'); detail.className = css.remoteErrorDetails
   const summary = document.createElement('summary'), original = document.createElement('pre'); detail.append(summary, original)
   const statusHint = document.createElement('p'); statusHint.className = css.hint
-  feedback.append(target, message, explanation, detail, retry, background, dismissFeedback); section.append(heading, rows, historyHelp, activity, feedback, statusHint, historyWarning)
-  const keyed = new Map<string, { node: HTMLElement; sessions: ReturnType<typeof remoteSessionRows>; button: HTMLButtonElement; name: HTMLElement; path: HTMLElement; lamp: HTMLElement; state: HTMLElement }>()
+  feedback.append(target, message, explanation, detail, retry, background, dismissFeedback); section.append(heading, rows, historyHelp, activity, previousFailures, feedback, statusHint, historyWarning)
+  const keyed = new Map<string, { node: HTMLElement; sessions: ReturnType<typeof remoteSessionRows>; button: HTMLButtonElement; name: HTMLElement; badge: HTMLElement; path: HTMLElement; lamp: HTMLElement; state: HTMLElement }>()
   const cards = new Map<string, { node: HTMLElement; target: HTMLElement; path: HTMLElement; message: HTMLElement; help: HTMLElement; time: HTMLTimeElement; stage: HTMLElement; details: HTMLDetailsElement; summary: HTMLElement; original: HTMLElement; action: HTMLButtonElement }>()
   const recovery = recoveryFromHash(), lifetime = new AbortController(), options = { signal: lifetime.signal }
   let disposed = false, busy = false, stale = true, offline = !navigator.onLine, recoveryFailed = false, recoveryStarted = false, hasViewObservations = false
@@ -140,8 +146,9 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     const ready = workspaceId ? keyed.get(workspaceId)?.button : undefined
     if (ready && !ready.disabled) { ready.focus(); return }
     if (!historyButton.hidden) { historyButton.focus(); return }
-    const next = [...keyed.values()].find(x => !x.button.disabled)?.button ?? [...cards.values()].find(x => !x.action.disabled)?.action
+    const next = [...keyed.values()].find(x => !x.button.disabled)?.button ?? [...cards.values()].find(x => !x.action.disabled && x.node.parentElement === activity)?.action
     if (next) { next.focus(); return }
+    if (!previousFailures.hidden) { previousSummary.focus(); return }
     if (!section.hidden) { heading.focus(); return }
     const add = [...document.querySelectorAll<HTMLButtonElement>('button')].find(x => !x.disabled && (x.getAttribute('aria-label') === tt('workspace.add') || x.textContent === tt('workspace.add')))
     add?.focus()
@@ -179,18 +186,20 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
         const lamp = document.createElement('span'); lamp.className = css.workspaceDot; lamp.setAttribute('aria-hidden', 'true')
         const copy = document.createElement('span'); copy.className = css.remoteWorkspaceCopy
         const name = document.createElement('span'); name.className = css.remoteWorkspaceName
+        const identity = document.createElement('span'); identity.className = css.workspaceRemoteText
+        const badge = createRemoteHostBadge(item.alias, item.remotePath); identity.append(name, badge)
         const path = document.createElement('span'); path.className = css.remoteWorkspacePath
         const state = document.createElement('span'); state.className = css.remoteWorkspaceState
         const node = document.createElement('div'); node.className = css.remoteProject
         const sessions = remoteSessionRows(item, (sessionId, create) => { if (!busy && (!offline||sessionId&&!create)) void run(item, sessionId, create) })
-        copy.append(name, path, state); button.append(lamp, copy); node.append(button, sessions.node)
-        row = { node, sessions, button, lamp, name, path, state }; keyed.set(item.id, row)
+        copy.append(identity, path, state); button.append(lamp, copy); node.append(button, sessions.node)
+        row = { node, sessions, button, lamp, name, badge, path, state }; keyed.set(item.id, row)
       }
       const phase = busy && activeItem === item.id ? operation?.phase ?? 'connecting' : stale ? undefined : hosts.find(x => x.hostId === item.hostId)?.phase
       const state = !phase ? 'unknown' : phase === 'ready' ? 'connected' : phase === 'failed' || phase === 'disconnected' ? phase : 'connecting'
       row.lamp.dataset.state = state; row.state.dataset.state = state
       const label = offline ? tt('remote.offline') : phase ? tt(`remote.phase.${phase}`) : tt('remote.unknown')
-      text(row.name, item.title); text(row.path, item.remotePath); text(row.state, label)
+      text(row.name, remoteWorkspaceName(item)); updateRemoteHostBadge(row.badge, item.alias, item.remotePath); text(row.path, item.remotePath); text(row.state, label)
       row.button.title = `${item.alias}:${item.remotePath}`; row.button.setAttribute('aria-label', `${tt('remote.open', { alias: item.alias, path: item.remotePath })} · ${label}`)
       row.button.disabled = busy || offline
       row.sessions.update(busy, offline)
@@ -202,12 +211,23 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
       }
     })
     const visible = (showHistory ? history : operations).filter(x => !(status && operation?.id === x.id))
+    const previousIds = new Set(visible.filter(item => {
+      if (showHistory || item.phase !== 'failed' || remoteErrorView(new RemoteRequestError(item.message, item.errorCode)).unconfirmed) return false
+      // Older receipts may lack a business code. Keep potentially dispatched
+      // setup visible instead of treating an unknown outcome as a past failure.
+      return !/outcome (?:is )?unknown|may still be running|remote setup timed out/i.test(item.message)
+        && !(!item.errorCode && item.lastPhase && ['installing-node', 'installing-dsh', 'starting'].includes(item.lastPhase))
+    }).map(item => item.id))
+    previousFailures.hidden = !previousIds.size
+    text(previousSummary, tt('remote.previousFailures', { count: previousIds.size }))
+    text(previousHelp, tt('remote.previousFailuresHelp'))
     const operationIds = new Set(visible.map(x => x.id))
     for (const [id, card] of cards) if (!operationIds.has(id)) {
       if (card.node.contains(anchor)) { lostFocus = true; completedWorkspace = history.find(x => x.id === id && x.phase === 'ready')?.workspace?.id }
       card.node.remove(); cards.delete(id)
     }
-    visible.forEach((item, index) => {
+    let currentIndex = 0, previousIndex = 0
+    visible.forEach(item => {
       let card = cards.get(item.id)
       if (!card) {
         const node = document.createElement('div'); node.className = css.remoteWorkspaceFeedback; node.dataset.remoteOperationId = item.id
@@ -236,9 +256,11 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
       card.action.disabled = busy || offline || stale || dismissing !== undefined || !!item.dismissed || (ready && !items.some(x => x.id === item.workspace?.id))
       text(card.action, tt(item.dismissed ? 'remote.dismissed' : ready ? 'remote.openPrepared' : view?.unconfirmed ? 'remote.dismissRecord' : failed ? 'remote.dismiss' : 'remote.observe'))
       card.action.onclick = () => { if (ready && item.workspace) void run(item.workspace); else if (failed) void dismiss(item.id); else void observe(item) }
-      if (activity.children[index] !== card.node) {
+      const destination = previousIds.has(item.id) ? previousRows : activity
+      const index = destination === previousRows ? previousIndex++ : currentIndex++
+      if (destination.children[index] !== card.node) {
         if (card.node.contains(anchor)) lostFocus = true
-        activity.insertBefore(card.node, activity.children[index] ?? null)
+        destination.insertBefore(card.node, destination.children[index] ?? null)
       }
     })
     feedback.hidden = !status
@@ -255,7 +277,9 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     retry.hidden = !recoveryFailed; retry.disabled = busy || offline; text(retry, tt('remote.retryRecovery'))
     statusHint.hidden = (!items.length && !operations.length && !history.length) || (!offline && !stale) || busy
     text(statusHint, offline ? tt('remote.offlineHelp') : tt('remote.statusUnavailable'))
-    if (lostFocus && (document.activeElement === document.body || !document.activeElement?.isConnected)) {
+    if (!previousFailures.hidden && !previousFailures.open && previousRows.contains(anchor)
+      && (document.activeElement === anchor || document.activeElement === document.body || !document.activeElement?.isConnected)) previousSummary.focus()
+    else if (lostFocus && (document.activeElement === document.body || !document.activeElement?.isConnected)) {
       if (anchor instanceof HTMLElement && anchor.isConnected && section.contains(anchor) && !anchor.closest('[hidden]') && !anchor.matches(':disabled')) anchor.focus()
       else focusFallback(completedWorkspace)
     }
@@ -274,13 +298,16 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   function begin(): { epoch: number; options: RequestOptions; progress: Progress } {
     watch?.abort(); focusOperation = undefined
     const epoch = ++watchEpoch, controller = new AbortController(); watch = controller
+    // Native session rows are not focusable. A pointer click often leaves the
+    // body focused; that is not consent to move focus to our offscreen footer.
+    const keepNativeFocus = remoteNavigation.getSnapshot().native && !section.contains(document.activeElement)
     let focused = false
     return { epoch, options: { signal: controller.signal }, progress: (message, next) => {
       if (!disposed && epoch === watchEpoch) {
         status = message; operation = next; render()
         if (!focused && !background.hidden) {
           focused = true
-          if (document.activeElement === document.body || section.contains(document.activeElement)) background.focus()
+          if (!keepNativeFocus && (document.activeElement === document.body || section.contains(document.activeElement))) background.focus({ preventScroll: true })
         }
       }
     } }
@@ -292,7 +319,7 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
     focusOperation = operation?.id
     watchEpoch++; watch?.abort(); watch = undefined; busy = false; operation = undefined; status = ''; failure = false; recoveryFailed = false; render(); refresh()
   }
-  async function run(item: RemoteWorkspace, sessionId?: string, create = false): Promise<void> {
+  async function run(item: RemoteWorkspace, sessionId?: string, create = false, connectOnly = false): Promise<void> {
     const attempt = begin()
     let refreshNeeded = false
     busy = true; activeItem = item.id; operation = undefined; failure = false; status = tt('remote.phase.connecting'); render()
@@ -317,12 +344,13 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
       refreshNeeded = !ready || create || !sessionId
       if (!ready && sessionId) void remotePresentation()?.preview?.(item, sessionId, attempt.options.signal).catch(() => {})
       const workspace = ready ? item : await connectRemoteWorkspace(item.alias, item.remotePath, attempt.progress, { ...attempt.options, expectedHostId: item.hostId })
+      if (connectOnly) { await remoteNavigation.refresh(workspace); return }
       if (create) ({ sessionId } = await json<{ sessionId: string }>('session/create', { id: workspace.id }, attempt.options))
       await openRemoteWorkspace(workspace, sessionId, attempt.options)
       if (attempt.epoch === watchEpoch && !operation) status = ''
       if (attempt.epoch === watchEpoch && remoteNavigation.getSnapshot().native) { status = ''; operation = undefined }
     }
-    catch (error) { if(attempt.epoch===watchEpoch){refreshNeeded = true; remotePresentation()?.previewFailed?.(item); report(error, attempt.epoch)} }
+    catch (error) { if(attempt.epoch===watchEpoch){refreshNeeded = true; remotePresentation()?.previewFailed?.(item,error); report(error, attempt.epoch)} }
     finally { finish(attempt.epoch, item.id, false, refreshNeeded) }
   }
   async function observe(item: RemoteOperation): Promise<void> {
@@ -387,7 +415,8 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
         const completed = history.find(x => x.id === focusOperation && x.phase === 'ready')?.workspace?.id
         focusOperation = undefined
         if (document.activeElement === document.body || section.contains(document.activeElement)) {
-          if (button && !button.disabled) button.focus(); else focusFallback(completed)
+          if (button && !button.disabled && previousRows.contains(button) && !previousFailures.open) previousSummary.focus()
+          else if (button && !button.disabled) button.focus(); else focusFallback(completed)
         }
       }
     }
@@ -408,8 +437,8 @@ export function mountRemoteWorkspaces(locale?: LocaleRefreshSource): () => void 
   }
   const pointerChanged = (event: PointerEvent) => { if (!section.contains(event.target as Node | null)) ownedFocus = undefined }
   document.addEventListener('focusin', focusChanged); document.addEventListener('pointerdown', pointerChanged)
-  const unbindNavigation = remoteNavigation.bind((workspace, sessionId, create) => {
-    if ((!busy || sessionId && !create) && (!offline || sessionId && !create)) void run(workspace, sessionId, create)
+  const unbindNavigation = remoteNavigation.bind((workspace, sessionId, create, connectOnly) => {
+    if ((!busy || sessionId && !create) && (!offline || sessionId && !create)) void run(workspace, sessionId, create, connectOnly)
   }, () => {
     watchEpoch++; watch?.abort(); watch = undefined; busy = false; operation = undefined; status = ''; failure = false; render()
   })
