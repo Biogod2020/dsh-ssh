@@ -15,7 +15,7 @@ if (legacyDsh || legacyArchive) assert(legacyDsh && legacyArchive && isAbsolute(
 const root = await mkdtemp(join(tmpdir(), 'dsh-downgrade-archive-')), extracted = join(root, 'archive'), source = join(root, 'history'), target = join(root, 'export')
 await mkdir(extracted, { mode: 0o700 }); await mkdir(source, { mode: 0o700 })
 const members = ['package/package.json', 'package/scripts/export-history-v1.mjs', 'package/src/remote/history-store.ts',
-  'package/src/remote/history-cache.ts', 'package/src/remote/history-storage-audit.ts']
+  'package/src/remote/history-cache.ts', 'package/src/remote/history-storage-audit.ts', 'package/src/private-mode.ts']
 const names = (await run('tar', ['-tzf', archive], { maxBuffer: 8 * 1024 * 1024 })).stdout.trim().split('\n')
 assert(names.every(name => name.startsWith('package/') && !name.split('/').includes('..')))
 for (const member of members) assert(names.includes(member), 'Missing packaged exporter dependency: ' + member)

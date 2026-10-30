@@ -74,6 +74,9 @@ const entries = stdout.trim().split('\n')
 assert(entries.every(path => path.startsWith('package/') && !path.split('/').includes('..')), 'archive entries must stay inside package/')
 assert(!entries.some(path => path.endsWith('.node')), 'portable SSH bundle must use pure JavaScript')
 for (const name of bundled) assert(entries.includes(`package/node_modules/${name}/package.json`), `missing bundled dependency ${name}`)
+// The offline exporter imports these shared sources from the archive itself,
+// rather than the already-bundled Host entry. Check its root helper as well.
+assert(entries.includes('package/src/private-mode.ts'), 'offline history sources require their shared private-mode helper')
 const digest = createHash('sha256').update(await readFile(archive)).digest('hex')
 await writeFile(`${archive}.sha256`, `${digest}  ${archive.slice(destination.length + 1)}\n`, { mode: 0o600 })
 console.log(`Verified ${pkg.name}@${pkg.version}; source lib/ was not replaced. Staging: ${staging}`)
