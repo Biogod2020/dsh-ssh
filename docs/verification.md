@@ -1,6 +1,30 @@
 # SSH 插件验收记录
 
-验收日期：2026-10-15（America/Los_Angeles）。
+各次验收日期按小节列出，时区为 America/Los_Angeles。
+
+## 2026-10-29 — jay.67: native remote Session actions and shortcut targets
+
+The [release workflow](https://github.com/Biogod2020/dsh-ssh/actions/runs/40990490874) completed verify, npm OIDC publish and verify-installation successfully. All 128 files / 1,160 tests, typecheck, build, archive checks, four declared DSH runtime installations, offline downgrade with a real jay.39 consumer, installed incremental history/controller restart and SSH-disconnect acceptance passed. npm and the actual mainland mirror CDN serve the exact tested archive and advertise jay.67 as latest; all four package-name installations passed. macOS separately accepted the pinned npm version in DSH RC3 and matched its installed Host/client bytes.
+
+The archive is 1,498,633 bytes, SHA-256 `8ba0bdca32a08f8e9788e5397c55f9d63bb0d554a37323b4e713d5111ab0527f`. The [GitHub Release](https://github.com/Biogod2020/dsh-ssh/releases/tag/v0.3.24-jay.67) carries the same CI archive and checksum. The independently built macOS archive is also byte-identical.
+
+Generated loopback SSH and built-in-browser acceptance verified parent-window remote new/rename/fork/archive shortcuts, native message copying, archive restore and parked local draft preservation without a model request. Installed-SDK contract tests cover the Desktop keyboard/native-menu bridge; this is not a new native Desktop GUI acceptance claim. The temporary shortcut seam requires reviewed RC2/RC3 resolver implementations; see [the adapter boundary](native-session-adapter-2026-10-29.md).
+
+jay.66 stopped before publication because its downgrade fixture's selective extraction omitted a shared helper already present in the archive. Local test attempts that expired during maintenance sleep were retained; the successful full run is reported above. No failed run is counted as a pass.
+
+The additional macOS `@latest` test selected jay.42 under pnpm's new-package waiting policy even after the public tag had advanced. The pinned jay.67 installation passed; adding only an exact-version age exception in a generated profile made `@latest` select jay.67. User profiles and global policy were unchanged. Daily Web/Desktop services were not updated or restarted, and [PR #3](https://github.com/Biogod2020/dsh-ssh/pull/3) retains owner review.
+
+Follow-up acceptance configured a persistent exception for only the package name `@biogod/dsh-ssh` in a fresh generated profile. Through the unmodified official Add plugin UI, typing only that bare name installed jay.67 from npm; its installed Host/client bytes match the release. This supports [one-time trust followed by package-name-only installation](install-latest-once.md). It does not claim zero-configuration first installation, automatic upgrade, or a global policy change.
+
+## 2026-10-27 — local.2: restore the native Add workspace flow
+
+In an isolated DSH 0.2.1-rc.3 Web instance using the official browse backend, Add workspace → Local folder failed with `directoryPicker.pick needs the native capability; the composed picker serves "browse"`. The SSH extension had replaced both official directory-flow occupants and called `uiWorkspace.pickDirectory()` directly. This also bypassed the Desktop occupant's own picker bridge.
+
+The extension now projects the current original occupant, retaining its injected services, store, locale and child outlets, and renders that occupant when the user chooses Local folder. It follows late/replaced occupants and restores the original registrations on unload. Closing the flow resets the choice before a later open, avoiding an accidental extra native-picker launch.
+
+Web acceptance exercised the sidebar and hero entries, created a generated `web-local-project` directory through the official browser, adopted it into the original sidebar, cancelled/reopened the browser and reopened the SSH flow without connecting a host. Regression tests cover both slots, browse outcomes, the Desktop picker bridge, busy state, cancellation/reopening and occupant replacement/unload. Tests use a private disposable home; the daily profile, real hosts, credentials and models are not involved in browser acceptance.
+
+The verified local archive passed 106 suites / 968 tests, typecheck, build, artifact checks and isolated rc.3 installed-runtime acceptance. The private development workspace passed 78 suites / 693 tests, typecheck, build and artifact checks after the focused fix was applied. The archive was installed into the daily Desktop profile; installed host/client bundles match it. All 4,650 protected files, bundle order and other dependency specifications were preserved. Desktop restart is left to the user after saving work. No npm/GitHub publication was performed for this local revision.
 
 ## 2026-10-22 — jay.39: cursor-based disk history deltas
 

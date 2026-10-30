@@ -34,6 +34,35 @@ it('renders saved message text without executing remote HTML or requesting attac
   expect(reader.textContent).toContain('read only')
 })
 
+it('renders tool-only assistant messages with collapsed arguments instead of provider replay JSON', () => {
+  document.documentElement.lang = 'en'
+  const view = renderSavedHistory({ ...copy, records: [{ type: 'event', event: { seq: 0, type: 'assistant/message', data: {
+    message: { role: 'assistant', content: [{ type: 'tool-call', name: 'job_output', arguments: { job_id: 'generated-job', wait: true } }], source: { replayState: { responseId: 'generated-replay-must-not-render' } } },
+    usage: { inputTokens: 1000 }, stream: [{ type: 'chunk', internal: 'generated-stream-must-not-render' }],
+  } } }] })
+  expect(view.textContent).toContain('Tool call: job_output')
+  expect(view.querySelector('details')!.open).toBe(false)
+  expect(view.querySelector('details pre')!.textContent).toContain('generated-job')
+  expect(view.textContent).not.toContain('generated-replay-must-not-render')
+  expect(view.textContent).not.toContain('generated-stream-must-not-render')
+  expect(view.textContent).not.toContain('inputTokens')
+})
+
+it('keeps visible text beside tool calls and offers unknown event data as a download', () => {
+  document.documentElement.lang = 'en'
+  const records: HistoryDocument['records'] = [
+    { type: 'event', event: { seq: 0, type: 'assistant/message', data: { message: { content: [
+      { type: 'text', text: 'Checking the generated background job.' }, { type: 'tool-call', name: 'inspect', arguments: '{}' },
+    ] } } } },
+    { type: 'event', event: { seq: 1, type: 'assistant/message', data: { providerState: 'generated-internal-only' } } },
+  ]
+  const view = renderSavedHistory({ ...copy, records })
+  expect(view.textContent).toContain('Checking the generated background job.')
+  expect(view.textContent).toContain('Tool call: inspect')
+  expect(view.textContent).not.toContain('generated-internal-only')
+  expect(view.querySelector('a')!.getAttribute('href')).toBe('/api/dsh-ssh/remote/history/event?key=' + key + '&seq=1')
+})
+
 it('pages bounded windows without skipping the first half, and late pages cannot replace a detached reader',async()=>{
   document.documentElement.lang='en'
   const records=(first:number,last:number)=>Array.from({length:last-first+1},(_,n)=>({type:'event' as const,event:{seq:first+n,type:'user/message',data:{content:'Generated '+(first+n)}}}))

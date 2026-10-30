@@ -15,13 +15,18 @@ import { SegmentedHistoryCache } from '../src/remote/history-store.ts'
 import { compatibleRemoteVersion } from '../src/remote/types.ts'
 import * as transport from '../src/remote/transport.ts'
 import { shellQuote } from '../src/remote/transport.ts'
+import { ServerModels, modelBridgeHash } from '../src/remote/models.ts'
 
 const dir = realpathSync(mkdtempSync(join(tmpdir(), 'dsh-remote-runtime-test-')))
 const remoteRoot = join(dir, "remote runtime ' quoted"), project = join(dir, 'project')
 let sshd: TestSshd, engine: SshEngine, manager: RemoteWorkspaces
 const options = {
   installer: readFileSync(new URL('../assets/remote-install.sh', import.meta.url), 'utf8'),
+  accountService: readFileSync(new URL('../assets/account-service.mjs', import.meta.url), 'utf8'),
+  accountBridge: readFileSync(new URL('../assets/account-service-bridge.mjs', import.meta.url), 'utf8'),
   bootstrap: readFileSync(new URL('../assets/remote-bootstrap.mjs', import.meta.url), 'utf8'),
+  modelBridge: readFileSync(new URL('../assets/remote-model-bridge.mjs', import.meta.url), 'utf8'),
+  pluginUpdate: readFileSync(new URL('../assets/remote-plugin-update.mjs', import.meta.url), 'utf8'),
   root: join(dir, 'local-state'), remoteRoot, returnUrl: () => 'http://127.0.0.1:3080/',
 }
 function ownedManager() {
@@ -41,6 +46,9 @@ beforeAll(async () => {
   const installed = { node: process.execPath, dsh, root: remoteRoot, version }
   options.installer = `printf 'DSH_INSTALL:%s\\n' ${shellQuote(JSON.stringify(installed))}\n`
   mkdirSync(project)
+  // Repositories cannot supply process-launch proxy variables. The shared
+  // daemon starts outside this project; its terminals still use this cwd.
+  writeFileSync(join(project, '.env'), 'ALL_PROXY=http://127.0.0.1:9\n')
   const plugin = join(dir, 'fixture-plugin'); mkdirSync(plugin)
   writeFileSync(join(plugin, 'package.json'), JSON.stringify({ name: '@fixture/remote-fs', version: '1.0.0', type: 'module', main: 'index.js', dsh: { bundle: { patch: './cordis.patch.yml' } } }))
   writeFileSync(join(plugin, 'cordis.patch.yml'), '- insert:\n    - id: remote-fs-fixture\n      name: "@fixture/remote-fs"\n')
@@ -60,6 +68,14 @@ ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/history',
  const session=ctx.sessions.get(id);if(!session)throw Error('Fixture Session is not attached');
  for(let n=0;n<count;n++)session.append('user/message',{role:'user',source:{kind:'user'},content:[{type:'text',text:'Generated history fixture '+n+' '.repeat(64)}],requestId:'fixture-'+n},{surfaceOp:'append'});
  res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({added:count}));
+}}));
+ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/completed-turn',handler:async(req,res)=>{
+ const denied=ctx.connection.requestRejection(req);if(denied){res.writeHead(denied);res.end();return}
+ let raw='';for await(const bytes of req)raw+=bytes;const {id}=JSON.parse(raw);
+ const session=ctx.sessions.get(id);if(!session)throw Error('Generated Session is not attached');
+ session.append('user/message',{id:'fixture-completed-message',role:'user',source:{kind:'user'},content:[{type:'text',text:'Generated completed-turn fixture'}],requestId:'fixture-completed-turn'},{surfaceOp:'append'});
+ session.append('turn/start',{turn:1});session.append('turn/end',{turn:1,reason:{kind:'completed'}});
+ res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true}));
 }}));}
 `)
   await run(dsh, ['plugin', '--profile', 'web', 'add', `link:${plugin}`], { env: { ...process.env, DSH_HOME: join(remoteRoot, 'data') }, timeout: 60000 })
@@ -70,6 +86,9 @@ ctx.effect(()=>ctx.webServer.register({kind:'exact',path:'/api/fixture/history',
 }, 75000)
 afterAll(() => {
   manager?.dispose(); engine?.dispose(); sshd?.stop()
+  if (existsSync(join(remoteRoot, 'data/services/web'))) writeFileSync(join(remoteRoot, 'data/services/web/stopped'), 'fixture-cleanup', { mode: 0o600 })
+  const supervisor = join(remoteRoot, 'data/services/web/supervisor.json')
+  if (existsSync(supervisor)) { try { process.kill(JSON.parse(readFileSync(supervisor, 'utf8')).pid, 'SIGTERM') } catch {} }
   const path = join(remoteRoot, 'state/server.json')
   if (existsSync(path)) {
     const receipt = JSON.parse(readFileSync(path, 'utf8'))
@@ -144,6 +163,18 @@ it('starts a full DSH through real SSH, routes authenticated RPC, and reconnects
   const terminal = await rpc('terminal/create', { agentId: sessionId, request: { id: 'remote-smoke-terminal', cols: 80, rows: 24 } })
   expect(terminal.cwd).toBe(project)
   expect(terminal.state).toBe('running')
+  await expect(manager.sessionAction(first.id, sessionId, 'fork', undefined, false, 'f'.repeat(24))).rejects.toThrow('identity changed')
+  await expect(manager.sessionAction(first.id, 'not-a-member', 'fork', undefined, false, first.hostId)).rejects.toThrow('does not belong')
+  await expect(manager.sessionAction(first.id, sessionId, 'fork', undefined, false, first.hostId)).rejects.toMatchObject({ errorCode: 'session/fork-unavailable' })
+  const completedTurn = await fetch(login.origin + '/api/fixture/completed-turn', { method:'POST',headers:authHeaders,body:JSON.stringify({id:sessionId}) })
+  expect(completedTurn.status).toBe(200)
+  const child = await manager.sessionAction(first.id, sessionId, 'fork', 'Unified sidebar fixture', false, first.hostId)
+  expect(child?.sessionId).toBeTruthy();expect(child?.sessionId).not.toBe(sessionId)
+  expect((await manager.sessions(first.id)).sessions).toContainEqual(expect.objectContaining({ sessionId:child!.sessionId,title:'Unified sidebar fixture (1)' }))
+  await manager.sessionAction(first.id, child!.sessionId, 'archive', undefined, false, first.hostId)
+  expect((await manager.sessions(first.id)).archivedSessions).toContainEqual(expect.objectContaining({ sessionId:child!.sessionId }))
+  await manager.sessionAction(first.id, child!.sessionId, 'unarchive', undefined, false, first.hostId)
+  expect((await manager.sessions(first.id)).sessions).toContainEqual(expect.objectContaining({ sessionId:child!.sessionId,title:'Unified sidebar fixture (1)' }))
   await new Promise<void>((resolve, reject) => {
     const ws = new WebSocket(login.origin.replace('http:', 'ws:') + '/api/remote.mux', { headers: authHeaders, handshakeTimeout: 5000 })
     const timeout = setTimeout(() => { ws.terminate(); reject(new Error('Remote stream did not deliver its initial state')) }, 8000)
@@ -395,3 +426,39 @@ it.each([false, true])('freezes the reviewed host during installation, including
     expect(owned.list()).toEqual([])
   } finally { owned.dispose() }
 }, 15000)
+
+it('automatically configures API models over real SSH using native settings and credentials without replacing the daemon', async () => {
+  const workspace = await connected(), access = manager.modelAccess('fixture', engine.find('fixture')!.updatedAt)
+  const pid = access.gateway.receipt.pid
+  const source = { providers: [{ ns: 'llm-pi-ai', path: ['providers', 'ssh-fixture-models'], provider: 'ssh-fixture-models', label: 'SSH fixture models',
+    key: 'isolated-fixture-api-key', config: { api: 'openai-completions', baseURL: 'https://api.example.invalid/v1', apiKeyEnv: 'FIXTURE_API_KEY',
+      models: [{ id: 'fixture-model', name: 'Fixture model', contextWindow: 8192, maxTokens: 1024, input: ['text'], reasoningEfforts: false }] } }], skipped: [],
+    defaultSelection: { provider: 'ssh-fixture-models', model: 'fixture-model' } }
+  const models = new ServerModels(manager, async () => structuredClone(source), modelBridgeHash(options.modelBridge), join(dir, 'model-controller.json'))
+  try {
+    await models.sync('fixture', engine.find('fixture')!.updatedAt)
+    const view = models.view('fixture', engine.find('fixture')!.updatedAt)
+    const schema = await access.gateway.rpc<any>('settings/describe', {})
+    expect(view.state, JSON.stringify({ view, profile: schema.namespaces.find((row: any) => row.ns === 'llm-pi-ai')?.value.providers['ssh-fixture-models'] })).toBe('ready')
+    expect(view.rows.find(row => row.provider === 'ssh-fixture-models')).toMatchObject({ status: 'synced', mode: 'follow' })
+    expect(view.default?.status).toBe('synced')
+    expect((await access.gateway.rpc<any>('session/modelCatalog', {})).default).toMatchObject(source.defaultSelection)
+    const raw = await access.gateway.rpc<any>('settings/describe', {})
+    const profile = raw.namespaces.find((row: any) => row.ns === 'llm-pi-ai').value.providers['ssh-fixture-models']
+    expect(profile.apiKeyEnv).toMatch(/^DSH_SSH_/)
+    expect(await access.gateway.rpc<any>('credentials/describe', { refs: [profile.apiKeyEnv] })).toMatchObject({ [profile.apiKeyEnv]: { configured: true } })
+    expect(JSON.stringify(view)).not.toContain('isolated-fixture-api-key')
+    expect(readFileSync(join(dir, 'model-controller.json'), 'utf8')).not.toContain('isolated-fixture-api-key')
+    expect(JSON.parse(readFileSync(join(remoteRoot, 'state/server.json'), 'utf8')).pid).toBe(pid)
+    expect(manager.list().some(row => row.id === workspace.id)).toBe(true)
+    const original = options.modelBridge
+    options.modelBridge = original + '\n// generated next-version compatibility fixture\n'
+    const upgraded = new ServerModels(manager, async () => structuredClone(source), modelBridgeHash(options.modelBridge), join(dir, 'upgraded-model-controller.json'))
+    try {
+      await upgraded.sync('fixture', engine.find('fixture')!.updatedAt)
+      expect(upgraded.view('fixture', engine.find('fixture')!.updatedAt).state).toBe('ready')
+      expect((await access.gateway.modelBridge<any>({ kind: 'status' })).build).toBe(modelBridgeHash(options.modelBridge))
+      expect(JSON.parse(readFileSync(join(remoteRoot, 'state/server.json'), 'utf8')).pid).toBe(pid)
+    } finally { upgraded.dispose(); options.modelBridge = original }
+  } finally { models.dispose() }
+}, 120000)

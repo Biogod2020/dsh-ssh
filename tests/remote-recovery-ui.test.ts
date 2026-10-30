@@ -45,6 +45,45 @@ const workspace = { id: 'workspace-1', hostId: 'a'.repeat(24), alias: 'fixture',
 const response = (value: object) => ({ ok: true, json: async () => value })
 const sidebar = () => { document.documentElement.lang = 'en'; document.body.innerHTML = '<aside data-pane="sidebar"><div role="tree"></div></aside>' }
 
+it('connects an archived-only workspace without opening a Session, changing drafts or creating a blank one', async () => {
+  vi.useFakeTimers(); sidebar(); remoteNavigation.native(true)
+  let connected = false
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input)
+    if (path.endsWith('/connect')) { connected = true; return response({ operation: { id: 'connect-only', phase: 'ready', workspace } }) }
+    if (path.includes('/sessions?')) return response({ workspaceId: workspace.workspaceId, stale: !connected, sessions: [], archivedSessions: [{ sessionId: 'archived', title: 'Archived', running: false, blank: false, updatedAt: 1 }] })
+    if (path.endsWith('/workspaces')) return response({ workspaces: [workspace], hosts: connected ? [{ hostId: workspace.hostId, phase: 'ready' }] : [] })
+    throw new Error('Unexpected side effect: ' + path)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  const open = vi.fn(), beforeLeave = vi.fn(), unregister = registerRemotePresentation({ resume: () => false, open, beforeLeave }), dispose = mountRemoteWorkspaces()
+  try {
+    await vi.advanceTimersByTimeAsync(0)
+    remoteNavigation.reconnect(workspace); await vi.advanceTimersByTimeAsync(0)
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/connect'))).toHaveLength(1)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/open') || String(url).endsWith('/session/create'))).toBe(false)
+    expect(open).not.toHaveBeenCalled(); expect(beforeLeave).not.toHaveBeenCalled()
+    expect(remoteNavigation.getSnapshot().catalogs.get(workspace.id)?.archivedSessions).toHaveLength(1)
+    expect(remoteNavigation.getSnapshot().hosts?.get(workspace.hostId)).toBe('ready')
+  } finally { dispose(); unregister() }
+})
+
+it.each([true,false])('does not pull a cold native Session into the offscreen setup footer (native=%s)',async native=>{
+  vi.useFakeTimers();sidebar();remoteNavigation.native(native)
+  const setup={id:'cold',alias:workspace.alias,hostId:workspace.hostId,remotePath:workspace.remotePath,phase:'checking',message:'Checking'}
+  vi.stubGlobal('fetch',vi.fn(async(input:RequestInfo|URL)=>String(input).endsWith('/connect')?response({operation:setup}):response({workspaces:[workspace],hosts:[]})))
+  const focus=vi.spyOn(HTMLElement.prototype,'focus'),dispose=mountRemoteWorkspaces()
+  try{
+    await vi.advanceTimersByTimeAsync(0)
+    expect(document.activeElement).toBe(document.body)
+    remoteNavigation.open(workspace,'saved');await vi.advanceTimersByTimeAsync(0)
+    const background=[...document.querySelectorAll('button')].find(button=>button.textContent==='Continue in background')!
+    expect(background.hidden).toBe(false)
+    if(native){expect(document.activeElement).toBe(document.body);expect(focus).not.toHaveBeenCalled()}
+    else{expect(document.activeElement).toBe(background);expect(focus).toHaveBeenCalledWith({preventScroll:true})}
+  }finally{dispose();focus.mockRestore()}
+})
+
 it('accepts a newer cached choice while a previous choice is waiting and ignores the late completion',async()=>{
   vi.useFakeTimers();sidebar();vi.mocked(warmHistoryCopy).mockClear()
   const fetchMock=vi.fn(async()=>response({workspaces:[workspace],hosts:[{hostId:workspace.hostId,phase:'ready'}]}))
@@ -277,10 +316,11 @@ it('preserves a failure disclosure and focus across catalog refreshes; dismissal
   })
   vi.stubGlobal('fetch', fetchMock)
   const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(0)
-  const details = document.querySelector('details')!, summary = details.querySelector('summary')!
+  document.querySelector<HTMLDetailsElement>('[data-dsh-previous-failures]')!.open = true
+  const details = document.querySelector<HTMLDetailsElement>('[data-remote-operation-id] details')!, summary = details.querySelector('summary')!
   details.open = true; summary.focus()
   await vi.advanceTimersByTimeAsync(5000)
-  expect(document.querySelector('details')).toBe(details); expect(details.open).toBe(true); expect(document.activeElement).toBe(summary)
+  expect(document.querySelector('[data-remote-operation-id] details')).toBe(details); expect(details.open).toBe(true); expect(document.activeElement).toBe(summary)
   expect(document.querySelector('[role="alert"]')?.textContent).toBe('Could not open this remote folder.')
   expect(details.querySelector('pre')?.textContent).toBe(original)
   ;[...document.querySelectorAll('button')].find(x => x.textContent === 'Dismiss failure')!.click()
@@ -337,6 +377,7 @@ it('keeps dismissed failures in history and restores focus to its history contro
   })
   vi.stubGlobal('fetch', fetchMock)
   const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(0)
+  document.querySelector<HTMLDetailsElement>('[data-dsh-previous-failures]')!.open = true
   const dismiss = document.querySelector<HTMLButtonElement>('[data-remote-operation-id] button')!; dismiss.focus(); dismiss.click()
   await vi.advanceTimersByTimeAsync(0)
   const history = [...document.querySelectorAll<HTMLButtonElement>('button')].find(x => x.textContent === 'Recent setup activity')!
@@ -405,10 +446,69 @@ it('preserves a workspace focus chosen while a dismissal request is in flight', 
     return response({ workspaces: [workspace], hosts: [], operations: dismissed ? [] : [failed], history: [{ ...failed, dismissed }] })
   }))
   const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(0)
+  document.querySelector<HTMLDetailsElement>('[data-dsh-previous-failures]')!.open = true
   const dismiss = document.querySelector<HTMLButtonElement>('[data-remote-operation-id] button')!; dismiss.focus(); dismiss.click()
   const row = document.querySelector<HTMLButtonElement>('[data-remote-workspace-id]')!; row.focus()
   dismissed = true; resolveDismiss(response({ ok: true })); await vi.advanceTimersByTimeAsync(0)
   expect(document.activeElement).toBe(row)
+  dispose()
+})
+
+it('folds earlier failed attempts separately from live preparation and unconfirmed dispatches without retrying', async () => {
+  vi.useFakeTimers(); sidebar()
+  const old = { id: 'old-timeout', alias: workspace.alias, phase: 'failed', lastPhase: 'checking', message: 'SSH handshake timed out', createdAt: 1000, updatedAt: 2000 }
+  const other = { ...old, id: 'old-other', message: 'Connection refused' }
+  const preparing = { ...old, id: 'preparing-now', phase: 'installing-dsh', message: 'Installing' }
+  const unconfirmed = { ...old, id: 'unconfirmed', lastPhase: 'installing-dsh', errorCode: 'ssh/setup-interrupted', message: 'Remote work may still be running' }
+  const legacy = { ...old, id: 'legacy-unknown', lastPhase: 'installing-dsh', message: 'Remote setup timed out; inspect its state before trying again. Not replayed.' }
+  const receipts = [old, other, preparing, unconfirmed, legacy]
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'ready' }], operations: receipts, history: receipts }))
+  vi.stubGlobal('fetch', fetchMock)
+  const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(0)
+  const previous = document.querySelector<HTMLDetailsElement>('[data-dsh-previous-failures]')!
+  expect(previous.open).toBe(false); expect(previous.hidden).toBe(false)
+  expect(previous.querySelector('summary')!.textContent).toBe('Previous failed attempts (2)')
+  const oldCard = document.querySelector('[data-remote-operation-id="old-timeout"]')!
+  expect(previous.contains(oldCard)).toBe(true)
+  for (const id of ['preparing-now', 'unconfirmed', 'legacy-unknown']) expect(previous.contains(document.querySelector(`[data-remote-operation-id="${id}"]`))).toBe(false)
+  previous.open = true; previous.querySelector('summary')!.focus()
+  await vi.advanceTimersByTimeAsync(5000)
+  expect(document.querySelector('[data-dsh-previous-failures]')).toBe(previous)
+  expect(previous.open).toBe(true); expect(document.activeElement).toBe(previous.querySelector('summary'))
+  expect(document.querySelector('[data-remote-operation-id="old-timeout"]')).toBe(oldCard)
+  expect(previous.textContent).toContain('not current host status')
+  const history = [...document.querySelectorAll<HTMLButtonElement>('button')].find(x => x.textContent === 'Recent setup activity')!
+  history.click()
+  expect(previous.hidden).toBe(true); expect(previous.contains(oldCard)).toBe(false)
+  expect(document.querySelector('[data-remote-operation-id="old-timeout"]')).toBe(oldCard)
+  expect(fetchMock.mock.calls.every(([, init]) => !init || (init as RequestInit).method !== 'POST')).toBe(true)
+  dispose()
+})
+
+it.each([true, false])('keeps focus visible when a background attempt becomes a folded failure (sidebar focus: %s)', async inside => {
+  vi.useFakeTimers(); sidebar()
+  const editor = document.createElement('input'); document.body.append(editor)
+  let failed = false
+  vi.stubGlobal('fetch', vi.fn(async () => response({ workspaces: [], hosts: [], operations: [{ id: 'changing', alias: workspace.alias,
+    phase: failed ? 'failed' : 'checking', lastPhase: 'checking', message: failed ? 'SSH handshake timed out' : 'Checking' }] })))
+  const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(0)
+  if (inside) document.querySelector<HTMLButtonElement>('[data-remote-operation-id] button')!.focus(); else editor.focus()
+  failed = true; await vi.advanceTimersByTimeAsync(5000)
+  const previous = document.querySelector<HTMLDetailsElement>('[data-dsh-previous-failures]')!
+  expect(previous.open).toBe(false)
+  expect(document.activeElement).toBe(inside ? previous.querySelector('summary') : editor)
+  dispose()
+})
+
+it('uses a separate accessible remote-host badge in fallback workspace rows without changing stored titles', async () => {
+  vi.useFakeTimers(); sidebar()
+  vi.stubGlobal('fetch', vi.fn(async () => response({ workspaces: [workspace], hosts: [{ hostId: workspace.hostId, phase: 'ready' }] })))
+  const dispose = mountRemoteWorkspaces(); await vi.advanceTimersByTimeAsync(0)
+  const row = document.querySelector('[data-remote-workspace-id]')!, badge = row.querySelector('[data-dsh-remote-host]')!
+  expect(badge.getAttribute('aria-label')).toBe('Remote host: fixture')
+  expect(badge.textContent).toBe('fixture'); expect(badge.getAttribute('title')).toContain(workspace.remotePath)
+  expect(row.textContent).not.toContain('[SSH:fixture]')
+  expect(workspace.title).toBe('project [SSH:fixture]')
   dispose()
 })
 

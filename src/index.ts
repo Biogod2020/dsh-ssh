@@ -26,6 +26,8 @@ import type { SshRoutesDeps } from './routes.ts'
 import { readFileSync } from 'node:fs'
 import { RemoteWorkspaces } from './remote/manager.ts'
 import { remoteRoutes } from './remote/routes.ts'
+import { ServerPlugins, localPluginPackages, type PluginManagementContext } from './remote/plugins.ts'
+import { ServerModels, localModelSource, modelBridgeHash } from './remote/models.ts'
 
 /** Stable cordis plugin name. */
 export const name = 'ssh-ops'
@@ -59,7 +61,7 @@ declare module '@deepseek-ai/cordis' {
 const SECTION_ORDER = 150
 
 /** Model-facing announcement: plugin presence, capabilities, and limits. */
-export const SSH_GUIDANCE = '本机安装独立维护的 SSH Ops 插件（侧边栏 SSH）。ssh_list 列出已配置主机，ssh_exec 执行远程命令，ssh_upload/ssh_download 传输文件，ssh_tunnel 创建本地隧道，ssh_cluster 对显式筛选的主机执行命令。只使用用户已配置或导入的别名，不得臆造主机。所有目标和跳板机必须通过本机 OpenSSH known_hosts 校验；未知、变更或吊销的密钥拒绝连接，不得自动接受。断线或超时不会自动重放命令，远端结果可能未知，应先核实副作用，不得擅自重试。SSH 操作会消耗真实远端资源，写入、部署、删除和传输前确认用户意图。输出原样返回，可能含秘密；本地文件传输不受 bash 沙箱保护。推荐 ssh-agent 或密钥认证；若用户选择保存密码或密钥口令，将明文保存在 DSH_HOME 下权限 0600 的主机文件。通过 Add workspace 创建的 SSH 工作区使用远端完整 DSH 服务，会话、插件、文件和终端属于远端主机。首次连接自动检测并按需安装兼容运行环境。模型与插件在各自的 DSH 环境配置。旧本地 SSH 会话保留为历史；从 SSH workspaces 列表打开对应远端工作区继续工作。'
+export const SSH_GUIDANCE = '本机安装独立维护的 SSH Ops 插件（侧边栏 SSH）。ssh_list 列出已配置主机，ssh_exec 执行远程命令，ssh_upload/ssh_download 传输文件，ssh_tunnel 创建本地隧道，ssh_cluster 对显式筛选的主机执行命令。只使用用户已配置或导入的别名，不得臆造主机。所有目标和跳板机必须通过本机 OpenSSH known_hosts 校验；未知、变更或吊销的密钥拒绝连接，不得自动接受。断线或超时不会自动重放命令，远端结果可能未知，应先核实副作用，不得擅自重试。SSH 操作会消耗真实远端资源，写入、部署、删除和传输前确认用户意图。输出原样返回，可能含秘密；本地文件传输不受 bash 沙箱保护。推荐 ssh-agent 或密钥认证；若用户选择保存密码或密钥口令，将明文保存在 DSH_HOME 下权限 0600 的主机文件。通过 Add workspace 创建的 SSH 工作区使用远端完整 DSH 服务，会话、插件、文件和终端属于远端主机。首次连接自动检测并按需安装兼容运行环境。API Key 模型配置默认跟随本机，可在 SSH → 服务器模型为主机或提供商选择独立配置；网页登录凭据不迁移。插件仍分别配置。旧本地 SSH 会话保留为历史；从 SSH workspaces 列表打开对应远端工作区继续工作。'
 
 /**
  * Mount the SSH engine, routes, tools, and announcement.
@@ -76,9 +78,14 @@ function applyImpl(ctx: Context, config?: Config): void {
   const store = new HostStore()
   const engine = new SshEngine(store)
   const workspaces = new SshWorkspaces(engine)
+  const modelBridge = readFileSync(new URL('../assets/remote-model-bridge.mjs', import.meta.url), 'utf8')
   const remoteWorkspaces = new RemoteWorkspaces(engine, {
     installer: readFileSync(new URL('../assets/remote-install.sh', import.meta.url), 'utf8'),
+    accountService: readFileSync(new URL('../assets/account-service.mjs', import.meta.url), 'utf8'),
+    accountBridge: readFileSync(new URL('../assets/account-service-bridge.mjs', import.meta.url), 'utf8'),
     bootstrap: readFileSync(new URL('../assets/remote-bootstrap.mjs', import.meta.url), 'utf8'),
+    pluginUpdate: readFileSync(new URL('../assets/remote-plugin-update.mjs', import.meta.url), 'utf8'),
+    modelBridge,
     returnUrl: () => `http://127.0.0.1:${ctx.webServer.port}/`,
     legacy: () => workspaces.list(),
   })
@@ -94,7 +101,22 @@ function applyImpl(ctx: Context, config?: Config): void {
     requestRejection: (req) => (ctx.get('connection') as HostConnectionHandle).requestRejection(req),
   })
   ctx.effect(() => () => terminals.dispose(), 'dsh-ssh: terminals')
-  routes.push(...remoteRoutes(remoteWorkspaces, req => (ctx.get('connection') as HostConnectionHandle).requestRejection(req)))
+  const activityObserver = ctx as unknown as { on(event: string, callback: (request: unknown, next: () => Promise<Array<{ kind: string }>>) => Promise<Array<{ kind: string }>>): unknown }
+  activityObserver.on('dsh-account-service/activity', async (_request, next) => {
+    const rest = await next(); return terminals.hasActive() ? [{ kind: 'ssh-terminal' }, ...rest] : rest
+  })
+  const serverPlugins = new ServerPlugins(remoteWorkspaces, () => localPluginPackages(ctx as unknown as PluginManagementContext))
+  const serverModels = new ServerModels(remoteWorkspaces, () => localModelSource(ctx), modelBridgeHash(modelBridge))
+  remoteWorkspaces.onModelsConnected = (alias, updatedAt) => serverModels.sync(alias, updatedAt)
+  let modelChangeTimer: ReturnType<typeof setTimeout> | undefined
+  const changedModels = () => {
+    if (modelChangeTimer) clearTimeout(modelChangeTimer)
+    modelChangeTimer = setTimeout(() => { void serverModels.changed() }, 1000); modelChangeTimer.unref?.()
+  }
+  const observer = ctx as unknown as { on(event: string, callback: () => void): unknown }
+  for (const event of ['settings/updated', 'credentials/reference-updated', 'credentials/record-updated', 'llm/adapters-updated', 'loader/volatile-update']) observer.on(event, changedModels)
+  ctx.effect(() => () => { if (modelChangeTimer) clearTimeout(modelChangeTimer); serverModels.dispose(); remoteWorkspaces.onModelsConnected = undefined }, 'dsh-ssh: model sync')
+  routes.push(...remoteRoutes(remoteWorkspaces, req => (ctx.get('connection') as HostConnectionHandle).requestRejection(req), serverPlugins, serverModels))
   let disposeRoutes: (() => void) | undefined
 
   // Agent tools + their prompt sections.

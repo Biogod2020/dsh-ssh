@@ -117,11 +117,64 @@ it('rejects excess catalog observers before dispatch or response buffering',asyn
   let release!:()=>void
   const first=runCatalogRead('one',controllers[0]!.signal,()=>new Promise<void>(resolve=>{release=resolve}))
   const dispatch=vi.fn(async()=>{})
-  const queued=controllers.slice(1,10).map(controller=>runCatalogRead('one',controller.signal,dispatch))
+  const queued=controllers.slice(1,8).map(controller=>runCatalogRead('one',controller.signal,dispatch))
   const rejected=queued.map(job=>expect(job).rejects.toMatchObject({name:'AbortError'}))
   try {
     await expect(runCatalogRead('extra',controllers[10]!.signal,dispatch)).rejects.toThrow('queue is full')
+    const foreground = controllers.slice(8,10).map(controller=>runCatalogRead('one',controller.signal,dispatch,true))
+    rejected.push(...foreground.map(job=>expect(job).rejects.toMatchObject({name:'AbortError'})))
+    await expect(runCatalogRead('extra',controllers[10]!.signal,dispatch,true)).rejects.toThrow('queue is full')
     controllers.slice(1).forEach(controller=>controller.abort());await Promise.all(rejected)
     expect(dispatch).not.toHaveBeenCalled()
   } finally {controllers.forEach(controller=>controller.abort());release();await Promise.allSettled([first,...queued])}
+})
+
+it('promotes a shared queued catalog read ahead of background work without duplicating dispatch', async () => {
+  const controller = new AbortController()
+  let release!: () => void
+  const active = runCatalogRead('promoted-host', controller.signal, () => new Promise<void>(resolve => { release = resolve }))
+  const calls: string[] = []
+  const background = Array.from({ length: 4 }, (_, n) => runCatalogRead('promoted-host', controller.signal, async () => { calls.push('background-' + n) }))
+  const priority = { foreground: false }
+  const selected = runCatalogRead('promoted-host', controller.signal, async () => { calls.push('selected') }, priority)
+  try {
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    priority.foreground = true; release()
+    await Promise.all([active, selected, ...background])
+    // The fairness grant may admit one older observer first.
+    expect(calls.indexOf('selected')).toBeLessThanOrEqual(1)
+    expect(calls.filter(value => value === 'selected')).toHaveLength(1)
+  } finally { controller.abort(); release(); await Promise.allSettled([active, selected, ...background]) }
+})
+
+it('gives an undispatched foreground observer one more queue window and sends its read once', async () => {
+  vi.useFakeTimers()
+  const controller = new AbortController()
+  let release!: () => void
+  const active = runCatalogRead('waiting-host', controller.signal, () => new Promise<void>(resolve => { release = resolve }))
+  const dispatch = vi.fn(async () => 'generated-result')
+  const selected = runCatalogRead('waiting-host', controller.signal, dispatch, true)
+  try {
+    await vi.advanceTimersByTimeAsync(10001)
+    expect(dispatch).not.toHaveBeenCalled()
+    release(); await active
+    expect(await selected).toBe('generated-result'); expect(dispatch).toHaveBeenCalledOnce()
+  } finally { controller.abort(); release(); await Promise.allSettled([active, selected]); vi.useRealTimers() }
+})
+
+it('bounds foreground queue admission and never retries a dispatched read error', async () => {
+  vi.useFakeTimers()
+  const controller = new AbortController()
+  let release!: () => void
+  const active = runCatalogRead('bounded-host', controller.signal, () => new Promise<void>(resolve => { release = resolve }))
+  const dispatch = vi.fn(async () => {})
+  const queued = runCatalogRead('bounded-host', controller.signal, dispatch, true)
+  const rejected = expect(queued).rejects.toThrow('queue wait timed out')
+  try {
+    await vi.advanceTimersByTimeAsync(20001); await rejected; expect(dispatch).not.toHaveBeenCalled()
+    release(); await active
+    const failed = vi.fn(async () => { throw new Error('generated dispatched transport failure') })
+    await expect(runCatalogRead('bounded-host', controller.signal, failed, true)).rejects.toThrow('transport failure')
+    expect(failed).toHaveBeenCalledOnce()
+  } finally { controller.abort(); release(); await Promise.allSettled([active, queued]); vi.useRealTimers() }
 })

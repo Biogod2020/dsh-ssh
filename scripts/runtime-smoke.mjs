@@ -24,10 +24,15 @@ for (const endpoint of ['workspaces', 'connections', 'remote/workspaces', 'remot
 assert.equal((await fetch(api('directories'))).status, 401)
 assert.equal((await fetch(api('directories'), { headers: { ...headers, Origin: 'https://untrusted.invalid' } })).status, 403)
 assert.equal((await fetch(api('directories'), { headers })).status, 400)
-for (const endpoint of ['remote/connect', 'remote/open', 'remote/recover', 'remote/history/finish-clear']) {
+for (const endpoint of ['remote/models/policy', 'remote/models/check', 'remote/models/open', 'remote/connect', 'remote/open', 'remote/recover', 'remote/history/finish-clear', 'remote/plugins/sync']) {
   assert.equal((await fetch(api(endpoint), { method: 'POST', body: '{}' })).status, 401)
   assert.equal((await fetch(api(endpoint), { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.invalid' }, body: '{}' })).status, 403)
   assert.equal((await fetch(api(endpoint), { method: 'POST', headers, body: '{}' })).status, 400)
+}
+for (const [endpoint, status] of [['remote/plugins', 400], ['remote/plugins/job', 404]]) {
+  assert.equal((await fetch(api(endpoint))).status, 401)
+  assert.equal((await fetch(api(endpoint), { headers: { ...headers, Origin: 'https://untrusted.invalid' } })).status, 403)
+  assert.equal((await fetch(api(endpoint), { headers })).status, status)
 }
 const unauth = await fetch(api('hosts'))
 assert.equal(unauth.status, 401)
@@ -53,6 +58,17 @@ const create = await fetch(api('hosts'), { method: 'POST', headers, body: JSON.s
 }) })
 assert.equal(create.status, 201)
 try {
+  const created = (await create.json()).host
+  assert(created && Number.isSafeInteger(created.updatedAt), 'created fixture supplies its frozen identity')
+  const modelsURL = api('remote/models?alias=local-smoke-fixture&hostUpdatedAt=' + created.updatedAt)
+  assert.equal((await fetch(modelsURL)).status, 401)
+  assert.equal((await fetch(modelsURL, { headers: { ...headers, Origin: 'https://untrusted.invalid' } })).status, 403)
+  const models = await (await fetch(modelsURL, { headers })).json()
+  assert.equal(models.mode, 'follow'); assert.equal(models.connected, false)
+  const independent = await fetch(api('remote/models/policy'), { method: 'POST', headers,
+    body: JSON.stringify({ alias: 'local-smoke-fixture', hostUpdatedAt: created.updatedAt, change: { mode: 'independent' } }) })
+  assert.equal(independent.status, 200); assert.equal((await independent.json()).mode, 'independent')
+  assert.deepEqual(await (await fetch(api('connections'), { headers })).json(), { connections: [{ alias: 'local-smoke-fixture', state: 'disconnected' }] }, 'model settings reads and opting out must not start SSH')
   const workspace = await fetch(api('workspaces'), { method: 'POST', headers,
     body: JSON.stringify({ alias: 'local-smoke-fixture', remotePath: '~' }) })
   assert.equal(workspace.status, 409, 'legacy placeholder creation must be disabled')

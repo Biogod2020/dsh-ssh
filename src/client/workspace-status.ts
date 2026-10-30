@@ -6,8 +6,9 @@ import { tt } from './panel/helpers.ts'
 import css from './panel/panel.module.css'
 import type { LocaleRefreshSource } from './sidebar-entry.ts'
 import { remoteNavigation, resolveRemoteNavigation } from './remote-navigation.ts'
+import { createRemoteHostBadge, updateRemoteHostBadge } from './workspace-label.ts'
 
-/** Native rows have no extension slot yet. Add only an owned, non-interactive dot. */
+/** Native rows have no extension slot yet. Add owned, non-interactive indicators. */
 export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource): () => void {
   let workspaces: SshWorkspace[] = []
   let statuses: ConnectionStatus[] = []
@@ -16,9 +17,11 @@ export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource):
   let timer: ReturnType<typeof setTimeout> | undefined
   let polling = false
   const dots = new Set<HTMLElement>()
+  const badges = new Map<HTMLElement, HTMLElement>()
   const render = (): void => {
     if (disposed) return
     const seen = new Set<HTMLElement>()
+    const seenBadges = new Set<HTMLElement>()
     for (const row of document.querySelectorAll<HTMLElement>('[data-pane="sidebar"] [role="treeitem"][class*="projectRow"], [class*="sidebarCol"] [role="treeitem"][class*="projectRow"]')) {
       const key = row.getAttribute('data-row-key')
       const remote = key?.startsWith('workspace:') ? resolveRemoteNavigation(key.slice('workspace:'.length))?.workspace : undefined
@@ -45,8 +48,18 @@ export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource):
       dot.setAttribute('aria-label', label)
       dot.title = `${workspace.alias}: ${label}`
       seen.add(dot)
+      const copy = row.querySelector<HTMLElement>('[class*="projectText"]')
+      if (remote && copy) {
+        let badge = badges.get(copy)
+        if (!badge) { badge = createRemoteHostBadge(remote.alias, remote.remotePath); badges.set(copy, badge) }
+        copy.classList.add(css.workspaceRemoteText)
+        if (badge.parentElement !== copy) copy.append(badge)
+        updateRemoteHostBadge(badge, remote.alias, remote.remotePath)
+        seenBadges.add(copy)
+      }
     }
     for (const dot of dots) if (!seen.has(dot)) { dot.remove(); dots.delete(dot) }
+    for (const [copy, badge] of badges) if (!seenBadges.has(copy)) { copy.classList.remove(css.workspaceRemoteText); badge.remove(); badges.delete(copy) }
   }
   const poll = async (): Promise<void> => {
     if (disposed || polling || document.visibilityState === 'hidden') return
@@ -80,5 +93,7 @@ export function mountWorkspaceStatus(api: SshApi, locale?: LocaleRefreshSource):
     document.removeEventListener('visibilitychange', onVisibility)
     window.removeEventListener('offline', onVisibility); window.removeEventListener('online', onVisibility)
     for (const dot of dots) dot.remove()
+    for (const [copy, badge] of badges) { copy.classList.remove(css.workspaceRemoteText); badge.remove() }
+    badges.clear()
   }
 }

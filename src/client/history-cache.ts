@@ -40,12 +40,24 @@ export function renderSavedHistory(copy: HistoryDocument, load: HistoryLoader | 
     if (!value || typeof value !== 'object') return ''
     const row = value as Record<string, unknown>
     if (typeof row.text === 'string') return row.text
+    if (row.type === 'tool-call') return tt('cache.toolCall', { name: typeof row.name === 'string' ? row.name : tt('cache.tool') })
+    if (typeof row.thinking === 'string') return row.thinking
     if (typeof row.content === 'string' || Array.isArray(row.content)) return text(row.content)
     if (row.message) return text(row.message)
     if (row.data) return text(row.data)
     if (row.output) return text(row.output)
+    if (row.type === 'tool-result' && row.result !== undefined) return text(row.result) || JSON.stringify(row.result, null, 2)
     if (row.type === 'image' || row.type === 'file') return tt('cache.attachment')
     return ''
+  }
+  function toolCalls(value: unknown): Record<string, unknown>[] {
+    if (Array.isArray(value)) return value.flatMap(toolCalls)
+    if (!value || typeof value !== 'object') return []
+    const row = value as Record<string, unknown>
+    if (row.type === 'tool-call') return [row]
+    // Only message content belongs in the reader. Replay state, raw provider
+    // streams and usage accounting are available in the original event file.
+    return toolCalls(row.content ?? row.message ?? row.data)
   }
   const visible=(value:HistoryDocument)=>value.records.filter(row=>['user/message','assistant/message','tool/call','tool/result'].includes(row.event.type)||value.page?.omitted?.some(x=>x.seq===row.event.seq))
   let entries = visible(copy)
@@ -61,9 +73,17 @@ export function renderSavedHistory(copy: HistoryDocument, load: HistoryLoader | 
       label.textContent = tt(row.event.type === 'user/message' ? 'cache.user' : row.event.type === 'assistant/message' ? 'cache.assistant' : 'cache.tool')
       // Text nodes only: remote content, tool output and Markdown never become HTML.
       const omitted=copy.page?.omitted?.find(x=>x.seq===row.event.seq)
-      content.textContent=omitted ? tt('cache.largeRecord',{size:size(omitted.bytes)}) : text(row.event)||JSON.stringify(row.event,null,2)
+      const message = omitted ? '' : text(row.event)
+      content.textContent=omitted ? tt('cache.largeRecord',{size:size(omitted.bytes)}) : message || tt('cache.noText')
       article.append(label, content)
-      if (omitted) {
+      if (!omitted) for (const call of toolCalls(row.event)) {
+        if (call.arguments === undefined) continue
+        const details = document.createElement('details'), summary = document.createElement('summary'), argumentsText = document.createElement('pre')
+        summary.textContent = tt('cache.toolArguments', { name: typeof call.name === 'string' ? call.name : tt('cache.tool') })
+        argumentsText.textContent = typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments, null, 2)
+        details.append(summary, argumentsText); article.append(details)
+      }
+      if (omitted || !message) {
         const download=document.createElement('a');download.textContent=tt('cache.downloadRecord')
         download.href=base+'/event?key='+encodeURIComponent(copy.meta.key)+'&seq='+row.event.seq
         download.download='history-event-'+row.event.seq+'.json';article.append(download)

@@ -250,6 +250,10 @@ export function connectClient(config: ConnectConfig, onKeyboardInteractive?: Key
       signal?.throwIfAborted()
       arm(config.readyTimeout ?? 20_000, 'SSH connection timed out')
       client.connect({ ...config, authHandler, ...(onKeyboardInteractive === undefined ? {} : { readyTimeout: 0 }) })
+      // SSH carries interactive RPC/control packets as well as bulk bytes.
+      // Do not hold a small request/window update behind Nagle coalescing.
+      // ssh2 preserves custom jump/proxy streams that have no TCP option.
+      client.setNoDelay?.(true)
     } catch (error) {
       fail(error)
     }

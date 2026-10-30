@@ -29,6 +29,8 @@ import { tt } from './panel/helpers.ts'
 import type { SshWorkspace } from '../workspaces.ts'
 import { sameClusterTargets } from '../cluster-targets.ts'
 import type { TerminalContinuityState } from '../terminal-continuity.ts'
+import type { PluginSyncJob, ServerPluginComparison } from '../remote/plugin-types.ts'
+import type { ModelFollowView, ModelFollowPolicyChange } from '../remote/model-types.ts'
 
 /** Minimal File System Access API surface (not in all lib.dom versions). */
 interface WindowWithFileSystemAccess {
@@ -73,7 +75,7 @@ export async function prepareDownload(remotePath: string, saveMode: 'picker' | '
 export class TerminalCatalogUnsupportedError extends Error {}
 
 export class SshApiError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly status?: number) {
     super(message)
     this.name = 'SshApiError'
   }
@@ -120,7 +122,7 @@ async function readJson<T>(response: Response): Promise<T> {
     const message = typeof body === 'object' && body !== null && typeof (body as { error?: unknown }).error === 'string'
       ? (body as { error: string }).error
       : (response.status === 404 ? tt('error.disabled') : `HTTP ${response.status}`)
-    throw new SshApiError(message)
+    throw new SshApiError(message, response.status)
   }
   return body as T
 }
@@ -164,6 +166,39 @@ export interface TerminalConnection {
 
 /** The browser half's only data entry point. */
 export class SshApi {
+  /** Bound this browser's response observation only. The controller retains a
+   * dispatched policy/sync operation and its status; it must not be replayed. */
+  private async modelRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 10000): Promise<T> {
+    const controller = new AbortController()
+    const deadline = setTimeout(() => controller.abort(new DOMException(tt('models.observeHint'), 'TimeoutError')), timeoutMs)
+    try { return await readJson(await fetch('/api/dsh-ssh/remote/models' + path, { ...init, signal: controller.signal })) }
+    catch (error) { if (controller.signal.aborted) throw controller.signal.reason; throw error }
+    finally { clearTimeout(deadline) }
+  }
+  async serverModels(alias: string, hostUpdatedAt: number): Promise<ModelFollowView> {
+    return this.modelRequest(query({ alias, hostUpdatedAt }))
+  }
+  async setServerModelPolicy(alias: string, hostUpdatedAt: number, change: ModelFollowPolicyChange): Promise<ModelFollowView> {
+    return this.modelRequest('/policy', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alias, hostUpdatedAt, change }) }, 30000)
+  }
+  async checkServerModels(alias: string, hostUpdatedAt: number): Promise<ModelFollowView> {
+    return this.modelRequest('/check', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alias, hostUpdatedAt }) }, 30000)
+  }
+  async openServerModels(alias: string, hostUpdatedAt: number): Promise<{ url: string }> {
+    return this.modelRequest('/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ alias, hostUpdatedAt }) })
+  }
+
+  async compareServerPlugins(alias: string, hostUpdatedAt: number): Promise<ServerPluginComparison> {
+    return readJson(await fetch('/api/dsh-ssh/remote/plugins' + query({ alias, hostUpdatedAt })))
+  }
+  async syncServerPlugins(planId: string, names: string[], requestId: string): Promise<PluginSyncJob> {
+    return readJson(await fetch('/api/dsh-ssh/remote/plugins/sync', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ planId, names, requestId }),
+    }))
+  }
+  async serverPluginJob(id: string): Promise<PluginSyncJob> {
+    return readJson(await fetch('/api/dsh-ssh/remote/plugins/job' + query({ id }), { signal: AbortSignal.timeout(10000) }))
+  }
   async listWorkspaces(): Promise<SshWorkspace[]> {
     return (await readJson<{ workspaces: SshWorkspace[] }>(await fetch(SSH_API.workspaces, { signal: AbortSignal.timeout(8000) }))).workspaces
   }

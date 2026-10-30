@@ -58,7 +58,7 @@ it.each(REMOTE_DSH_VERSIONS)('reuses tested DSH %s without downloading and repor
     f.command('dsh', `echo '${version}'`)
     f.command('curl', 'exit 99')
     const result = f.run()
-    expect(result.status).toBe(0)
+    expect(result.status, result.error?.message ?? result.stderr).toBe(0)
     const receipt = JSON.parse(result.stdout.split('DSH_INSTALL:')[1])
     expect(receipt.version).toBe(version)
     expect(receipt.root).toBe(f.root)
@@ -75,4 +75,7 @@ it('rejects an unverified DSH archive before dependency installation or activati
   expect(result.status).not.toBe(0)
   expect(result.stdout).toContain('DSH checksum mismatch')
   expect(existsSync(join(f.root, 'releases', REMOTE_DSH_VERSION))).toBe(false)
-})
+// This path launches the real Node binary repeatedly to probe candidates and
+// check the archive. Let its existing 15s subprocess deadline report failures
+// before the enclosing test expires on slower macOS runners.
+}, 20000)
