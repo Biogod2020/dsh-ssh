@@ -14,6 +14,8 @@ jay.66 stopped before publication because its downgrade fixture's selective extr
 
 The additional macOS `@latest` test selected jay.42 under pnpm's new-package waiting policy even after the public tag had advanced. The pinned jay.67 installation passed; adding only an exact-version age exception in a generated profile made `@latest` select jay.67. User profiles and global policy were unchanged. Daily Web/Desktop services were not updated or restarted, and [PR #3](https://github.com/Biogod2020/dsh-ssh/pull/3) retains owner review.
 
+Follow-up acceptance configured a persistent exception for only the package name `@biogod/dsh-ssh` in a fresh generated profile. Through the unmodified official Add plugin UI, typing only that bare name installed jay.67 from npm; its installed Host/client bytes match the release. This supports [one-time trust followed by package-name-only installation](install-latest-once.md). It does not claim zero-configuration first installation, automatic upgrade, or a global policy change.
+
 ## 2026-10-27 — local.2: restore the native Add workspace flow
 
 In an isolated DSH 0.2.1-rc.3 Web instance using the official browse backend, Add workspace → Local folder failed with `directoryPicker.pick needs the native capability; the composed picker serves "browse"`. The SSH extension had replaced both official directory-flow occupants and called `uiWorkspace.pickDirectory()` directly. This also bypassed the Desktop occupant's own picker bridge.

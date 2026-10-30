@@ -81,13 +81,15 @@ SSH 工作区默认自动跟随本机的 API 模型配置和密钥。首次连�
 
 ### 1. 安装插件
 
+要只填包名并立即获取新发布版本，先完成[一次性信任设置](docs/install-latest-once.md)。设置按包名生效，以后不需要随版本修改。
+
 打开 DSH **插件 → 添加插件**，填入：
 
 ```text
-@biogod/dsh-ssh@0.3.24-jay.67
+@biogod/dsh-ssh
 ```
 
-请保留精确版本号。pnpm 的新包等待策略可能在刚发布时让裸包名或 `@latest` 安装选择旧版，即使 npm 的 `latest` 已更新；上面的精确版本已通过实际安装验收。
+尚未做一次性设置时，pnpm 的新包等待策略可能在刚发布时选择旧版。需要立即安装本次发行，可临时填入 `@biogod/dsh-ssh@0.3.24-jay.67`。
 
 选择 **npm 官方源** 或 **中国大陆镜像源**，点击 **安装 → 立即启用**。按界面提示重启后，左侧应出现 **SSH**。
 
@@ -138,10 +140,10 @@ SSH 工作区默认自动跟随本机的 API 模型配置和密钥。首次连�
 
 ### 使用 dsh web
 
-你也可以在 DSH `0.2.1-rc.2` 的 Web 环境中安装并运行插件：
+完成一次性信任设置后，也可以在 DSH `0.2.1-rc.2` 的 Web 环境中按包名安装并运行插件：
 
 ```sh
-dsh plugin --profile web add @biogod/dsh-ssh@0.3.24-jay.67
+dsh plugin --profile web add @biogod/dsh-ssh
 dsh web --no-open
 ```
 
