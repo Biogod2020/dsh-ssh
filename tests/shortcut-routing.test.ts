@@ -12,7 +12,7 @@ afterEach(() => { remoteNavigation.clear(); selectRemoteView(); vi.restoreAllMoc
 const context = { source: 'keyboard', region: 'page', modal: null, target: null }
 const workspace = { id: 'project-a', hostId: 'a'.repeat(24), workspaceId: 'native-project', alias: 'Host A', title: 'Project', remotePath: '/project' }
 function fixture(runtime = 'web') {
-  vi.stubGlobal('__DSH_BOOT__', { release: { version: '0.2.1-rc.3' } }); vi.stubGlobal('navigator', { onLine: true })
+  vi.stubGlobal('__DSH_BOOT__', { release: { version: sdk.version } }); vi.stubGlobal('navigator', { onLine: true })
   const registry = new sdk.ShortcutRegistry(runtime, 'macos'), locals = { new: vi.fn(), rename: vi.fn(), fork: vi.fn(async () => {}), archive: vi.fn() }
   const service = { registry, catalog: registry.catalog }
   sdk.install({ locale: { bind: () => (key: string) => key }, effect: (fn: () => void) => fn(), shortcuts: { register: (value: unknown) => registry.register(value) },
@@ -82,7 +82,7 @@ it('rejects unknown versions or changed functions without partially modifying na
   try {
     expect(installShortcutTargetRouter(f.service, 'future', () => undefined).supported).toBe(false)
     f.registry.commands.get('session.archive').resolve = () => ({ status: 'pass' })
-    expect(installShortcutTargetRouter(f.service, '0.2.1-rc.3', () => undefined).supported).toBe(false)
+    expect(installShortcutTargetRouter(f.service, sdk.version, () => undefined).supported).toBe(false)
     for (const id of ['session.new', 'session.rename', 'session.fork']) expect(f.registry.commands.get(id).resolve).toBe(f.originals.get(id))
   } finally { f.dispose() }
 })
@@ -115,14 +115,14 @@ it('rolls back all prior assignments if one guarded resolver rejects installatio
   const command = f.registry.commands.get('session.archive')
   f.registry.commands.set(command.id, new Proxy(command, { set: () => { throw new Error('immutable owner') } }))
   try {
-    expect(installShortcutTargetRouter(f.service, '0.2.1-rc.3', () => undefined).supported).toBe(false)
+    expect(installShortcutTargetRouter(f.service, sdk.version, () => undefined).supported).toBe(false)
     for (const id of ['session.new', 'session.rename', 'session.fork']) expect(f.registry.commands.get(id).resolve).toBe(f.originals.get(id))
   } finally { f.dispose() }
 })
 
 it('contains a remote resolver exception without executing the local fallback', () => {
   const f = fixture(); f.routing.dispose()
-  const routing = installShortcutTargetRouter(f.service, '0.2.1-rc.3', () => { throw new Error('unexpected adapter failure') })
+  const routing = installShortcutTargetRouter(f.service, sdk.version, () => { throw new Error('unexpected adapter failure') })
   try {
     expect(f.registry.commands.get('session.archive').resolve(context).status).toBe('blocked')
     expect(f.locals.archive).not.toHaveBeenCalled()
