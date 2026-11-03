@@ -5,6 +5,9 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS } from '../src/remote/types.ts'
 
+// Let the fixture report its bounded subprocess failure before Vitest times out.
+const subprocessTimeout = 15000
+const installerTestTimeout = subprocessTimeout + 5000
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture() {
@@ -18,7 +21,7 @@ function fixture() {
   command('curl', 'printf bad-archive > "${10}"')
   const run = () => spawnSync('/bin/sh', [new URL('../assets/remote-install.sh', import.meta.url).pathname, root,
     REMOTE_DSH_VERSION, REMOTE_DSH_INTEGRITY, REMOTE_DSH_VERSIONS.join('|')], {
-    encoding: 'utf8', env: { HOME: home, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` }, timeout: 15000,
+    encoding: 'utf8', env: { HOME: home, PATH: `${bin}:/usr/bin:/bin:/usr/sbin:/sbin` }, timeout: subprocessTimeout,
   })
   return { home, root, bin, command, run }
 }
@@ -50,7 +53,7 @@ it('never activates a Node archive whose checksum does not match the pinned rele
   expect(existsSync(join(f.root, 'node'))).toBe(false)
   expect(existsSync(join(f.root, 'releases'))).toBe(false)
   expect(existsSync(join(f.root, 'install.lock'))).toBe(false)
-})
+}, installerTestTimeout)
 
 it.each(REMOTE_DSH_VERSIONS)('reuses tested DSH %s without downloading and reports the actual installed version', version => {
     const f = fixture()
@@ -63,7 +66,7 @@ it.each(REMOTE_DSH_VERSIONS)('reuses tested DSH %s without downloading and repor
     expect(receipt.version).toBe(version)
     expect(receipt.root).toBe(f.root)
     expect(existsSync(join(f.root, 'releases'))).toBe(false)
-})
+}, installerTestTimeout)
 
 it('rejects an unverified DSH archive before dependency installation or activation', () => {
   const f = fixture()
@@ -75,7 +78,4 @@ it('rejects an unverified DSH archive before dependency installation or activati
   expect(result.status).not.toBe(0)
   expect(result.stdout).toContain('DSH checksum mismatch')
   expect(existsSync(join(f.root, 'releases', REMOTE_DSH_VERSION))).toBe(false)
-// This path launches the real Node binary repeatedly to probe candidates and
-// check the archive. Let its existing 15s subprocess deadline report failures
-// before the enclosing test expires on slower macOS runners.
-}, 20000)
+}, installerTestTimeout)

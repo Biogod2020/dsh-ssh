@@ -13,7 +13,7 @@ const reviewed: Record<string, string> = {
   'session.fork': '669:7b8d3237', 'session.archive': '235:ac54280e',
 }
 
-/** Compatibility identity, not a security digest. Taken from unmodified RC2/RC3
+/** Compatibility identity, not a security digest. Taken from unmodified RC2/RC3/RC5
  * resolver functions; an upstream implementation change requires review. */
 function fingerprint(fn: Function): string {
   const code = Function.prototype.toString.call(fn)
@@ -31,7 +31,7 @@ export function installShortcutTargetRouter(service: unknown, version: unknown,
 ): { supported: boolean; dispose(): void } {
   const unavailable = { supported: false, dispose() {} }
   try {
-  if (!['0.2.1-rc.2', '0.2.1-rc.3'].includes(String(version))) return unavailable
+  if (!['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5'].includes(String(version))) return unavailable
   const face = service as { registry?: { commands?: unknown }; catalog?: { subscribe(listener: () => void): () => void } } | undefined
   const commands = face?.registry?.commands
   if (!(commands instanceof Map) || typeof face?.catalog?.subscribe !== 'function') return unavailable
