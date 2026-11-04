@@ -66,9 +66,11 @@ async function enabled(configFile: string): Promise<boolean> {
   try { return (await readJson<UpdateConfig>(configFile)).enabled === true } catch { return false }
 }
 async function execute(config: UpdateConfig, args: string[], cwd: string): Promise<void> {
+  // pnpm's workspace importer key must use the same physical path on every run.
+  const physicalCwd = await realpath(cwd)
   await new Promise<void>((resolveRun, reject) => {
     const child = spawn(config.packageManager.command, [...config.packageManager.args, ...args], {
-      cwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32',
+      cwd: physicalCwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32',
     })
     const timer = setTimeout(() => {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM') } catch {}
