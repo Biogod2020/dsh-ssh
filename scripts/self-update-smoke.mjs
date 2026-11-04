@@ -129,7 +129,7 @@ try {
   await host.setEnabled(false)
   host.child.kill('SIGTERM'); await new Promise(resolve => host.child.once('exit', resolve))
   try {
-    await exec(config.packageManager.command, [...config.packageManager.args, 'install', '--frozen-lockfile', '--offline', '--ignore-scripts', '--ignore-pnpmfile', '--registry=' + registry],
+    await exec(config.packageManager.command, [...config.packageManager.args, 'install', '--frozen-lockfile', '--ignore-scripts', '--ignore-pnpmfile', '--registry=' + registry],
     { cwd: await realpath(profile), env: { ...env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 120000 })
   } catch (error) { console.error(await readFile(join(root, 'package-manager.log'), 'utf8')); throw error }
   assert.equal(JSON.parse(await readFile(join(profile, 'node_modules/@biogod/dsh-ssh/package.json'), 'utf8')).version, version)
