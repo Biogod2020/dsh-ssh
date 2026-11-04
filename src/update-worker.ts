@@ -212,6 +212,8 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
       // Keep normal pnpm metadata and relative local dependencies in their original
       // profile context. This command changes no installed package files.
       await execute(config, ['add', UPDATE_PACKAGE + '@' + version, '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile', '--save-exact', '--registry=' + source], config.profile)
+      // Validate the importer without changing installed files before activation.
+      await execute(config, ['install', '--lockfile-only', '--frozen-lockfile', '--ignore-scripts', '--ignore-pnpmfile', '--registry=' + source], config.profile)
       if (await textOrNull(join(config.profile, 'pnpm-workspace.yaml')) !== files['pnpm-workspace.yaml']) throw new Error('Package policy changed during the update')
       const after = await readJson<Manifest>(join(config.profile, 'package.json'))
       if (after.dependencies?.[UPDATE_PACKAGE] !== version || !(await readFile(join(config.profile, 'pnpm-lock.yaml'), 'utf8')).includes(candidate.dist!.integrity!)) throw new Error('Prepared lockfile does not match the verified package')
