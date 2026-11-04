@@ -128,8 +128,10 @@ try {
   assert.equal((await host.view()).runningVersion, version, 'the next Host must execute the prepared package')
   await host.setEnabled(false)
   host.child.kill('SIGTERM'); await new Promise(resolve => host.child.once('exit', resolve))
-  await exec(config.packageManager.command, [...config.packageManager.args, 'install', '--frozen-lockfile', '--ignore-scripts', '--ignore-pnpmfile', '--registry=' + registry],
+  try {
+    await exec(config.packageManager.command, [...config.packageManager.args, 'install', '--frozen-lockfile', '--offline', '--ignore-scripts', '--ignore-pnpmfile', '--registry=' + registry],
     { cwd: profile, env: { ...env, ...config.packageManager.env }, timeout: 120000 })
+  } catch (error) { console.error(await readFile(join(root, 'package-manager.log'), 'utf8')); throw error }
   assert.equal(JSON.parse(await readFile(join(profile, 'node_modules/@biogod/dsh-ssh/package.json'), 'utf8')).version, version)
   console.log('Self-update acceptance passed: real pnpm, verified archive, active Host protection, exit installation, retained SSH config, and new version after restart')
 } finally {
