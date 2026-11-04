@@ -13,7 +13,7 @@ const reviewed: Record<string, string> = {
   'session.fork': '669:7b8d3237', 'session.archive': '235:ac54280e',
 }
 
-/** Compatibility identity, not a security digest. Taken from unmodified RC2/RC3/RC5
+/** Compatibility identity, not a security digest. Taken from the shipped 0.2.1 RC
  * resolver functions; an upstream implementation change requires review. */
 function fingerprint(fn: Function): string {
   const code = Function.prototype.toString.call(fn)
@@ -31,7 +31,10 @@ export function installShortcutTargetRouter(service: unknown, version: unknown,
 ): { supported: boolean; dispose(): void } {
   const unavailable = { supported: false, dispose() {} }
   try {
-  if (!['0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.5'].includes(String(version))) return unavailable
+  // Stay within the 0.2.1 release line. The shape and fingerprints below
+  // decide whether a newly installed Host can safely embed remote sessions.
+  const release = typeof version === 'string' && /^0\.2\.1(?:-rc\.(0|[1-9]\d*))?$/.exec(version)
+  if (!release || (release[1] !== undefined && Number(release[1]) < 2)) return unavailable
   const face = service as { registry?: { commands?: unknown }; catalog?: { subscribe(listener: () => void): () => void } } | undefined
   const commands = face?.registry?.commands
   if (!(commands instanceof Map) || typeof face?.catalog?.subscribe !== 'function') return unavailable

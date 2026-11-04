@@ -7,11 +7,11 @@
   },
   "packageManager": "pnpm@11.20.0",
   "description": "Standalone SSH operations and full remote workspaces for DSH, with strict known_hosts verification, authenticated browser access, no operation replay, and no telemetry.",
-  "version": "0.3.24-jay.67",
+  "version": "0.3.24-jay.68",
   "type": "module",
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": "0.2.0-rc.2 || 0.2.1-alpha.4 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.5"
+    "dsh": "0.2.0-rc.2 || 0.2.1-alpha.4 || >=0.2.1-rc.2 <0.2.2-0"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -33,7 +33,7 @@
   },
   "dsh": {
     "engines": {
-      "dsh": "0.2.0-rc.2 || 0.2.1-alpha.4 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.5"
+      "dsh": "0.2.0-rc.2 || 0.2.1-alpha.4 || >=0.2.1-rc.2 <0.2.2-0"
     },
     "bundle": {
       "patch": "./cordis.patch.yml"
