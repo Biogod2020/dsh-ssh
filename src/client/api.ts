@@ -31,6 +31,7 @@ import { sameClusterTargets } from '../cluster-targets.ts'
 import type { TerminalContinuityState } from '../terminal-continuity.ts'
 import type { PluginSyncJob, ServerPluginComparison } from '../remote/plugin-types.ts'
 import type { ModelFollowView, ModelFollowPolicyChange } from '../remote/model-types.ts'
+import type { PluginUpdateView } from '../update-types.ts'
 
 /** Minimal File System Access API surface (not in all lib.dom versions). */
 interface WindowWithFileSystemAccess {
@@ -166,6 +167,13 @@ export interface TerminalConnection {
 
 /** The browser half's only data entry point. */
 export class SshApi {
+  async pluginUpdate(): Promise<PluginUpdateView> {
+    return readJson(await fetch('/api/dsh-ssh/update', { signal: AbortSignal.timeout(10000) }))
+  }
+  async setPluginUpdate(enabled: boolean): Promise<PluginUpdateView> {
+    return readJson(await fetch('/api/dsh-ssh/update', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }), signal: AbortSignal.timeout(45000) }))
+  }
   /** Bound this browser's response observation only. The controller retains a
    * dispatched policy/sync operation and its status; it must not be replayed. */
   private async modelRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 10000): Promise<T> {

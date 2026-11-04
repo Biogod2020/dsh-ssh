@@ -3,6 +3,17 @@
  */
 
 export const zh = {
+  'update.title': '插件更新',
+  'update.help': '开启后，每次启动及每隔 6 小时检查兼容的新版本。更新程序会后台准备安装包，等本配置的所有 DSH 进程退出后安装，下次启动生效。此开关会注册当前账号的后台更新服务。',
+  'update.enable': '自动更新 SSH 插件',
+  'update.version': '本次运行版本',
+  'update.disabled': '自动更新已关闭',
+  'update.ready': '自动更新已开启',
+  'update.checking': '正在检查更新',
+  'update.waiting': '更新已准备好，等待 DSH 退出',
+  'update.installed': '已安装更新，下次启动生效',
+  'update.failed': '更新未完成。下次检查会恢复中断状态或重新准备；请查看下一次检查结果。',
+  'update.unsupported': '自动更新需要通过 npm 安装，并在 macOS 桌面账号或支持用户 systemd 的 Linux 环境运行。',
   'models.title': '服务器模型',
   'models.help': '远端默认跟随本机的 API 模型配置和密钥；连接后自动同步，本机修改后自动更新。',
   'models.mode': '配置来源',
@@ -668,6 +679,17 @@ export const zh = {
 } as const
 
 export const en: Record<keyof typeof zh, string> = {
+  'update.title': 'Plugin updates',
+  'update.help': 'Check for compatible releases at startup and every 6 hours. The updater prepares the package in the background, installs after every DSH process using this profile exits, and takes effect at next launch. Enabling registers a background updater for your account.',
+  'update.enable': 'Automatically update the SSH plugin',
+  'update.version': 'Running version',
+  'update.disabled': 'Automatic updates are off',
+  'update.ready': 'Automatic updates are on',
+  'update.checking': 'Checking for updates',
+  'update.waiting': 'Update prepared; waiting for DSH to exit',
+  'update.installed': 'Update installed; takes effect at next launch',
+  'update.failed': 'Update did not finish. The next check will recover interrupted state or prepare it again.',
+  'update.unsupported': 'Automatic updates require an npm installation on macOS or Linux with user systemd.',
   'models.title': 'Server models',
   'models.help': 'Remote hosts follow local API model settings and keys by default. Sync runs after connection and when local settings change.',
   'models.mode': 'Configuration source',

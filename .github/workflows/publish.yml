@@ -64,6 +64,12 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc25/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts tests/shortcut-routing.test.ts
+      - name: Accept independent self-update after Host exit
+        run: |
+          shopt -s nullglob
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          test "${#archives[@]}" -eq 1
+          node scripts/self-update-smoke.mjs "$RUNNER_TEMP/dsh-rc25/node_modules/.bin/dsh" "${archives[0]}"
       - name: Verify RC4 workspace and shortcut contracts
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc24/node_modules/.bin/dsh
