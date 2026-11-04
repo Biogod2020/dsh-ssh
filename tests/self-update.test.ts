@@ -186,3 +186,15 @@ it('turns consent back off when installing the user service fails', async () => 
   expect((await updater.view()).enabled).toBe(false)
   expect(launch).not.toHaveBeenCalled()
 })
+
+it.skipIf(process.platform !== 'win32')('resolves the Windows pnpm command to an executable invocation', async () => {
+  const f = await fixture(), pkg = join(f.profile, 'bootstrap')
+  await mkdir(join(pkg, 'lib'), { recursive: true }); await atomicJson(join(pkg, 'package.json'), { version: '0.3.24-jay.69' })
+  await writeFile(join(pkg, 'lib/update-worker.js'), '// fixture')
+  await atomicJson(f.configFile, { ...f.config, enabled: false })
+  const updater = new SelfUpdate({ dir: f.profile, home: f.profile, installAnchor: f.runtime }, { packageRoot: pkg })
+  expect((await updater.view()).supported).toBe(true)
+  const invocation = (await readJson<UpdateConfig>(f.configFile)).packageManager
+  expect(invocation.command).toMatch(/\.exe$/i)
+  expect(invocation.command).not.toMatch(/\.cmd$/i)
+})

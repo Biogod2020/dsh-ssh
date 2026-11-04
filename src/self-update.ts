@@ -54,7 +54,7 @@ export class SelfUpdate {
     const packageManager = { ...(this.profile.packageManager ?? { command: 'pnpm', args: [], env: {} }) }
     if (!isAbsolute(packageManager.command)) {
       // Resolve PATH once, so the independent scheduler does not depend on an interactive shell.
-      const candidates = (process.env.PATH ?? '').split(delimiter).flatMap(dir => (process.platform === 'win32' ? ['', '.exe', '.cmd'] : ['']).map(ext => join(dir, packageManager.command + ext)))
+      const candidates = (process.env.PATH ?? '').split(delimiter).flatMap(dir => (process.platform === 'win32' ? ['.exe', '.cmd'] : ['']).map(ext => join(dir, packageManager.command + ext)))
       const found = await Promise.all(candidates.map(async path => { try { await access(path); return path } catch { return undefined } }))
       const command = found.find(Boolean)
       if (!command) return
