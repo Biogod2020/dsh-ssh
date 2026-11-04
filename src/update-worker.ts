@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, rm, readdir, lstat, symlink, realpath } from 'node:fs/promises'
-import { join, dirname, resolve } from 'node:path'
+import { join, dirname, resolve, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -103,6 +103,10 @@ async function textOrNull(path: string): Promise<string | null> {
   try { return await readFile(path, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
 }
 async function restore(root: string, journal: Journal): Promise<void> {
+  // A previous release may have recorded a /var alias or Windows 8.3 path.
+  // Resolve parents only: the target can be absent and the backup can be a relative symlink.
+  journal.target = join(await realpath(dirname(journal.target)), basename(journal.target))
+  journal.backup = join(await realpath(dirname(journal.backup)), basename(journal.backup))
   if (resolve(journal.target) !== join(dirname(root), 'node_modules', '@biogod', 'dsh-ssh')
     || dirname(journal.backup) !== root || !/^previous-[a-f0-9-]+$/.test(journal.backup.slice(root.length + 1))
     || metadataFiles.some(name => !(name in journal.files))
