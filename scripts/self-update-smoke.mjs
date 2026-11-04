@@ -106,7 +106,7 @@ try {
   helper.stderr.on('data', bytes => { diagnostics += bytes })
   const phase = async () => JSON.parse(await readFile(join(state, 'status.json'), 'utf8')).phase
   try { await wait(async () => await phase() === 'waiting') }
-  catch (error) { await writeFile(join(root, 'helper.log'), diagnostics, { mode: 0o600 }); throw error }
+  catch (error) { await writeFile(join(root, 'helper.log'), diagnostics, { mode: 0o600 }); console.error(diagnostics); console.error(await readFile(join(root, 'package-manager.log'), 'utf8').catch(() => 'Package manager was not started')); throw error }
   assert.equal((await host.view()).runningVersion, baseVersion, 'the running Host must not be replaced')
   host.child.kill('SIGTERM'); await new Promise(resolve => host.child.once('exit', resolve))
   await wait(async () => helper.exitCode !== null)
