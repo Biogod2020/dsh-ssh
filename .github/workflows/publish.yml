@@ -363,7 +363,7 @@ jobs:
           Copy-Item lib/index.js, lib/client.js, lib/update-worker.js .artifacts/extracted/package/lib/
           Copy-Item package.json .artifacts/extracted/package/package.json
           Push-Location .artifacts/extracted/package
-          npm pack --ignore-scripts --pack-destination ../../../current
+          npm pack --ignore-scripts --pack-destination "$env:GITHUB_WORKSPACE/.artifacts/current"
           Pop-Location
       - run: npm install --prefix "$env:RUNNER_TEMP/dsh-windows" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
       - run: |
