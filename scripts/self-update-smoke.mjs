@@ -1,7 +1,7 @@
 /** Real package-manager and Host restart acceptance, entirely in a generated HOME. */
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join, dirname } from 'node:path'
+import { join, dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { spawn, execFile } from 'node:child_process'
@@ -9,7 +9,8 @@ import { promisify } from 'node:util'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 
-const [dsh, archive] = process.argv.slice(2)
+const [dsh, archiveArgument] = process.argv.slice(2)
+const archive = archiveArgument && resolve(archiveArgument)
 const normalize = (command, args) => {
   if (command === 'npm' && process.platform === 'win32') return [process.execPath, [join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), ...args]]
   if (/\.js$/.test(command)) return [process.execPath, [command, ...args]]
