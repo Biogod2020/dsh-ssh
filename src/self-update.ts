@@ -66,7 +66,18 @@ export class SelfUpdate {
       let entry: string | undefined
       for (const name of ['pnpm', 'corepack']) {
         try {
-          const manifest = require.resolve(name + '/package.json')
+          let manifest: string | undefined
+          try { manifest = require.resolve(name + '/package.json') }
+          catch {
+            // pnpm 11 exports its manifest as '.', while hiding './package.json'.
+            let directory = dirname(require.resolve(name))
+            for (let depth = 0; depth < 4; depth++) {
+              const candidate = join(directory, 'package.json')
+              try { if ((await readJson<{ name?: string }>(candidate)).name === name) { manifest = candidate; break } } catch {}
+              directory = dirname(directory)
+            }
+          }
+          if (!manifest) continue
           const metadata = await readJson<{ bin?: string | Record<string, string> }>(manifest)
           const bin = typeof metadata.bin === 'string' ? metadata.bin : metadata.bin?.pnpm
           if (!bin || !/\.[cm]?js$/.test(bin)) continue

@@ -217,7 +217,7 @@ it.each(['pnpm.mjs', 'pnpm.cjs'])('reads the declared Windows shim entry %s with
   await mkdir(join(pkg, 'lib'), { recursive: true }); await atomicJson(join(pkg, 'package.json'), { version: '0.3.24-jay.69' })
   await writeFile(join(pkg, 'lib/update-worker.js'), '// fixture')
   await mkdir(join(bin, '..'), { recursive: true }); await writeFile(bin, '// fixture manager')
-  await atomicJson(join(bin, '../../package.json'), { name: 'pnpm', version: '11.20.0', bin: { pnpm: 'bin/' + entryName } })
+  await atomicJson(join(bin, '../../package.json'), { name: 'pnpm', version: '11.20.0', exports: { '.': './package.json' }, bin: { pnpm: 'bin/' + entryName } })
   const shim = join(f.profile, 'manager/pnpm.cmd'); await writeFile(shim, '@echo off')
   await atomicJson(f.configFile, { ...f.config, enabled: false })
   const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
