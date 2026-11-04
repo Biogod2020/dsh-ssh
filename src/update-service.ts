@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -8,6 +8,8 @@ import type { UpdateConfig } from './update-types.ts'
 
 const run = promisify(execFile)
 const xml = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+const psQuote = (value: string) => "'" + value.replaceAll("'", "''") + "'"
+const powershell = (code: string) => ['powershell.exe', '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from('$ErrorActionPreference = \'Stop\'; ' + code, 'utf16le').toString('base64')]
 const unitArg = (text: string) => '"' + text.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('%', '%%').replaceAll('$', '$$') + '"'
 
 /** A per-user scheduler keeps the helper available if DSH later refuses the old plugin. */
@@ -35,25 +37,39 @@ export function updateServicePlan(configFile: string, worker: string, config: Up
       disable: [['systemctl', '--user', 'stop', id + '.timer'], ['systemctl', '--user', 'disable', id + '.timer'], ['systemctl', '--user', 'stop', id + '.service']],
     }
   }
-  throw new Error('The automatic updater currently requires macOS launchd or Linux user systemd')
+  if (platform === 'win32') {
+    const launcher = join(dirname(configFile), 'scheduled-update.ps1')
+    const task = psQuote(id)
+    const register = `$user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; `
+      + `$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ${psQuote('-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + launcher + '"')}; `
+      + `$login = New-ScheduledTaskTrigger -AtLogOn -User $user; `
+      + `$repeat = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Hours 6); `
+      + `$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; `
+      + `$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable; `
+      + `Register-ScheduledTask -TaskName ${task} -Action $action -Trigger @($login, $repeat) -Principal $principal -Settings $settings -Force | Out-Null`
+    return { files: { [launcher]: "$ErrorActionPreference = 'Stop'\n$env:ELECTRON_RUN_AS_NODE = '1'\n& " + args.map(psQuote).join(' ') + '\nexit $LASTEXITCODE\n' },
+      enable: [powershell(register)],
+      disable: [powershell(`Get-ScheduledTask -TaskName ${task} -ErrorAction SilentlyContinue | Stop-ScheduledTask; Get-ScheduledTask -TaskName ${task} -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false`)] }
+  }
+  throw new Error('The automatic updater requires macOS launchd, Linux user systemd or Windows Task Scheduler')
 }
 
 export async function configureUpdateService(configFile: string, worker: string, config: UpdateConfig, enabled: boolean): Promise<void> {
   const plan = updateServicePlan(configFile, worker, config)
   if (!enabled) for (const path of Object.keys(plan.files)) await rm(path, { force: true })
-  for (const args of plan.disable) { try { await run(args[0], args.slice(1), { timeout: 10000 }) } catch { /* Not loaded yet. */ } }
+  for (const args of plan.disable) { try { await run(args[0]!,  args.slice(1), { timeout: 30000, windowsHide: true }) } catch { /* Not loaded yet. */ } }
   if (enabled) {
     for (const [path, content] of Object.entries(plan.files)) {
       await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
       await writeFile(path, content, { mode: 0o600 })
     }
-    try { for (const args of plan.enable) await run(args[0], args.slice(1), { timeout: 10000 }) }
+    try { for (const args of plan.enable) await run(args[0]!,  args.slice(1), { timeout: 30000, windowsHide: true }) }
     catch (error) {
-      for (const args of plan.disable) { try { await run(args[0], args.slice(1), { timeout: 10000 }) } catch {} }
+      for (const args of plan.disable) { try { await run(args[0]!,  args.slice(1), { timeout: 30000, windowsHide: true }) } catch {} }
       for (const path of Object.keys(plan.files)) await rm(path, { force: true })
       throw error
     }
   } else {
-    if (process.platform === 'linux') await run('systemctl', ['--user', 'daemon-reload'], { timeout: 10000 }).catch(() => {})
+    if (process.platform === 'linux') await run('systemctl', ['--user', 'daemon-reload'], { timeout: 30000, windowsHide: true }).catch(() => {})
   }
 }

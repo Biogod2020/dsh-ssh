@@ -67,7 +67,7 @@ async function enabled(configFile: string): Promise<boolean> {
 async function execute(config: UpdateConfig, args: string[], cwd: string): Promise<void> {
   await new Promise<void>((resolveRun, reject) => {
     const child = spawn(config.packageManager.command, [...config.packageManager.args, ...args], {
-      cwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', detached: process.platform !== 'win32',
+      cwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32',
     })
     const timer = setTimeout(() => {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM') } catch {}
@@ -185,8 +185,10 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
     // A short quiet period lets replacement Hosts register before installation.
     await delay(1500)
     if (!await enabled(configFile) || await hostsActive(root)) return
-    unlockProfile = await lock(join(config.profile, 'package.json.lock'))
-    if (!unlockProfile) { await status('waiting', { availableVersion: version }); return }
+    while (!(unlockProfile = await lock(join(config.profile, 'package.json.lock')))) {
+      if (!await enabled(configFile) || await hostsActive(root)) return
+      await delay(1000)
+    }
     if (await hostsActive(root) || !await enabled(configFile)) return
     const before = await readJson<Manifest>(join(config.profile, 'package.json'))
     if (before.dependencies?.[UPDATE_PACKAGE] !== spec

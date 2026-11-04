@@ -327,8 +327,31 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  publish:
+  windows-update:
     needs: verify
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.16.0'
+          package-manager-cache: false
+      - run: npm install --global pnpm@11.20.0 --ignore-scripts
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm exec vitest run tests/self-update.test.ts
+      - run: node scripts/windows-update-service-smoke.mjs
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: verified-npm-package
+          path: release
+      - run: npm install --prefix "$env:RUNNER_TEMP/dsh-windows" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
+      - run: |
+          $archive = (Get-ChildItem release/*.tgz).FullName
+          node scripts/self-update-smoke.mjs "$env:RUNNER_TEMP/dsh-windows/node_modules/@deepseek-ai/dsh/lib/bin.js" "$archive"
+
+  publish:
+    needs: [verify, windows-update]
     if: github.repository == 'Biogod2020/dsh-ssh' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 10

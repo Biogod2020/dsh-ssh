@@ -1,14 +1,22 @@
 /** Real package-manager and Host restart acceptance, entirely in a generated HOME. */
 import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
 
-const exec = promisify(execFile), [dsh, archive] = process.argv.slice(2)
+const [dsh, archive] = process.argv.slice(2)
+const normalize = (command, args) => {
+  if (command === 'npm' && process.platform === 'win32') return [process.execPath, [join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js'), ...args]]
+  if (/\.js$/.test(command)) return [process.execPath, [command, ...args]]
+  return [command, args]
+}
+const exec = (command, args, options) => { const [bin, argv] = normalize(command, args); return promisify(execFile)(bin, argv, { windowsHide: true, ...options }) }
+const start = (command, args, options) => { const [bin, argv] = normalize(command, args); return spawn(bin, argv, { windowsHide: true, ...options }) }
 assert(dsh && archive, 'usage: self-update-smoke.mjs <DSH executable> <verified archive>')
 const root = await mkdtemp(join(tmpdir(), 'dsh-self-update-smoke-'))
 const home = join(root, 'home'), extracted = join(root, 'artifact')
@@ -21,7 +29,7 @@ await writeFile(join(pkgDir, 'package.json'), JSON.stringify(manifest))
 await exec('npm', ['pack', '--ignore-scripts', '--pack-destination', root], { cwd: pkgDir, timeout: 60000 })
 const packed = await readFile(join(root, `biogod-dsh-ssh-${version}.tgz`))
 const integrity = 'sha512-' + createHash('sha512').update(packed).digest('base64')
-const env = { ...process.env, HOME: home, DSH_HOME: join(home, '.dsh') }
+const env = { ...process.env, HOME: home, ...(process.platform === 'win32' ? { USERPROFILE: home } : {}), DSH_HOME: join(home, '.dsh') }
 await exec(dsh, ['plugin', '--profile', 'web', 'add', archive, '--registry=https://registry.npmjs.org'], { env, timeout: 90000 })
 const profile = join(env.DSH_HOME, 'profiles/web'), state = join(profile, '.dsh-ssh-updates')
 // The tarball stands in for the npm release awaiting publication.
@@ -41,7 +49,7 @@ async function wait(check, milliseconds = 120000) {
 }
 async function startHost(label) {
   let output = ''
-  const child = spawn(dsh, ['web', '--host', '127.0.0.1', '--port', '0', '--no-open'], { env, stdio: ['ignore', 'pipe', 'pipe'] }); children.push(child)
+  const child = start(dsh, ['web', '--host', '127.0.0.1', '--port', '0', '--no-open'], { env, stdio: ['ignore', 'pipe', 'pipe'] }); children.push(child)
   child.stdout.on('data', chunk => { output += chunk }); child.stderr.on('data', chunk => { output += chunk })
   let login
   await wait(async () => { const raw = output.match(/http:\/\/127\.0\.0\.1:\d+\/\?token=\S+/)?.[0]; if (raw) login = new URL(raw); return !!login })
@@ -93,8 +101,8 @@ try {
   await writeFile(configFile, JSON.stringify(config), { mode: 0o600 })
   const worker = join(pkgDir, 'lib/update-worker.js')
   let diagnostics = ''
-  helper = spawn(config.executable, [...config.executableArgs, '--input-type=module', '-e', 'import(process.argv[1]).then(m=>m.runUpdate(process.argv[2],{registry:process.argv[3],onError:e=>console.error(e)}))', worker, configFile, registry],
-    { env: { ...env, PATH: '/usr/bin:/bin:/usr/sbin:/sbin', ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'ignore', 'pipe'] }); children.push(helper)
+  helper = spawn(config.executable, [...config.executableArgs, '--input-type=module', '-e', 'import(process.argv[1]).then(m=>m.runUpdate(process.argv[2],{registry:process.argv[3],onError:e=>console.error(e)}))', pathToFileURL(worker).href, configFile, registry],
+    { env: { ...env, PATH: process.platform === 'win32' ? process.env.SystemRoot + '\\System32;' + process.env.SystemRoot : '/usr/bin:/bin:/usr/sbin:/sbin', ELECTRON_RUN_AS_NODE: '1' }, stdio: ['ignore', 'ignore', 'pipe'] }); children.push(helper)
   helper.stderr.on('data', bytes => { diagnostics += bytes })
   const phase = async () => JSON.parse(await readFile(join(state, 'status.json'), 'utf8')).phase
   try { await wait(async () => await phase() === 'waiting') }
