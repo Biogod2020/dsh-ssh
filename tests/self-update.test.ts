@@ -194,18 +194,6 @@ it.skipIf(process.platform !== 'win32')('resolves the Windows pnpm command to an
   await atomicJson(f.configFile, { ...f.config, enabled: false })
   const updater = new SelfUpdate({ dir: f.profile, home: f.profile, installAnchor: f.runtime }, { packageRoot: pkg })
   const view = await updater.view()
-  if (!view.supported) {
-    const { execFileSync } = await import('node:child_process')
-    const { createRequire } = await import('node:module')
-    const commands = execFileSync('where.exe', ['pnpm.cmd'], { encoding: 'utf8' }).trim().split(/\r?\n/)
-    for (const command of commands) {
-      const require = createRequire(join(command, '../diagnostic.cjs'))
-      const diagnostic: Record<string, unknown> = { command, pathKeys: Object.keys(process.env).filter(key => key.toLowerCase() === 'path') }
-      for (const name of ['pnpm', 'corepack']) { try { const manifest = require.resolve(name + '/package.json'); diagnostic[name] = { manifest, metadata: (await readJson<any>(manifest)).bin } } catch (error) { diagnostic[name] = String(error) } }
-      console.info('WINDOWS_MANAGER_DIAGNOSTIC', JSON.stringify(diagnostic))
-      console.info((await readFile(command, 'utf8')).slice(0, 1200))
-    }
-  }
   expect(view.supported).toBe(true)
   const invocation = (await readJson<UpdateConfig>(f.configFile)).packageManager
   expect(invocation.command).toMatch(/\.exe$/i)
@@ -227,6 +215,7 @@ it.each(['pnpm.mjs', 'pnpm.cjs'])('reads the declared Windows shim entry %s with
     expect((await updater.view()).supported).toBe(true)
     const invocation = (await readJson<UpdateConfig>(f.configFile)).packageManager
     expect(invocation.command).toBe(process.execPath)
-    expect(invocation.args).toContain(await realpath(bin))
+    const captured = invocation.args.find(arg => arg.endsWith(entryName))!
+    expect(await realpath(captured)).toBe(await realpath(bin))
   } finally { Object.defineProperty(process, 'platform', platform) }
 })
