@@ -28,6 +28,8 @@ import { RemoteWorkspaces } from './remote/manager.ts'
 import { remoteRoutes } from './remote/routes.ts'
 import { ServerPlugins, localPluginPackages, type PluginManagementContext } from './remote/plugins.ts'
 import { ServerModels, localModelSource, modelBridgeHash } from './remote/models.ts'
+import { SelfUpdate } from './self-update.ts'
+import type { UpdateProfile } from './update-types.ts'
 
 /** Stable cordis plugin name. */
 export const name = 'ssh-ops'
@@ -71,6 +73,9 @@ export const SSH_GUIDANCE = '本机安装独立维护的 SSH Ops 插件（侧边
 export const apply = mountOnce('@biogod/dsh-ssh', applyImpl)
 
 function applyImpl(ctx: Context, config?: Config): void {
+  const updater = new SelfUpdate(ctx.get('profileContext') as UpdateProfile | undefined)
+  ctx.effect(() => ctx.webServer.register(updater.route(req =>
+    (ctx.get('connection') as HostConnectionHandle).requestRejection(req))), 'dsh-ssh: automatic updates')
   // The live source the surfaces read: the settings section once the web
   // settings surface is served, the composition entry otherwise.
   let current: () => Config = () => config ?? {}

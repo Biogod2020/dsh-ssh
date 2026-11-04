@@ -16,10 +16,11 @@ import { TransferTab } from './TransferTab.tsx'
 import { TunnelsTab } from './TunnelsTab.tsx'
 import { ServerPluginsTab } from './ServerPluginsTab.tsx'
 import { ServerModelsTab } from './ServerModelsTab.tsx'
+import { UpdatesTab } from './UpdatesTab.tsx'
 import css from './panel.module.css'
 
 /** The panel's tab identifiers. */
-export type SshTab = 'hosts' | 'terminal' | 'transfer' | 'tunnels' | 'cluster' | 'plugins' | 'models'
+export type SshTab = 'hosts' | 'terminal' | 'transfer' | 'tunnels' | 'cluster' | 'plugins' | 'models' | 'updates'
 
 /** Panel shell props. */
 export interface SshPanelProps {
@@ -40,6 +41,7 @@ const TABS: ReadonlyArray<{ id: SshTab; label: () => string }> = [
   { id: 'cluster', label: () => tt('tab.cluster') },
   { id: 'plugins', label: () => tt('tab.plugins') },
   { id: 'models', label: () => tt('models.title') },
+  { id: 'updates', label: () => tt('update.title') },
 ]
 
 /** A pending "connect this host" request handed to the terminal tab. */
@@ -120,6 +122,7 @@ export function SshPanel({ controller, api, terminalFont }: SshPanelProps) {
           {tab.id === 'cluster' && <ClusterTab api={api} active={panelOpen && activeTab === 'cluster'} />}
           {tab.id === 'plugins' && <ServerPluginsTab api={api} active={panelOpen && activeTab === 'plugins'} />}
           {tab.id === 'models' && <ServerModelsTab api={api} active={panelOpen && activeTab === 'models'} />}
+          {tab.id === 'updates' && <UpdatesTab api={api} active={panelOpen && activeTab === 'updates'} />}
         </section>)}
       </div>
     </div>

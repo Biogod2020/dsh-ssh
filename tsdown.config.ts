@@ -10,6 +10,8 @@
 import { clientBundle } from './scripts/tsdown.client.ts'
 
 export default clientBundle('@biogod/dsh-ssh', ['src/index.ts', 'src/invariant.ts'], {
+  companions: [{ entry: ['src/update-worker.ts'], outDir: 'lib', format: 'esm', platform: 'node', target: 'node22',
+    clean: false, noExternal: ['semver'], dts: false, outputOptions: { entryFileNames: 'update-worker.js' } }],
   libExternal: [
     '@deepseek-ai/dsh-client-locale',
     '@deepseek-ai/dsh-client-ui-slots',

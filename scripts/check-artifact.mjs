@@ -7,6 +7,8 @@ assert.equal(pkg.dependencies['@xterm/xterm'], '6.0.0', 'continuation adapter re
 assert.equal(pkg.dependencies['@xterm/headless'], '6.0.0', 'continuation adapter requires the matching headless core')
 assert.equal(pkg.dependencies['@xterm/addon-serialize'], '0.14.0', 'serializer behavior is verified at the pinned version')
 const client = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
+const updater = readFileSync(new URL('../lib/update-worker.js', import.meta.url), 'utf8')
+assert(!/from ["']@deepseek-ai|require\(["'](?:@deepseek-ai|semver)/.test(updater), 'standalone updater must bundle all runtime utilities')
 assert(client.includes(`id: "${pkg.name}"`), 'browser module id must match package name')
 assert(!/reportDailyHeartbeat|dsh-market|api\/telemetry/.test(client), 'no telemetry in browser bundle')
 const requires = [...client.matchAll(/require\("([^"]+)"\)/g)].map(match => match[1])
