@@ -9,7 +9,11 @@ on:
         description: Core release acceptance, or optional extended performance checks
         type: choice
         default: core-e2e
-        options: [core-e2e, all, kernel-only]
+        options: [core-e2e, all, kernel-only, windows-only]
+      verified_run:
+        description: Earlier run providing the verified portable SSH dependency files for Windows development
+        type: string
+        default: '41770070842'
 
 permissions:
   contents: read
@@ -20,7 +24,7 @@ concurrency:
 
 jobs:
   verify:
-    if: github.ref_type == 'tag' || inputs.verification_scope != 'kernel-only'
+    if: github.ref_type == 'tag' || (inputs.verification_scope != 'kernel-only' && inputs.verification_scope != 'windows-only')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -326,6 +330,45 @@ jobs:
           path: ${{ runner.temp }}/kernel-history/*.json
           if-no-files-found: ignore
           retention-days: 14
+
+  windows-development:
+    if: inputs.verification_scope == 'windows-only'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: '24.16.0'
+          package-manager-cache: false
+      - run: npm install --global pnpm@11.20.0 --ignore-scripts
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - run: pnpm build
+      - run: pnpm exec vitest run tests/self-update.test.ts
+      - run: node scripts/windows-update-service-smoke.mjs
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131
+        with:
+          name: verified-npm-package
+          path: dependency-archive
+          run-id: ${{ inputs.verified_run }}
+          github-token: ${{ github.token }}
+      - name: Package the current updater with verified portable SSH dependencies
+        run: |
+          New-Item -ItemType Directory -Force .artifacts/extracted, .artifacts/current
+          $archive = (Get-ChildItem dependency-archive/*.tgz).FullName
+          tar -xzf "$archive" -C .artifacts/extracted
+          Copy-Item lib/index.js, lib/client.js, lib/update-worker.js .artifacts/extracted/package/lib/
+          Copy-Item package.json .artifacts/extracted/package/package.json
+          Push-Location .artifacts/extracted/package
+          npm pack --ignore-scripts --pack-destination ../../../current
+          Pop-Location
+      - run: npm install --prefix "$env:RUNNER_TEMP/dsh-windows" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
+      - run: |
+          $archive = (Get-ChildItem .artifacts/current/*.tgz).FullName
+          node scripts/self-update-smoke.mjs "$env:RUNNER_TEMP/dsh-windows/node_modules/@deepseek-ai/dsh/lib/bin.js" "$archive"
 
   windows-update:
     needs: verify
