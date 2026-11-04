@@ -19,7 +19,14 @@ const env = { ...process.env, HOME: home, DSH_HOME: join(home, '.dsh') }
 if (process.argv[4] === '--from-link') {
   await run(dsh, ['plugin', '--profile', 'web', 'add', `link:${process.cwd()}`], { env, timeout: 60000 })
 }
-await run(dsh, ['plugin', '--profile', 'web', 'add', source, ...registryArgs], { env, timeout: 60000 })
+const installDsh = process.argv[4] === '--upgrade-from' ? process.argv[5] : dsh
+assert(installDsh, '--upgrade-from requires a previous DSH executable')
+await run(installDsh, ['plugin', '--profile', 'web', 'add', source, ...registryArgs], { env, timeout: 60000 })
+if (installDsh !== dsh) {
+  const previous = (await run(installDsh, ['--version'])).stdout.trim()
+  assert.notEqual(previous, version, 'upgrade smoke must change the Host version')
+  console.log(`Installed on DSH ${previous}; starting the same profile on DSH ${version}`)
+}
 // These disk copies predate this Host process. Exact-archive/by-name checks
 // must prove persistence and selective cleanup, not merely an empty route.
 const cacheRoot = join(env.DSH_HOME, 'remote-workspaces', 'history')

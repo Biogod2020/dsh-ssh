@@ -77,12 +77,16 @@ it('blocks offline/modal input and ignores repeats or a changed target without f
   } finally { f.dispose() }
 })
 
-it('rejects unknown versions or changed functions without partially modifying native commands', () => {
+it('accepts a later 0.2.1 RC only with matching functions and leaves unsupported commands untouched', () => {
   const f = fixture(); f.routing.dispose()
   try {
-    expect(installShortcutTargetRouter(f.service, 'future', () => undefined).supported).toBe(false)
+    const decide = () => undefined
+    const nextRc = installShortcutTargetRouter(f.service, '0.2.1-rc.99', decide)
+    expect(nextRc.supported).toBe(true)
+    nextRc.dispose()
+    expect(installShortcutTargetRouter(f.service, '0.2.2-alpha.1', decide).supported).toBe(false)
     f.registry.commands.get('session.archive').resolve = () => ({ status: 'pass' })
-    expect(installShortcutTargetRouter(f.service, sdk.version, () => undefined).supported).toBe(false)
+    expect(installShortcutTargetRouter(f.service, '0.2.1-rc.99', decide).supported).toBe(false)
     for (const id of ['session.new', 'session.rename', 'session.fork']) expect(f.registry.commands.get(id).resolve).toBe(f.originals.get(id))
   } finally { f.dispose() }
 })
