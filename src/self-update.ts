@@ -2,8 +2,9 @@ import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { mkdir, readFile, writeFile, lstat, chmod, access } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { dirname, join, isAbsolute } from 'node:path'
+import { dirname, join, isAbsolute, delimiter } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { isLoopbackRequest } from './loopback.ts'
 import { readJsonBody, writeJson } from './http.ts'
@@ -37,7 +38,7 @@ export class SelfUpdate {
   private async initialize(): Promise<void> {
     this.runningVersion = (await readJson<{ version: string }>(join(this.packageRoot, 'package.json'))).version
     if (!this.profile || !isAbsolute(this.profile.dir) || !isAbsolute(this.profile.installAnchor)
-      || !['darwin', 'linux'].includes(process.platform)) return
+      || !['darwin', 'linux', 'win32'].includes(process.platform)) return
     const installed = await readJson<{ dependencies?: Record<string, string> }>(join(this.profile.dir, 'package.json'))
     const spec = installed.dependencies?.[UPDATE_PACKAGE]
     if (!spec || /^(?:file:|link:|workspace:|git|https?:)/.test(spec)) return
@@ -50,14 +51,29 @@ export class SelfUpdate {
     this.configFile = join(root, 'config.json')
     let previous: UpdateConfig | undefined
     try { previous = await readJson<UpdateConfig>(this.configFile) } catch {}
-    const packageManager = this.profile.packageManager ?? { command: 'pnpm', args: [], env: {} }
+    const packageManager = { ...(this.profile.packageManager ?? { command: 'pnpm', args: [], env: {} }) }
     if (!isAbsolute(packageManager.command)) {
       // Resolve PATH once, so the independent scheduler does not depend on an interactive shell.
-      const candidates = (process.env.PATH ?? '').split(':').map(dir => join(dir, packageManager.command))
+      const candidates = (process.env.PATH ?? '').split(delimiter).flatMap(dir => (process.platform === 'win32' ? ['.exe', '.cmd'] : ['']).map(ext => join(dir, packageManager.command + ext)))
       const found = await Promise.all(candidates.map(async path => { try { await access(path); return path } catch { return undefined } }))
       const command = found.find(Boolean)
       if (!command) return
       packageManager.command = command
+    }
+    if (process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(packageManager.command)) {
+      // Invoke the package manager's JS entry directly; never pass package arguments through cmd.exe.
+      const require = createRequire(join(dirname(packageManager.command), 'updater.cjs'))
+      let entry: string | undefined
+      for (const name of ['pnpm', 'corepack']) {
+        try {
+          const manifest = require.resolve(name + '/package.json')
+          const candidate = join(dirname(manifest), name === 'pnpm' ? 'bin/pnpm.cjs' : 'dist/pnpm.js')
+          await access(candidate); entry = candidate; break
+        } catch {}
+      }
+      if (!entry) return
+      packageManager.command = process.execPath
+      packageManager.args = [...(process.versions.electron ? ['--expose-internals'] : []), entry, ...packageManager.args]
     }
     this.config = { enabled: previous?.enabled === true, profile: this.profile.dir, runtimeManifest: this.profile.installAnchor,
       executable: process.execPath, executableArgs: process.versions.electron ? ['--expose-internals'] : [],
@@ -79,7 +95,7 @@ export class SelfUpdate {
     if (!this.configFile || !this.worker || !this.config) return
     if (this.options.launch) { this.options.launch(this.configFile, this.worker, this.config); return }
     const child = spawn(this.config.executable, [...this.config.executableArgs, this.worker, '--config', this.configFile], {
-      detached: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+      detached: true, windowsHide: true, stdio: 'ignore', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
     })
     child.on('error', () => { void atomicJson(join(dirname(this.configFile!), 'status.json'), { phase: 'failed', checkedAt: Date.now() }).catch(() => {}) })
     child.unref()

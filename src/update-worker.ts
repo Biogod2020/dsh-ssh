@@ -1,7 +1,8 @@
 /** Standalone updater. This bundle has no DSH runtime imports. */
+import { realpathSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, rm, readdir, lstat, symlink, realpath } from 'node:fs/promises'
-import { join, dirname, resolve } from 'node:path'
+import { join, dirname, resolve, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -67,7 +68,7 @@ async function enabled(configFile: string): Promise<boolean> {
 async function execute(config: UpdateConfig, args: string[], cwd: string): Promise<void> {
   await new Promise<void>((resolveRun, reject) => {
     const child = spawn(config.packageManager.command, [...config.packageManager.args, ...args], {
-      cwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', detached: process.platform !== 'win32',
+      cwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32',
     })
     const timer = setTimeout(() => {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM') } catch {}
@@ -102,6 +103,10 @@ async function textOrNull(path: string): Promise<string | null> {
   try { return await readFile(path, 'utf8') } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null; throw error }
 }
 async function restore(root: string, journal: Journal): Promise<void> {
+  // A previous release may have recorded a /var alias or Windows 8.3 path.
+  // Resolve parents only: the target can be absent and the backup can be a relative symlink.
+  journal.target = join(await realpath(dirname(journal.target)), basename(journal.target))
+  journal.backup = join(await realpath(dirname(journal.backup)), basename(journal.backup))
   if (resolve(journal.target) !== join(dirname(root), 'node_modules', '@biogod', 'dsh-ssh')
     || dirname(journal.backup) !== root || !/^previous-[a-f0-9-]+$/.test(journal.backup.slice(root.length + 1))
     || metadataFiles.some(name => !(name in journal.files))
@@ -123,6 +128,7 @@ async function restore(root: string, journal: Journal): Promise<void> {
 
 /** One check prepares immutable files, waits for every registered Host, then commits. */
 export async function runUpdate(configFile: string, options: WorkerOptions = {}): Promise<void> {
+  configFile = await realpath(configFile)
   const root = dirname(configFile)
   const releaseWorker = await lock(join(root, 'worker.lock'))
   if (!releaseWorker) return
@@ -131,6 +137,7 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
   const status = (phase: PluginUpdateView['phase'], extra = {}) => atomicJson(join(root, 'status.json'), { phase, checkedAt: Date.now(), ...extra })
   try {
     const config = await readJson<UpdateConfig>(configFile)
+    config.profile = await realpath(config.profile)
     if (resolve(config.profile, '.dsh-ssh-updates') !== resolve(root)) throw new Error('Invalid update profile')
     const interrupted = await textOrNull(join(root, 'transaction.json'))
     if (interrupted !== null) {
@@ -185,8 +192,10 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
     // A short quiet period lets replacement Hosts register before installation.
     await delay(1500)
     if (!await enabled(configFile) || await hostsActive(root)) return
-    unlockProfile = await lock(join(config.profile, 'package.json.lock'))
-    if (!unlockProfile) { await status('waiting', { availableVersion: version }); return }
+    while (!(unlockProfile = await lock(join(config.profile, 'package.json.lock')))) {
+      if (!await enabled(configFile) || await hostsActive(root)) return
+      await delay(1000)
+    }
     if (await hostsActive(root) || !await enabled(configFile)) return
     const before = await readJson<Manifest>(join(config.profile, 'package.json'))
     if (before.dependencies?.[UPDATE_PACKAGE] !== spec
@@ -230,6 +239,11 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
   }
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url) && process.argv[2] === '--config') {
-  void runUpdate(process.argv[3]!).catch(() => { process.exitCode = 1 })
+if (process.argv[1] && process.argv[2] === '--config') {
+  try {
+    if (realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+      void runUpdate(process.argv[3]!).catch(() => { process.exitCode = 1 })
+    }
+  } catch { /* Imported by a launcher whose entry has already moved. */ }
 }
+
