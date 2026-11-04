@@ -47,7 +47,7 @@ export function updateServicePlan(configFile: string, worker: string, config: Up
       + `$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; `
       + `$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable; `
       + `Register-ScheduledTask -TaskName ${task} -Action $action -Trigger @($login, $repeat) -Principal $principal -Settings $settings -Force | Out-Null`
-    return { files: { [launcher]: "$ErrorActionPreference = 'Stop'\n$env:ELECTRON_RUN_AS_NODE = '1'\n& " + args.map(psQuote).join(' ') + '\nexit $LASTEXITCODE\n' },
+    return { files: { [launcher]: "\uFEFF$ErrorActionPreference = 'Stop'\n$env:ELECTRON_RUN_AS_NODE = '1'\n& " + args.map(psQuote).join(' ') + '\nexit $LASTEXITCODE\n' },
       enable: [powershell(register)],
       disable: [powershell(`Get-ScheduledTask -TaskName ${task} -ErrorAction SilentlyContinue | Stop-ScheduledTask; Get-ScheduledTask -TaskName ${task} -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false`)] }
   }

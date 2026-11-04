@@ -2,7 +2,7 @@
 import { realpathSync } from 'node:fs'
 import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile, rename, rm, readdir, lstat, symlink, realpath } from 'node:fs/promises'
-import { join, dirname, resolve, basename } from 'node:path'
+import { join, dirname, resolve, basename, relative, isAbsolute } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -66,9 +66,11 @@ async function enabled(configFile: string): Promise<boolean> {
   try { return (await readJson<UpdateConfig>(configFile)).enabled === true } catch { return false }
 }
 async function execute(config: UpdateConfig, args: string[], cwd: string): Promise<void> {
+  // pnpm's workspace importer key must use the same physical path on every run.
+  const physicalCwd = await realpath(cwd)
   await new Promise<void>((resolveRun, reject) => {
     const child = spawn(config.packageManager.command, [...config.packageManager.args, ...args], {
-      cwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32',
+      cwd: physicalCwd, env: { ...process.env, ...config.packageManager.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true, detached: process.platform !== 'win32',
     })
     const timer = setTimeout(() => {
       try { if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM') } catch {}
@@ -105,10 +107,11 @@ async function textOrNull(path: string): Promise<string | null> {
 async function restore(root: string, journal: Journal): Promise<void> {
   // A previous release may have recorded a /var alias or Windows 8.3 path.
   // Resolve parents only: the target can be absent and the backup can be a relative symlink.
+  const physicalRoot = await realpath(root)
   journal.target = join(await realpath(dirname(journal.target)), basename(journal.target))
   journal.backup = join(await realpath(dirname(journal.backup)), basename(journal.backup))
-  if (resolve(journal.target) !== join(dirname(root), 'node_modules', '@biogod', 'dsh-ssh')
-    || dirname(journal.backup) !== root || !/^previous-[a-f0-9-]+$/.test(journal.backup.slice(root.length + 1))
+  if (resolve(journal.target) !== join(dirname(physicalRoot), 'node_modules', '@biogod', 'dsh-ssh')
+    || dirname(journal.backup) !== physicalRoot || !/^previous-[a-f0-9-]+$/.test(basename(journal.backup))
     || metadataFiles.some(name => !(name in journal.files))
     || Object.entries(journal.files).some(([name, content]) => !metadataFiles.includes(name) || (content !== null && typeof content !== 'string'))) throw new Error('Invalid update recovery record')
   // Inspect filesystem facts too: a crash can occur between rename and journal write.
@@ -128,7 +131,6 @@ async function restore(root: string, journal: Journal): Promise<void> {
 
 /** One check prepares immutable files, waits for every registered Host, then commits. */
 export async function runUpdate(configFile: string, options: WorkerOptions = {}): Promise<void> {
-  configFile = await realpath(configFile)
   const root = dirname(configFile)
   const releaseWorker = await lock(join(root, 'worker.lock'))
   if (!releaseWorker) return
@@ -137,8 +139,7 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
   const status = (phase: PluginUpdateView['phase'], extra = {}) => atomicJson(join(root, 'status.json'), { phase, checkedAt: Date.now(), ...extra })
   try {
     const config = await readJson<UpdateConfig>(configFile)
-    config.profile = await realpath(config.profile)
-    if (resolve(config.profile, '.dsh-ssh-updates') !== resolve(root)) throw new Error('Invalid update profile')
+    if (await realpath(join(config.profile, '.dsh-ssh-updates')) !== await realpath(root)) throw new Error('Invalid update profile')
     const interrupted = await textOrNull(join(root, 'transaction.json'))
     if (interrupted !== null) {
       await status('failed')
@@ -173,7 +174,7 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
       || !/^sha512-[A-Za-z0-9+/]+=*$/.test(candidate.dist?.integrity ?? '')) throw new Error('Invalid update artifact')
     const bytes = await limitedFetch(tarball.href, 16 * 1024 * 1024)
     if ('sha512-' + createHash('sha512').update(bytes).digest('base64') !== candidate.dist!.integrity) throw new Error('Update checksum mismatch')
-    const stage = join(root, 'releases', version + '-' + randomUUID())
+    const stage = join(config.profile, '.dsh-ssh-updates', 'releases', version + '-' + randomUUID())
     stagedRelease = stage
     await mkdir(stage, { recursive: true, mode: 0o700 })
     const archive = join(stage, 'package.tgz')
@@ -211,6 +212,8 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
       // Keep normal pnpm metadata and relative local dependencies in their original
       // profile context. This command changes no installed package files.
       await execute(config, ['add', UPDATE_PACKAGE + '@' + version, '--lockfile-only', '--ignore-scripts', '--ignore-pnpmfile', '--save-exact', '--registry=' + source], config.profile)
+      // Validate the importer without changing installed files before activation.
+      await execute(config, ['install', '--lockfile-only', '--frozen-lockfile', '--ignore-scripts', '--ignore-pnpmfile', '--registry=' + source], config.profile)
       if (await textOrNull(join(config.profile, 'pnpm-workspace.yaml')) !== files['pnpm-workspace.yaml']) throw new Error('Package policy changed during the update')
       const after = await readJson<Manifest>(join(config.profile, 'package.json'))
       if (after.dependencies?.[UPDATE_PACKAGE] !== version || !(await readFile(join(config.profile, 'pnpm-lock.yaml'), 'utf8')).includes(candidate.dist!.integrity!)) throw new Error('Prepared lockfile does not match the verified package')
@@ -220,7 +223,13 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
       await rename(target, journal.backup); journal.moved = true
       await atomicJson(join(root, 'transaction.json'), journal)
       await options.afterStep?.('moved')
-      await symlink(await realpath(prepared), target, process.platform === 'win32' ? 'junction' : 'dir'); journal.linked = true
+      const physicalPrepared = await realpath(prepared)
+      const suffix = relative(await realpath(config.profile), physicalPrepared)
+      if (suffix === '..' || suffix.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) || isAbsolute(suffix)) throw new Error('Prepared release is outside the profile')
+      // DSH's Windows resolver recognizes the launcher's original profile spelling.
+      // An 8.3 path and its long name must keep the same SDK interception scope.
+      const installedTarget = process.platform === 'win32' ? join(config.profile, suffix) : physicalPrepared
+      await symlink(installedTarget, target, process.platform === 'win32' ? 'junction' : 'dir'); journal.linked = true
       await atomicJson(join(root, 'transaction.json'), journal)
       if (await hostsActive(root) || !await enabled(configFile)) throw new Error('A Host started during installation')
       await rm(join(root, 'transaction.json'))
@@ -241,7 +250,7 @@ export async function runUpdate(configFile: string, options: WorkerOptions = {})
 
 if (process.argv[1] && process.argv[2] === '--config') {
   try {
-    if (realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
+    if (realpathSync.native(process.argv[1]) === realpathSync.native(fileURLToPath(import.meta.url))) {
       void runUpdate(process.argv[3]!).catch(() => { process.exitCode = 1 })
     }
   } catch { /* Imported by a launcher whose entry has already moved. */ }

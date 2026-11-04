@@ -8,8 +8,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { configureUpdateService } from '../src/update-service.ts'
 assert.equal(process.platform, 'win32')
-const root = await mkdtemp(join(tmpdir(), "dsh updater's task "))
-const configFile = join(root, 'config.json'), worker = join(root, "worker's test.cjs"), marker = join(root, 'ran.json')
+const root = await mkdtemp(join(tmpdir(), "dsh 更新程序's task & "))
+const configFile = join(root, 'config.json'), worker = join(root, "worker's 测试.cjs"), marker = join(root, 'ran.json')
 const id = 'ai.biogod.dsh-ssh-update.' + createHash('sha256').update(configFile).digest('hex').slice(0,16)
 const config = { enabled: true, profile: root, executable: process.execPath, executableArgs: [], packageManager: { command: process.execPath, args: [], env: {} } }
 const ps = code => promisify(execFile)('powershell.exe', ['-NoProfile','-NonInteractive','-EncodedCommand', Buffer.from("$ErrorActionPreference='Stop'; " + code,'utf16le').toString('base64')], { windowsHide: true, timeout: 30000 })

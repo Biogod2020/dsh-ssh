@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, rename } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, lstat, rename, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createServer, type Server } from 'node:http'
@@ -193,8 +193,29 @@ it.skipIf(process.platform !== 'win32')('resolves the Windows pnpm command to an
   await writeFile(join(pkg, 'lib/update-worker.js'), '// fixture')
   await atomicJson(f.configFile, { ...f.config, enabled: false })
   const updater = new SelfUpdate({ dir: f.profile, home: f.profile, installAnchor: f.runtime }, { packageRoot: pkg })
-  expect((await updater.view()).supported).toBe(true)
+  const view = await updater.view()
+  expect(view.supported).toBe(true)
   const invocation = (await readJson<UpdateConfig>(f.configFile)).packageManager
   expect(invocation.command).toMatch(/\.exe$/i)
   expect(invocation.command).not.toMatch(/\.cmd$/i)
+})
+
+it.each(['pnpm.mjs', 'pnpm.cjs'])('reads the declared Windows shim entry %s without executing a shell', async entryName => {
+  const f = await fixture(), pkg = join(f.profile, 'bootstrap'), bin = join(f.profile, 'manager/node_modules/pnpm/bin', entryName)
+  await mkdir(join(pkg, 'lib'), { recursive: true }); await atomicJson(join(pkg, 'package.json'), { version: '0.3.24-jay.69' })
+  await writeFile(join(pkg, 'lib/update-worker.js'), '// fixture')
+  await mkdir(join(bin, '..'), { recursive: true }); await writeFile(bin, '// fixture manager')
+  await atomicJson(join(bin, '../../package.json'), { name: 'pnpm', version: '11.20.0', exports: { '.': './package.json' }, bin: { pnpm: 'bin/' + entryName } })
+  const shim = join(f.profile, 'manager/pnpm.cmd'); await writeFile(shim, '@echo off')
+  await atomicJson(f.configFile, { ...f.config, enabled: false })
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!
+  Object.defineProperty(process, 'platform', { value: 'win32' })
+  try {
+    const updater = new SelfUpdate({ dir: f.profile, home: f.profile, installAnchor: f.runtime, packageManager: { command: shim, args: [], env: {} } }, { packageRoot: pkg })
+    expect((await updater.view()).supported).toBe(true)
+    const invocation = (await readJson<UpdateConfig>(f.configFile)).packageManager
+    expect(invocation.command).toBe(process.execPath)
+    const captured = invocation.args.find(arg => arg.endsWith(entryName))!
+    expect(await realpath(captured)).toBe(await realpath(bin))
+  } finally { Object.defineProperty(process, 'platform', platform) }
 })

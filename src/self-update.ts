@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'node:http'
 import type { WebRoute } from '@deepseek-ai/dsh-host-webserver'
 import { mkdir, readFile, writeFile, lstat, chmod, access } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
-import { dirname, join, isAbsolute, delimiter } from 'node:path'
+import { dirname, join, isAbsolute, delimiter, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
@@ -66,8 +66,22 @@ export class SelfUpdate {
       let entry: string | undefined
       for (const name of ['pnpm', 'corepack']) {
         try {
-          const manifest = require.resolve(name + '/package.json')
-          const candidate = join(dirname(manifest), name === 'pnpm' ? 'bin/pnpm.cjs' : 'dist/pnpm.js')
+          let manifest: string | undefined
+          try { manifest = require.resolve(name + '/package.json') }
+          catch {
+            // pnpm 11 exports its manifest as '.', while hiding './package.json'.
+            let directory = dirname(require.resolve(name))
+            for (let depth = 0; depth < 4; depth++) {
+              const candidate = join(directory, 'package.json')
+              try { if ((await readJson<{ name?: string }>(candidate)).name === name) { manifest = candidate; break } } catch {}
+              directory = dirname(directory)
+            }
+          }
+          if (!manifest) continue
+          const metadata = await readJson<{ bin?: string | Record<string, string> }>(manifest)
+          const bin = typeof metadata.bin === 'string' ? metadata.bin : metadata.bin?.pnpm
+          if (!bin || !/\.[cm]?js$/.test(bin)) continue
+          const candidate = resolve(dirname(manifest), bin)
           await access(candidate); entry = candidate; break
         } catch {}
       }
