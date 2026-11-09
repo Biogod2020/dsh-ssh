@@ -8,12 +8,13 @@ type InputContext = { modal: string | null; region: string; source?: string; tar
 type Resolution = { status: 'handled'; run(): void } | { status: 'blocked'; reason: string } | { status: 'pass' }
 type Resolver = (context: InputContext) => Resolution
 interface Command { id: string; resolve: Resolver }
-const reviewed: Record<string, string> = {
+const reviewed021: Record<string, string> = {
   'session.new': '92:19d33cc3', 'session.rename': '374:f0d74354',
   'session.fork': '669:7b8d3237', 'session.archive': '235:ac54280e',
 }
+const reviewed022: Record<string, string> = { ...reviewed021, 'session.rename': '405:88679197' }
 
-/** Compatibility identity, not a security digest. Taken from the shipped 0.2.1 RC
+/** Compatibility identity, not a security digest. Taken from the shipped 0.2.1 RC / 0.2.2-rc.1
  * resolver functions; an upstream implementation change requires review. */
 function fingerprint(fn: Function): string {
   const code = Function.prototype.toString.call(fn)
@@ -31,15 +32,16 @@ export function installShortcutTargetRouter(service: unknown, version: unknown,
 ): { supported: boolean; dispose(): void } {
   const unavailable = { supported: false, dispose() {} }
   try {
-  // Stay within the 0.2.1 release line. The shape and fingerprints below
-  // decide whether a newly installed Host can safely embed remote sessions.
+  // The 0.2.1 line and exact reviewed 0.2.2 RC retain the same seam.
+  // Shape and resolver fingerprints must still match before embedding.
   const release = typeof version === 'string' && /^0\.2\.1(?:-rc\.(0|[1-9]\d*))?$/.exec(version)
-  if (!release || (release[1] !== undefined && Number(release[1]) < 2)) return unavailable
+  if (version !== '0.2.2-rc.1' && (!release || (release[1] !== undefined && Number(release[1]) < 2))) return unavailable
   const face = service as { registry?: { commands?: unknown }; catalog?: { subscribe(listener: () => void): () => void } } | undefined
   const commands = face?.registry?.commands
   if (!(commands instanceof Map) || typeof face?.catalog?.subscribe !== 'function') return unavailable
   let active = true
   const changes: Array<{ command: Command; original: Resolver; wrapped: Resolver }> = []
+  const reviewed = version === '0.2.2-rc.1' ? reviewed022 : reviewed021
   for (const [id, identity] of Object.entries(reviewed)) {
     const command = commands.get(id) as Command | undefined
     const descriptor = command && Object.getOwnPropertyDescriptor(command, 'resolve')
@@ -84,7 +86,7 @@ export function mountRemoteShortcutRouting(ctx: Pick<Context, 'get'>, adapter: N
     const state = remoteNavigation.getSnapshot(), workspace = state.workspaces.find(row => row.id === selected.workspaceId)
     const blocked = (reason: string): Resolution => ({ status: 'blocked', reason })
     if (!workspace) return blocked(tt('remote.desktopIdentityChanged'))
-    if (context.modal !== null) return blocked(tt('remote.shortcutModal'))
+    if (context.modal !== null && context.modal !== 'sidebar') return blocked(tt('remote.shortcutModal'))
     if (!navigator.onLine || state.hosts?.get(workspace.hostId) !== 'ready') return blocked(tt('remote.actionConnectionRequired'))
     const sessionId = selected.sessionId, key = remoteSessionKey(workspace, sessionId)
     // Resolve once, recheck ownership when the registry runs the captured action.
