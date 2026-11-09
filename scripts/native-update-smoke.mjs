@@ -17,7 +17,7 @@ await run('tar', ['-xzf', archive, '-C', extracted])
 const pkgRoot = join(extracted, 'package'), pkg = JSON.parse(await readFile(join(pkgRoot, 'package.json'), 'utf8'))
 const from = pkg.version
 // A registry candidate with identical tested code; it is never published.
-pkg.version = from.includes('-') ? from + '.smoke' : from.split('.').map((n, i) => i === 2 ? Number(n) + 1 : n).join('.') + '-native.smoke'
+pkg.version = from.includes('-') ? from + '.smoke' : from.split('.').map((n, i) => i === 2 ? Number(n) + 1 : n).join('.')
 const candidate = pkg.version
 await writeFile(join(pkgRoot, 'package.json'), JSON.stringify(pkg))
 await run('npm', ['pack', '--ignore-scripts', '--pack-destination', root], { cwd: pkgRoot })

@@ -24,7 +24,9 @@ const home = join(root, 'home'), extracted = join(root, 'artifact')
 await mkdir(home, { mode: 0o700 }); await mkdir(extracted)
 await exec('tar', ['-xzf', archive, '-C', extracted])
 const pkgDir = join(extracted, 'package'), manifest = JSON.parse(await readFile(join(pkgDir, 'package.json'), 'utf8'))
-const baseVersion = manifest.version, version = baseVersion + '.smoke'
+const baseVersion = manifest.version
+const version = baseVersion.includes('-') ? baseVersion + '.smoke'
+  : baseVersion.split('.').map((part, index) => index === 2 ? Number(part) + 1 : part).join('.')
 manifest.version = version
 await writeFile(join(pkgDir, 'package.json'), JSON.stringify(manifest))
 await exec('npm', ['pack', '--ignore-scripts', '--pack-destination', root], { cwd: pkgDir, timeout: 60000 })
