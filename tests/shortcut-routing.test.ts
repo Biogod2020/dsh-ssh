@@ -81,12 +81,14 @@ it('accepts a later 0.2.1 RC only with matching functions and leaves unsupported
   const f = fixture(); f.routing.dispose()
   try {
     const decide = () => undefined
-    const nextRc = installShortcutTargetRouter(f.service, '0.2.1-rc.99', decide)
+    const version = sdk.version === '0.2.2-rc.1' ? sdk.version : '0.2.1-rc.99'
+    const nextRc = installShortcutTargetRouter(f.service, version, decide)
     expect(nextRc.supported).toBe(true)
     nextRc.dispose()
     expect(installShortcutTargetRouter(f.service, '0.2.2-alpha.1', decide).supported).toBe(false)
+    expect(installShortcutTargetRouter(f.service, '0.2.2-rc.2', decide).supported).toBe(false)
     f.registry.commands.get('session.archive').resolve = () => ({ status: 'pass' })
-    expect(installShortcutTargetRouter(f.service, '0.2.1-rc.99', decide).supported).toBe(false)
+    expect(installShortcutTargetRouter(f.service, version, decide).supported).toBe(false)
     for (const id of ['session.new', 'session.rename', 'session.fork']) expect(f.registry.commands.get(id).resolve).toBe(f.originals.get(id))
   } finally { f.dispose() }
 })
@@ -131,4 +133,14 @@ it('contains a remote resolver exception without executing the local fallback', 
     expect(f.registry.commands.get('session.archive').resolve(context).status).toBe('blocked')
     expect(f.locals.archive).not.toHaveBeenCalled()
   } finally { routing.dispose(); f.dispose() }
+})
+
+it('routes a sidebar shortcut to the selected remote session without changing the local target', () => {
+  const f = fixture()
+  try {
+    selectRemoteView({ workspaceId: workspace.id, sessionId: 'saved' })
+    const result = f.registry.commands.get('session.rename').resolve({ ...context, modal: 'sidebar' })
+    expect(result.status).toBe('handled'); result.run()
+    expect(f.rename).toHaveBeenCalledOnce(); expect(f.locals.rename).not.toHaveBeenCalled()
+  } finally { f.dispose() }
 })

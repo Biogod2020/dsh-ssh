@@ -60,6 +60,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/dsh-rc23" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
           npm install --prefix "$RUNNER_TEMP/dsh-rc24" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.4
           npm install --prefix "$RUNNER_TEMP/dsh-rc25" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
+          npm install --prefix "$RUNNER_TEMP/dsh-rc221" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.1
       - name: Test, typecheck, build and pack the verified archive
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc21/node_modules/.bin/dsh
@@ -68,6 +69,14 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc25/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts tests/shortcut-routing.test.ts
+      - name: Verify 0.2.2-rc.1 native shortcut contract
+        env:
+          DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc221/node_modules/.bin/dsh
+        run: pnpm exec vitest run tests/shortcut-routing.test.ts
+      - name: Accept native third-party update on 0.2.2-rc.1
+        run: |
+          archives=("$RUNNER_TEMP/release/"*.tgz)
+          node scripts/native-update-smoke.mjs "$RUNNER_TEMP/dsh-rc221/node_modules/.bin/dsh" "${archives[0]}"
       - name: Accept independent self-update after Host exit
         run: |
           shopt -s nullglob
@@ -78,7 +87,7 @@ jobs:
         env:
           DSH_REMOTE_TEST_DSH: ${{ runner.temp }}/dsh-rc24/node_modules/.bin/dsh
         run: pnpm exec vitest run tests/remote-runtime.test.ts tests/shortcut-routing.test.ts
-      - name: Accept the exact archive in six DSH runtimes and across a Host upgrade
+      - name: Accept the exact archive in seven DSH runtimes and across a Host upgrade
         run: |
           shopt -s nullglob
           archives=("$RUNNER_TEMP/release/"*.tgz)
@@ -89,6 +98,7 @@ jobs:
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc23/node_modules/.bin/dsh" "${archives[0]}"
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc24/node_modules/.bin/dsh" "${archives[0]}"
           node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc25/node_modules/.bin/dsh" "${archives[0]}" --upgrade-from "$RUNNER_TEMP/dsh-rc23/node_modules/.bin/dsh"
+          node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc221/node_modules/.bin/dsh" "${archives[0]}" --upgrade-from "$RUNNER_TEMP/dsh-rc25/node_modules/.bin/dsh"
       - name: Verify the retained alpha.4 remote runtime
         if: inputs.verification_scope == 'all'
         env:
@@ -455,6 +465,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/dsh-rc23" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.3
           npm install --prefix "$RUNNER_TEMP/dsh-rc24" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.4
           npm install --prefix "$RUNNER_TEMP/dsh-rc25" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.1-rc.5
+          npm install --prefix "$RUNNER_TEMP/dsh-rc221" --ignore-scripts --no-audit --no-fund @deepseek-ai/dsh@0.2.2-rc.1
       - name: Accept installation by package name from npm and mainland mirror
         run: |
           version=$(node -p 'JSON.parse(require("fs").readFileSync("package.json","utf8")).version')
@@ -464,6 +475,7 @@ jobs:
           DSH_SMOKE_REGISTRY=https://registry.npmjs.org node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc23/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
           DSH_SMOKE_REGISTRY=https://registry.npmmirror.com node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc24/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
           DSH_SMOKE_REGISTRY=https://registry.npmjs.org node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc25/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
+          DSH_SMOKE_REGISTRY=https://registry.npmjs.org node scripts/compatibility-smoke.mjs "$RUNNER_TEMP/dsh-rc221/node_modules/.bin/dsh" "@biogod/dsh-ssh@$version"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         if: always()
         with:
